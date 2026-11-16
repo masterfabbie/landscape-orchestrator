@@ -1,0 +1,347 @@
+"""ASGI apps simulating SAPHostControl (host agent) and SAPControl (sapstartsrv).
+
+Message formats are modelled on the public interface descriptions, not generated from the
+real WSDLs. Verify against ``http://<host>:1128/SAPHostControl/?wsdl`` and
+``http://<host>:5<NR>13/?wsdl`` before relying on details.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import secrets
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+from fastapi import FastAPI, Request, Response
+
+from .landscape import (
+    STATUS_COLOR,
+    STATUS_TEXT,
+    MockHost,
+    MockInstance,
+    MockLandscape,
+    Status,
+)
+from .soap import SoapFault, build_fault, build_response, items, parse_request
+
+MAX_BODY_BYTES = 1_000_000
+XML_CONTENT_TYPE = "text/xml; charset=utf-8"
+
+Handler = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class SoapService:
+    prefix: str
+    namespace: str
+    handlers: dict[str, Handler]
+    protected: frozenset[str]
+
+
+def _check_auth(request: Request, users: dict[str, str]) -> None:
+    header = request.headers.get("authorization", "")
+    scheme, _, encoded = header.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        raise SoapFault("HTTP Error: 'Unauthorized'", "SOAP-ENV:Client", 401)
+    try:
+        user, _, password = base64.b64decode(encoded).decode("utf-8").partition(":")
+    except (binascii.Error, UnicodeDecodeError) as exc:
+        raise SoapFault("Invalid Credentials") from exc
+    expected = users.get(user)
+    if expected is None or not secrets.compare_digest(expected, password):
+        raise SoapFault("Invalid Credentials")
+
+
+def _soap_app(title: str, service: SoapService, users: dict[str, str]) -> FastAPI:
+    app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.post("/{path:path}")
+    async def call(request: Request) -> Response:
+        try:
+            body = await request.body()
+            if len(body) > MAX_BODY_BYTES:
+                raise SoapFault("Request too large", "SOAP-ENV:Client")
+            method, params = parse_request(body)
+            handler = service.handlers.get(method)
+            if handler is None:
+                raise SoapFault(f"Method '{method}' not implemented", "SOAP-ENV:Client")
+            if method in service.protected:
+                _check_auth(request, users)
+            payload = handler(params)
+        except SoapFault as fault:
+            headers = {"WWW-Authenticate": 'Basic realm="gSOAP Web Service"'}
+            return Response(
+                build_fault(fault),
+                status_code=fault.http_status,
+                media_type=XML_CONTENT_TYPE,
+                headers=headers if fault.http_status == 401 else None,
+            )
+        return Response(
+            build_response(service.prefix, service.namespace, method, payload),
+            media_type=XML_CONTENT_TYPE,
+        )
+
+    return app
+
+
+def _format_duration(seconds: float) -> str:
+    total = int(seconds)
+    return f"{total // 3600}:{total % 3600 // 60:02d}:{total % 60:02d}"
+
+
+# --- SAPControl (sapstartsrv of one instance) -------------------------------------------
+
+SAPCONTROL_PROTECTED = frozenset(
+    {"Start", "Stop", "RestartInstance", "StartSystem", "StopSystem", "RestartSystem"}
+)
+
+_ALL_KINDS = {"HDB", "ERS", "ASCS", "SCS", "ABAP", "J2EE"}
+START_STOP_OPTIONS: dict[str, set[str] | None] = {
+    "SAPControl-ALL-INSTANCES": None,
+    "SAPControl-SCS-INSTANCES": {"ASCS", "SCS"},
+    "SAPControl-DIALOG-INSTANCES": {"ABAP", "J2EE"},
+    "SAPControl-ABAP-INSTANCES": {"ABAP"},
+    "SAPControl-J2EE-INSTANCES": {"J2EE"},
+    "SAPControl-TREX-INSTANCES": set(),
+    "SAPControl-ENQREP-INSTANCES": {"ERS"},
+    "SAPControl-HDB-INSTANCES": {"HDB"},
+    "SAPControl-ALLNOHDB-INSTANCES": _ALL_KINDS - {"HDB"},
+}
+
+
+def create_sapcontrol_app(landscape: MockLandscape, host_name: str, nr: int) -> FastAPI:
+    host = landscape.host(host_name)
+    instance = host.instance(nr)
+    if instance is None:
+        raise KeyError(f"No instance {nr:02d} on host {host_name}")
+
+    def get_process_list(_: dict[str, Any]) -> dict[str, Any]:
+        now = landscape.clock()
+        status = instance.status(now)
+        started_at = instance.started_at(now)
+        starttime = elapsed = ""
+        if started_at is not None:
+            wall_start = time.localtime(time.time() - (now - started_at))
+            starttime = time.strftime("%Y %m %d %H:%M:%S", wall_start)
+            elapsed = _format_duration(now - started_at)
+        return {
+            "process": [
+                {
+                    "name": name,
+                    "description": description,
+                    "dispstatus": f"SAPControl-{STATUS_COLOR[status]}",
+                    "textstatus": STATUS_TEXT[status],
+                    "starttime": starttime,
+                    "elapsedtime": elapsed,
+                    "pid": -1 if status is Status.STOPPED else 1000 + nr * 100 + index,
+                }
+                for index, (name, description) in enumerate(instance.kind_info.processes)
+            ]
+        }
+
+    def get_system_instance_list(_: dict[str, Any]) -> dict[str, Any]:
+        now = landscape.clock()
+        return {
+            "instance": [
+                {
+                    "hostname": inst.hostname,
+                    "instanceNr": inst.nr,
+                    "httpPort": inst_host.sapcontrol_port(inst.nr),
+                    "httpsPort": inst_host.sapcontrol_port(inst.nr) + 1,
+                    "startPriority": inst.kind_info.start_priority,
+                    "features": inst.kind_info.features,
+                    "dispstatus": f"SAPControl-{STATUS_COLOR[inst.status(now)]}",
+                }
+                for inst_host, inst in landscape.system_instances(instance.sid)
+            ]
+        }
+
+    def start(_: dict[str, Any]) -> dict[str, Any]:
+        landscape.start_instance(instance)
+        return {}
+
+    def stop(_: dict[str, Any]) -> dict[str, Any]:
+        landscape.stop_instance(instance)
+        return {}
+
+    def restart_instance(_: dict[str, Any]) -> dict[str, Any]:
+        landscape.restart_instance(instance)
+        return {}
+
+    def _kinds(params: dict[str, Any]) -> set[str] | None:
+        option = params.get("options") or "SAPControl-ALL-INSTANCES"
+        if option not in START_STOP_OPTIONS:
+            raise SoapFault(f"Option '{option}' is not supported by the mock")
+        return START_STOP_OPTIONS[option]
+
+    def start_system(params: dict[str, Any]) -> dict[str, Any]:
+        landscape.start_system(instance.sid, _kinds(params))
+        return {}
+
+    def stop_system(params: dict[str, Any]) -> dict[str, Any]:
+        landscape.stop_system(instance.sid, _kinds(params))
+        return {}
+
+    def restart_system(params: dict[str, Any]) -> dict[str, Any]:
+        kinds = _kinds(params)
+        landscape.stop_system(instance.sid, kinds)
+        landscape.start_system(instance.sid, kinds)
+        return {}
+
+    service = SoapService(
+        prefix="SAPControl",
+        namespace="urn:SAPControl",
+        handlers={
+            "GetProcessList": get_process_list,
+            "GetSystemInstanceList": get_system_instance_list,
+            "Start": start,
+            "Stop": stop,
+            "RestartInstance": restart_instance,
+            "StartSystem": start_system,
+            "StopSystem": stop_system,
+            "RestartSystem": restart_system,
+        },
+        protected=SAPCONTROL_PROTECTED,
+    )
+    title = f"Mock sapstartsrv {instance.sid}/{nr:02d} on {host_name}"
+    return _soap_app(title, service, landscape.users)
+
+
+# --- SAPHostControl (host agent) ----------------------------------------------------------
+
+HOSTCONTROL_PROTECTED = frozenset({"StartInstance", "StopInstance"})
+
+_DB_STATUS = {
+    Status.RUNNING: "SAPHostControl-DB-RUNNING",
+    Status.STOPPED: "SAPHostControl-DB-STOPPED",
+    Status.STARTING: "SAPHostControl-DB-WARNING",
+    Status.STOPPING: "SAPHostControl-DB-WARNING",
+}
+
+
+def _properties(values: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{"mKey": key, "mValue": value} for key, value in values.items()]
+
+
+def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
+    host: MockHost = landscape.host(host_name)
+
+    def list_instances(params: dict[str, Any]) -> dict[str, Any]:
+        selector = params.get("aSelector")
+        wanted = selector.get("aInstanceStatus") if isinstance(selector, dict) else None
+        now = landscape.clock()
+        result = []
+        for inst in host.instances:
+            stopped = inst.status(now) is Status.STOPPED
+            if wanted == "S-INSTANCE-RUNNING" and stopped:
+                continue
+            if wanted == "S-INSTANCE-STOPPED" and not stopped:
+                continue
+            result.append(
+                {
+                    "mHostname": inst.hostname,
+                    "mSid": inst.sid,
+                    "mSystemNumber": f"{inst.nr:02d}",
+                    "mSapVersionInfo": "753, patch 1100, changelist 2200000",
+                }
+            )
+        return {"result": result}
+
+    def _database_properties(db_name: str, db_type: str) -> list[dict[str, Any]]:
+        return _properties(
+            {"Database/Name": db_name, "Database/Type": db_type, "Database/Host": host.name}
+        )
+
+    def list_databases(_: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "result": [
+                {
+                    "mDatabase": _database_properties(db.name, db.type),
+                    "mStatus": _DB_STATUS[landscape.database_status(host, db)],
+                }
+                for db in host.databases
+            ]
+        }
+
+    def get_database_status(params: dict[str, Any]) -> dict[str, Any]:
+        arguments = {
+            item.get("mKey"): item.get("mValue")
+            for item in items(params.get("aArguments"))
+            if isinstance(item, dict)
+        }
+        name = arguments.get("Database/Name")
+        for db in host.databases:
+            if db.name == name:
+                return {
+                    "status": _DB_STATUS[landscape.database_status(host, db)],
+                    "result": _database_properties(db.name, db.type),
+                }
+        raise SoapFault(f"Database '{name}' not found")
+
+    def get_computer_system(_: dict[str, Any]) -> dict[str, Any]:
+        properties = {
+            "Name": host.name,
+            "Hostnames": host.name,
+            "OpSysCategory": host.opsys,
+            "OpSysReleaseName": "Mock OS 1.0",
+            "CPUInfo": "Mock CPU",
+            "TotalMemory": "16384",
+        }
+        return {
+            "result": [
+                {
+                    "mClassname": "SAP_ITSAMComputerSystem",
+                    "mProperties": [
+                        {"mName": key, "mType": "string", "mValue": value}
+                        for key, value in properties.items()
+                    ],
+                }
+            ]
+        }
+
+    def _find_instance(params: dict[str, Any]) -> MockInstance:
+        spec = params.get("aInstance")
+        spec = spec if isinstance(spec, dict) else {}
+        sid, number = spec.get("mSid"), spec.get("mSystemNumber")
+        for inst in host.instances:
+            if inst.sid == sid and f"{inst.nr:02d}" == str(number).zfill(2):
+                return inst
+        raise SoapFault(f"Instance {sid}/{number} not found on host {host.name}")
+
+    def _operation_result(description: str) -> dict[str, Any]:
+        return {
+            "result": {
+                "mOperationID": "",
+                "mOperationResults": [
+                    {"mMessageKey": "description", "mMessageValue": description}
+                ],
+            }
+        }
+
+    def start_instance(params: dict[str, Any]) -> dict[str, Any]:
+        inst = _find_instance(params)
+        landscape.start_instance(inst)
+        return _operation_result(f"Start of instance {inst.sid}/{inst.nr:02d} triggered")
+
+    def stop_instance(params: dict[str, Any]) -> dict[str, Any]:
+        inst = _find_instance(params)
+        landscape.stop_instance(inst)
+        return _operation_result(f"Stop of instance {inst.sid}/{inst.nr:02d} triggered")
+
+    service = SoapService(
+        prefix="SAPHostControl",
+        namespace="urn:SAPHostControl",
+        handlers={
+            "ListInstances": list_instances,
+            "ListDatabases": list_databases,
+            "GetDatabaseStatus": get_database_status,
+            "GetComputerSystem": get_computer_system,
+            "StartInstance": start_instance,
+            "StopInstance": stop_instance,
+        },
+        protected=HOSTCONTROL_PROTECTED,
+    )
+    return _soap_app(f"Mock SAP Host Agent on {host_name}", service, landscape.users)
