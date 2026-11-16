@@ -83,9 +83,10 @@ def test_databases_on_database_host(landscape, clock):
     client = TestClient(create_hostagent_app(landscape, "sapdb1"))
 
     _, result = soap_call(client, NS, "ListDatabases")
-    database = result.find("result")[0]
+    assert len(result.find("result")) == 2
+    database = result.find("result")[1]
     properties = {p.findtext("mKey"): p.findtext("mValue") for p in database.find("mDatabase")}
-    assert properties["Database/Name"] == "DEV"
+    assert properties["Database/Name"] == "DEV@DEV"
     assert properties["Database/Type"] == "hdb"
     assert properties["Database/InstanceName"] == "HDB02"
     assert properties["Database/Host"] == "sapdb1"
@@ -95,7 +96,8 @@ def test_databases_on_database_host(landscape, clock):
     hdb = "<aInstance><mSid>DEV</mSid><mSystemNumber>02</mSystemNumber></aInstance>"
     soap_call(client, NS, "StartInstance", hdb, auth=AUTH)
     arguments = (
-        "<aArguments><item><mKey>Database/Name</mKey><mValue>DEV</mValue></item></aArguments>"
+        "<aArguments><item><mKey>Database/Name</mKey><mValue>DEV@DEV</mValue></item>"
+        "</aArguments>"
     )
     _, result = soap_call(client, NS, "GetDatabaseStatus", arguments)
     assert result.findtext("status") == "SAPHostControl-DB-STARTING"

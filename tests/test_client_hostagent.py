@@ -71,8 +71,9 @@ async def test_start_instance_without_credentials(landscape):
 
 async def test_databases(landscape, clock):
     async with make_client(landscape, host="sapdb1") as client:
-        (database,) = await client.list_databases()
-        assert (database.name, database.type) == ("DEV", "hdb")
+        system_db, database = await client.list_databases()
+        assert system_db.name == "SYSTEMDB@DEV"
+        assert (database.name, database.type) == ("DEV@DEV", "hdb")
         assert database.status is DatabaseStatus.STOPPED
         assert database.properties["Database/InstanceName"] == "HDB02"
         assert [c.name for c in database.components] == [
@@ -82,11 +83,11 @@ async def test_databases(landscape, clock):
         ]
 
         await client.start_instance("DEV", 2)
-        state = await client.get_database_status("DEV", "hdb")
+        state = await client.get_database_status("DEV@DEV", "hdb")
         assert state.status is DatabaseStatus.STARTING
 
         clock.advance(3)
-        state = await client.get_database_status("DEV", "hdb", host="sapdb1")
+        state = await client.get_database_status("DEV@DEV", "hdb", host="sapdb1")
         assert state.status is DatabaseStatus.RUNNING
         component = state.components[0]
         assert component.description == "HDB Daemon"

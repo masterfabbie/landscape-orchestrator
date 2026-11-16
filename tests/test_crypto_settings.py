@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+import pytest
+
+from landscape_orchestrator.crypto import (
+    SecretBox,
+    SecretError,
+    generate_api_token,
+    generate_secret_key,
+)
+from landscape_orchestrator.settings import DEFAULT_DATABASE_URL, Settings, SettingsError
+
+
+def test_encrypt_roundtrip():
+    box = SecretBox(generate_secret_key())
+    token = box.encrypt("s3cret-pässword")
+    assert "s3cret" not in token
+    assert box.decrypt(token) == "s3cret-pässword"
+
+
+def test_same_password_encrypts_differently():
+    box = SecretBox(generate_secret_key())
+    assert box.encrypt("x") != box.encrypt("x")
+
+
+def test_decrypt_with_other_key_fails():
+    token = SecretBox(generate_secret_key()).encrypt("x")
+    with pytest.raises(SecretError, match="secret key changed"):
+        SecretBox(generate_secret_key()).decrypt(token)
+
+
+def test_invalid_key_is_rejected():
+    with pytest.raises(SecretError, match="not a valid Fernet key"):
+        SecretBox("too-short")
+
+
+def test_settings_from_env():
+    env = {"LO_SECRET_KEY": generate_secret_key(), "LO_API_TOKEN": generate_api_token()}
+    settings = Settings.from_env(env)
+    assert settings.database_url == DEFAULT_DATABASE_URL
+    assert Settings.from_env(env | {"LO_DATABASE_URL": "sqlite+aiosqlite:///x.db"}).database_url
+
+
+def test_settings_require_secret_key_and_token():
+    with pytest.raises(SettingsError, match="LO_SECRET_KEY"):
+        Settings.from_env({"LO_API_TOKEN": generate_api_token()})
+    with pytest.raises(SettingsError, match="LO_API_TOKEN"):
+        Settings.from_env({"LO_SECRET_KEY": generate_secret_key(), "LO_API_TOKEN": "short"})

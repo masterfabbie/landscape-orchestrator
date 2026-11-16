@@ -13,7 +13,7 @@ Dies ist ein unabhängiges Projekt und kein SAP-Produkt.
 | Projektgerüst, CI | vorhanden |
 | Mock-Umgebung (simulierter Host Agent und sapstartsrv) | vorhanden |
 | SOAP-Clients für Host Agent und sapstartsrv | vorhanden, gegen den Mock getestet |
-| Inventar (Hosts, Systeme, Instanzen, Datenbanken) | geplant |
+| Inventar (Hosts, Systeme, Instanzen, Datenbanken) mit Discovery und REST-API | vorhanden, gegen den Mock getestet |
 | Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | geplant |
 | Web-UI | geplant |
 
@@ -37,6 +37,92 @@ python3 -m venv .venv
 ```bash
 .venv/bin/ruff check .
 ```
+
+## Server starten
+
+Der Server braucht zwei Werte aus Umgebungsvariablen. `lo-keygen` erzeugt beide:
+
+```bash
+.venv/bin/lo-keygen
+```
+
+| Variable | Bedeutung |
+|---|---|
+| `LO_SECRET_KEY` | Schlüssel, mit dem gespeicherte Passwörter verschlüsselt werden |
+| `LO_API_TOKEN` | Token für den Zugriff auf die REST-API (mindestens 16 Zeichen) |
+| `LO_DATABASE_URL` | optional, Standard `sqlite+aiosqlite:///./landscape.db` |
+
+**Den `LO_SECRET_KEY` sicher aufbewahren.** Geht er verloren oder wird er geändert, lassen sich
+die gespeicherten Passwörter nicht mehr entschlüsseln und müssen neu eingegeben werden.
+
+```bash
+.venv/bin/lo-server
+```
+
+Der Server lauscht standardmäßig nur auf `127.0.0.1:8000`. Mit `--mock` spricht er statt echter
+Hosts die eingebaute simulierte Landschaft an:
+
+```bash
+.venv/bin/lo-server --mock
+```
+
+## Inventar und REST-API
+
+Das Inventar kennt Hosts, SAP-Systeme (SID), Instanzen und Datenbanken. Ein Host wird angelegt
+und danach per Discovery ausgelesen: Der Host Agent liefert Betriebssystemdaten, Instanzen und
+Datenbanken, der sapstartsrv jeder Instanz liefert Status, Instanztyp und Startpriorität.
+
+Alle Aufrufe unter `/api` verlangen den Header `Authorization: Bearer <LO_API_TOKEN>`.
+Die interaktive Schnittstellenbeschreibung unter `/api/docs` ist ohne Token lesbar; sie enthält
+keine Inventardaten.
+
+| Methode | Pfad | Zweck |
+|---|---|---|
+| GET | `/health` | Lebenszeichen, ohne Token |
+| GET | `/api/hosts` | Hosts auflisten |
+| POST | `/api/hosts` | Host anlegen |
+| GET | `/api/hosts/{id}` | Host mit Instanzen und Datenbanken |
+| PUT | `/api/hosts/{id}/credentials` | Zugangsdaten des Hosts setzen |
+| DELETE | `/api/hosts/{id}` | Host samt Instanzen und Datenbanken löschen |
+| POST | `/api/hosts/{id}/discover` | Host auslesen und Inventar aktualisieren |
+| GET | `/api/systems` | Systeme mit ihren Instanzen über alle Hosts |
+| PUT | `/api/systems/{id}/credentials` | Zugangsdaten für den sapstartsrv eines Systems setzen |
+
+Beispiel mit der simulierten Landschaft:
+
+```bash
+curl -H "Authorization: Bearer $LO_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name": "sapapp1", "address": "127.0.0.1", "username": "devadm", "password": "mock"}' \
+  http://127.0.0.1:8000/api/hosts
+```
+
+```bash
+curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/hosts/1/discover
+```
+
+Verhalten:
+
+- **Zugangsdaten:** Passwörter werden verschlüsselt gespeichert und von der API nie
+  zurückgegeben. Die Zugangsdaten des Hosts gelten für den Host Agent. Für den sapstartsrv
+  gelten die Zugangsdaten des Systems, falls gesetzt, sonst die des Hosts.
+- **Discovery löscht nichts.** Instanzen und Datenbanken, die der Host nicht mehr meldet,
+  bleiben im Inventar und werden im Ergebnis als fehlend aufgeführt.
+- **Nicht erreichbarer Host Agent:** Die Discovery antwortet mit HTTP 502, der Host wird als
+  nicht erreichbar markiert.
+- **Nicht erreichbarer sapstartsrv:** Die Instanz wird trotzdem aufgenommen, mit Status
+  `UNKNOWN` und einer Warnung im Ergebnis.
+- Der gespeicherte Status ist der Stand der letzten Discovery, kein Live-Wert.
+- `sapcontrol_port_offset` verschiebt die sapstartsrv-Ports eines Hosts. Das ist nur für
+  Testaufbauten gedacht, in denen mehrere simulierte Hosts auf einem Rechner laufen.
+
+Einschränkungen:
+
+- Die API kennt nur ein gemeinsames Token, keine Benutzer und Rollen.
+- Der Server selbst spricht nur HTTP. Für den Zugriff über ein Netzwerk gehört ein
+  Reverse-Proxy mit TLS davor.
+- Das Datenbankschema wird beim Start angelegt. Schemaänderungen an einer bestehenden
+  Datenbank (Migrationen) sind noch nicht vorgesehen.
+- Jede SID gibt es nur einmal. Zwei Systeme mit gleicher SID lassen sich nicht unterscheiden.
 
 ## SOAP-Clients
 
@@ -102,6 +188,9 @@ Die Standardlandschaft enthält das System `DEV`:
 | `sapapp1` | Dialoginstanz D00 | 50013 |
 | `sapdb1` | Host Agent | 11128 |
 | `sapdb1` | HANA-Instanz 02 | 60213 |
+
+Die HANA-Instanz meldet wie ein echtes Multi-Tenant-System zwei Datenbanken: `SYSTEMDB@DEV`
+und `DEV@DEV`.
 
 Alle Endpunkte lauschen auf `127.0.0.1`. Weil die Mock-Hosts auf demselben Rechner laufen,
 verschiebt `port_offset` die Ports des zweiten Hosts um 10000. Benutzer für geschützte
