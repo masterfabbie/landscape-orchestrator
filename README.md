@@ -12,10 +12,27 @@ Dies ist ein unabhängiges Projekt und kein SAP-Produkt.
 |---|---|
 | Projektgerüst, CI | vorhanden |
 | Mock-Umgebung (simulierter Host Agent und sapstartsrv) | vorhanden |
-| SOAP-Clients für Host Agent und sapstartsrv | vorhanden, gegen den Mock getestet |
-| Inventar (Hosts, Systeme, Instanzen, Datenbanken) mit Discovery und REST-API | vorhanden, gegen den Mock getestet |
-| Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | vorhanden, gegen den Mock getestet |
-| Web-Oberfläche (Deutsch und Englisch) | vorhanden, gegen den Mock getestet |
+| SOAP-Clients für Host Agent und sapstartsrv | vorhanden; Host-Agent-Teil gegen echte Hosts bestätigt |
+| Inventar (Hosts, Systeme, Instanzen, Datenbanken) mit Discovery und REST-API | vorhanden; Discovery von Hosts ohne Instanzen gegen echte Hosts bestätigt |
+| Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | vorhanden, bisher nur gegen den Mock getestet |
+| Web-Oberfläche (Deutsch und Englisch) | vorhanden |
+
+### Teststand gegen echte Hosts
+
+Bestätigt mit zwei echten SAP Host Agents ohne installierte SAP-Instanz:
+
+- Verbindung zum Endpunkt `/SAPHostControl.cgi` und Anmeldung mit HTTP Basic Auth
+- `GetComputerSystem`: Betriebssystem, CPUs und Arbeitsspeicher werden gefunden
+- `ListInstances` und `ListDatabases`: leere Listen werden sauber verarbeitet
+
+Noch nicht gegen echte Hosts getestet, weil dafür eine SAP-Instanz nötig ist:
+
+- alle Aufrufe am sapstartsrv (`GetProcessList`, `GetSystemInstanceList`, `StartSystem`,
+  `StopSystem`)
+- Start und Stopp über den Host Agent, einschließlich des Flags `O-INSTANCE`
+- Datenbanken mit ihren Komponenten
+- ob ein gestopptes System alle Prozesse grau meldet
+- HTTPS
 
 Nicht Teil der ersten Version: Verschieben von Instanzen (Adaptive Computing),
 kundendefinierte Operationen und Hooks.
@@ -237,9 +254,9 @@ Fehler sind Unterklassen von `SoapError`:
 | `SoapFaultError` | sonstiger Fehler des Dienstes, mit `faultstring` |
 | `SoapProtocolError` | Antwort ist kein gültiges SOAP oder enthält unbekannte Werte |
 
-Noch offen: Die Clients sind bisher nur gegen den Mock getestet, nicht gegen echte Hosts.
-`start_instance` und `stop_instance` senden standardmäßig das Flag `O-INSTANCE`; ob der Host
-Agent das so erwartet, muss der erste Test gegen einen echten Host zeigen.
+Noch offen: `start_instance` und `stop_instance` senden standardmäßig das Flag `O-INSTANCE`.
+Ob der Host Agent das so erwartet, muss ein Test mit einer echten Instanz zeigen. Der
+übrige Teststand steht oben unter „Teststand gegen echte Hosts“.
 
 ## Mock-Umgebung
 
@@ -314,8 +331,10 @@ Verhalten:
   eines sapstartsrv abgeglichen.
 - Inhalte, die die WSDLs offenlassen, orientieren sich an echten `saphostctrl`-Ausgaben: die
   CIM-Klassen von `GetComputerSystem` und die Datenbank-Komponenten. Annahmen bleiben die
-  Verschachtelung der CIM-Klassen sowie die Property-Schlüssel für Vendor und Release.
-- Gegen einen echten Host getestet ist der Mock noch nicht.
+  genaue Verschachtelung der CIM-Klassen sowie die Property-Schlüssel für Vendor und Release.
+- Die rohen Antworten echter Hosts sind noch nicht mit denen des Mocks verglichen. Der Client
+  findet die Betriebssystemdaten echter Hosts; er sucht die Klassen aber in jeder
+  Verschachtelungstiefe, die Struktur selbst ist damit nicht belegt.
 - Nur HTTP, kein HTTPS.
 - Die Mock-Umgebung ist ein Entwicklungswerkzeug und darf nicht in nicht vertrauenswürdigen
   Netzen erreichbar sein.
