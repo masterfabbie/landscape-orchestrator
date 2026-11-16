@@ -114,3 +114,47 @@ class Database(Base):
     status_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     host: Mapped[Host] = relationship(back_populates="databases")
+
+
+class Activity(Base):
+    """One requested operation and its outcome. Kept as history when the target is deleted."""
+
+    __tablename__ = "activities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    target_type: Mapped[str] = mapped_column(String(16))
+    target_label: Mapped[str] = mapped_column(String(255))
+    system_id: Mapped[int | None] = mapped_column(
+        ForeignKey("systems.id", ondelete="SET NULL"), index=True
+    )
+    instance_id: Mapped[int | None] = mapped_column(
+        ForeignKey("instances.id", ondelete="SET NULL")
+    )
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    timeout_seconds: Mapped[int] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    entries: Mapped[list[ActivityLogEntry]] = relationship(
+        back_populates="activity",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ActivityLogEntry.id",
+    )
+
+
+class ActivityLogEntry(Base):
+    __tablename__ = "activity_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    activity_id: Mapped[int] = mapped_column(
+        ForeignKey("activities.id", ondelete="CASCADE"), index=True
+    )
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    level: Mapped[str] = mapped_column(String(8))
+    message: Mapped[str] = mapped_column(Text)
+
+    activity: Mapped[Activity] = relationship(back_populates="entries")

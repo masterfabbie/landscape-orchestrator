@@ -14,7 +14,7 @@ Dies ist ein unabhängiges Projekt und kein SAP-Produkt.
 | Mock-Umgebung (simulierter Host Agent und sapstartsrv) | vorhanden |
 | SOAP-Clients für Host Agent und sapstartsrv | vorhanden, gegen den Mock getestet |
 | Inventar (Hosts, Systeme, Instanzen, Datenbanken) mit Discovery und REST-API | vorhanden, gegen den Mock getestet |
-| Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | geplant |
+| Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | vorhanden, gegen den Mock getestet |
 | Web-UI | geplant |
 
 Nicht Teil der ersten Version: Verschieben von Instanzen (Adaptive Computing),
@@ -87,6 +87,10 @@ keine Inventardaten.
 | POST | `/api/hosts/{id}/discover` | Host auslesen und Inventar aktualisieren |
 | GET | `/api/systems` | Systeme mit ihren Instanzen über alle Hosts |
 | PUT | `/api/systems/{id}/credentials` | Zugangsdaten für den sapstartsrv eines Systems setzen |
+| POST | `/api/instances/{id}/start`, `/stop`, `/restart` | Operation für eine Instanz anstoßen |
+| POST | `/api/systems/{id}/start`, `/stop`, `/restart` | Operation für ein ganzes System anstoßen |
+| GET | `/api/activities` | Aktivitäten, neueste zuerst (`?limit=`) |
+| GET | `/api/activities/{id}` | Aktivität mit Protokoll |
 
 Beispiel mit der simulierten Landschaft:
 
@@ -123,6 +127,42 @@ Einschränkungen:
 - Das Datenbankschema wird beim Start angelegt. Schemaänderungen an einer bestehenden
   Datenbank (Migrationen) sind noch nicht vorgesehen.
 - Jede SID gibt es nur einmal. Zwei Systeme mit gleicher SID lassen sich nicht unterscheiden.
+
+## Operationen und Aktivitäten
+
+Jede Operation läuft als Aktivität im Hintergrund. Der Aufruf antwortet sofort mit HTTP 202 und
+der Aktivität; den Fortschritt liest man über `/api/activities/{id}`.
+
+```bash
+curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/systems/1/stop
+```
+
+| Ziel | Weg | Fertig, wenn |
+|---|---|---|
+| Instanz | Host Agent (`StartInstance` / `StopInstance`) | alle Prozesse grün (Start) bzw. grau (Stopp) |
+| System | sapstartsrv (`StartSystem` / `StopSystem`) | alle Instanzen grün bzw. grau |
+
+- **Reihenfolge im System:** Der sapstartsrv startet nach Startpriorität (Datenbank, zentrale
+  Dienste, Anwendungsserver) und stoppt umgekehrt. Angesprochen wird der erste erreichbare
+  sapstartsrv des Systems.
+- **Neustart** ist Stopp und danach Start. Jede der beiden Phasen hat das volle Zeitlimit.
+- **Zeitlimit:** Standard 600 Sekunden, einstellbar mit `?timeout=` (10 bis 7200). Wird der
+  Zielzustand nicht erreicht, endet die Aktivität mit `FAILED`. Die Operation auf dem Host
+  läuft dabei weiter; abgebrochen wird nur das Warten.
+- **Eine Aktivität pro System:** Solange eine Aktivität für ein System oder eine seiner
+  Instanzen läuft, werden weitere mit HTTP 409 abgelehnt.
+- **Status der Aktivität:** `PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`. Das Protokoll hält
+  jede Statusänderung fest, und der Status im Inventar wird dabei aktualisiert.
+- **Serverneustart:** Aktivitäten, die beim Beenden des Servers noch liefen, werden als
+  `FAILED` mit dem Hinweis „Interrupted“ vermerkt. Der Zustand des Ziels ist dann unbekannt
+  und sollte per Discovery geprüft werden.
+
+Einschränkungen:
+
+- Laufende Aktivitäten lassen sich noch nicht abbrechen.
+- Abhängigkeiten zwischen verschiedenen Systemen werden nicht berücksichtigt.
+- Operationen für Datenbanken ohne SAP-Instanz (`StartDatabase` / `StopDatabase`) fehlen noch.
+  Eine HANA-Datenbank wird über ihre Instanz gestartet und gestoppt.
 
 ## SOAP-Clients
 

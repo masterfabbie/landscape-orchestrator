@@ -98,3 +98,32 @@ class DiscoveryOut(BaseModel):
     databases_updated: list[str]
     databases_missing: list[str]
     warnings: list[str]
+
+
+class ActivityLogEntryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    timestamp: datetime
+    level: str
+    message: str
+
+
+class ActivityOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    kind: str
+    target_type: str
+    target_label: str
+    system_id: int | None
+    instance_id: int | None
+    status: str
+    timeout_seconds: int
+    error: str | None
+    requested_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class ActivityDetail(ActivityOut):
+    entries: list[ActivityLogEntryOut]

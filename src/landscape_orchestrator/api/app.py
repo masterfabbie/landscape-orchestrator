@@ -3,13 +3,15 @@
 # No "from __future__ import annotations" here: FastAPI resolves the annotations of the
 # route functions at runtime, and they refer to names local to create_app.
 
+import asyncio
 import secrets
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Literal
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -21,28 +23,55 @@ from ..connections import ClientFactory
 from ..crypto import SecretBox
 from ..db import create_engine, create_session_factory, create_tables
 from ..discovery import DiscoveryError, discover_host
-from ..models import Host, System
+from ..models import Activity, Host, System
+from ..operations import (
+    DEFAULT_TIMEOUT_SECONDS,
+    OperationConflictError,
+    OperationKind,
+    OperationRunner,
+    TargetNotFoundError,
+)
 from ..settings import Settings
-from .schemas import Credentials, DiscoveryOut, HostCreate, HostDetail, HostOut, SystemOut
+from .schemas import (
+    ActivityDetail,
+    ActivityOut,
+    Credentials,
+    DiscoveryOut,
+    HostCreate,
+    HostDetail,
+    HostOut,
+    SystemOut,
+)
 
 
 def create_app(
-    settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None
+    settings: Settings,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    poll_interval: float = 2.0,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
     """Build the application.
 
     ``transport`` replaces the network for connections to managed hosts; it is meant for
-    tests and for running against the simulated landscape.
+    tests and for running against the simulated landscape. ``poll_interval``, ``sleep``
+    and ``clock`` control how running operations are tracked.
     """
     secret_box = SecretBox(settings.secret_key)
     clients = ClientFactory(secret_box, transport=transport)
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
+    runner = OperationRunner(
+        session_factory, clients, poll_interval=poll_interval, sleep=sleep, clock=clock
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await create_tables(engine)
+        await runner.recover_interrupted()
         yield
+        await runner.shutdown()
         await engine.dispose()
 
     bearer = HTTPBearer(auto_error=False)
@@ -173,5 +202,68 @@ def create_app(
         await session.commit()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    OperationName = Literal["start", "stop", "restart"]
+    Timeout = Annotated[
+        int,
+        Query(ge=10, le=7200, description="Seconds to wait for the target state"),
+    ]
+
+    async def submit(submission: Awaitable[Activity]) -> Activity:
+        try:
+            return await submission
+        except TargetNotFoundError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        except OperationConflictError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+    @api.post(
+        "/instances/{instance_id}/{operation}",
+        response_model=ActivityOut,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def operate_instance(
+        instance_id: int,
+        operation: OperationName,
+        session: Session,
+        timeout: Timeout = DEFAULT_TIMEOUT_SECONDS,
+    ) -> Activity:
+        """Start, stop or restart one instance through the host agent."""
+        kind = OperationKind(operation.upper())
+        return await submit(runner.submit_instance(session, instance_id, kind, timeout))
+
+    @api.post(
+        "/systems/{system_id}/{operation}",
+        response_model=ActivityOut,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def operate_system(
+        system_id: int,
+        operation: OperationName,
+        session: Session,
+        timeout: Timeout = DEFAULT_TIMEOUT_SECONDS,
+    ) -> Activity:
+        """Start, stop or restart a whole system in the order of the start priorities."""
+        kind = OperationKind(operation.upper())
+        return await submit(runner.submit_system(session, system_id, kind, timeout))
+
+    @api.get("/activities", response_model=list[ActivityOut])
+    async def list_activities(
+        session: Session, limit: Annotated[int, Query(ge=1, le=500)] = 50
+    ) -> list[Activity]:
+        query = select(Activity).order_by(Activity.id.desc()).limit(limit)
+        return list(await session.scalars(query))
+
+    @api.get("/activities/{activity_id}", response_model=ActivityDetail)
+    async def get_activity(activity_id: int, session: Session) -> Activity:
+        activity = await session.scalar(
+            select(Activity)
+            .where(Activity.id == activity_id)
+            .options(selectinload(Activity.entries))
+        )
+        if activity is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Activity not found")
+        return activity
+
+    app.state.runner = runner
     app.mount("/api", api)
     return app
