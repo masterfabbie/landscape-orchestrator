@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ t("login.title") }}{% endblock %}
+{% block nav %}{% endblock %}
+{% block session %}{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>{{ t("login.title") }}</h1>
+  {% if invalid %}<p class="flash error" role="alert">{{ t("login.invalid") }}</p>{% endif %}
+  <form method="post" action="/login" class="stack">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>{{ t("login.token") }}
+      <input name="token" type="password" autocomplete="current-password" required autofocus>
+    </label>
+    <p class="muted">{{ t("login.hint") }}</p>
+    <div><button type="submit">{{ t("login.submit") }}</button></div>
+  </form>
+</section>
+{% endblock %}

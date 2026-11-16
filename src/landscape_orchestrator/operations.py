@@ -24,7 +24,7 @@ from .clients.sapcontrol import StateColor, SystemInstance
 from .connections import ClientFactory
 from .crypto import SecretError
 from .discovery import instance_status
-from .models import STATUS_UNKNOWN, Activity, ActivityLogEntry, Instance, System
+from .models import STATUS_UNKNOWN, Activity, ActivityLogEntry, Database, Instance, System
 
 logger = logging.getLogger(__name__)
 
@@ -214,18 +214,57 @@ class OperationRunner:
             activity.status = ActivityStatus.RUNNING
             activity.started_at = _now()
             await session.commit()
+            error: str | None = None
             try:
                 await self._execute(session, activity)
             except asyncio.CancelledError:
                 await self._finish(session, activity, "Interrupted by server shutdown.")
                 raise
             except (OperationFailedError, SoapError, SecretError) as exc:
-                await self._finish(session, activity, str(exc))
+                error = str(exc)
             except Exception as exc:  # noqa: BLE001 - an activity must never stay "running"
                 logger.exception("Activity %s failed unexpectedly", activity_id)
-                await self._finish(session, activity, f"Internal error: {exc!r}")
-            else:
-                await self._finish(session, activity, None)
+                error = f"Internal error: {exc!r}"
+            try:
+                await self._refresh_databases(session, activity)
+            except (SoapError, SecretError):
+                pass  # best effort; the next discovery corrects the status
+            await self._finish(session, activity, error)
+
+    async def _refresh_databases(self, session: AsyncSession, activity: Activity) -> None:
+        """Update the stored status of the databases on the hosts the operation touched.
+
+        Stopping a HANA instance stops its databases; without this the inventory would
+        keep showing them as running until the next discovery. Hosts that cannot be
+        queried are skipped.
+        """
+        query = select(Instance).options(selectinload(Instance.host))
+        if activity.instance_id is not None:
+            query = query.where(Instance.id == activity.instance_id)
+        else:
+            query = query.where(Instance.system_id == activity.system_id)
+        hosts = {instance.host.id: instance.host for instance in await session.scalars(query)}
+        now = _now()
+        for host in hosts.values():
+            known = {
+                (database.name, database.type): database
+                for database in await session.scalars(
+                    select(Database).where(Database.host_id == host.id)
+                )
+            }
+            if not known:
+                continue
+            try:
+                async with self._clients.hostagent(host) as agent:
+                    reported = await agent.list_databases()
+            except SoapError:
+                continue
+            for found in reported:
+                database = known.get((found.name, found.type))
+                if database is not None:
+                    database.last_status = found.status.name
+                    database.status_checked_at = now
+        await session.commit()
 
     async def _finish(self, session: AsyncSession, activity: Activity, error: str | None) -> None:
         activity.finished_at = _now()

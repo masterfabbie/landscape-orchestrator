@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}{{ t("nav.overview") }}{% endblock %}
+{% block content %}
+<h1>{{ t("overview.systems") }}</h1>
+{% if not systems %}
+  <p class="card">{{ t("overview.empty") }} <a href="/hosts">{{ t("hosts.add") }}</a></p>
+{% else %}
+  <p class="muted">{{ t("overview.status_note") }}</p>
+{% endif %}
+{% for system in systems %}
+<section class="card">
+  <div class="card-head">
+    <h2><a href="/systems/{{ system.id }}">{{ system.sid }}</a></h2>
+    {% if active.get(system.id) %}
+      <a class="badge badge-running" href="/activities/{{ active[system.id].id }}">{{ t("overview.running") }}: {{ t("kind." ~ active[system.id].kind) }} {{ active[system.id].target_label }}</a>
+    {% endif %}
+    {{ ui.operation_buttons("/systems/" ~ system.id, t, active.get(system.id), system=true) }}
+  </div>
+  {{ ui.instance_table(system.instances, t, instance_type, disabled=active.get(system.id)) }}
+</section>
+{% endfor %}
+
+{% if databases %}
+<h1>{{ t("overview.databases") }}</h1>
+<section class="card">
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>{{ t("field.database") }}</th><th>{{ t("field.type") }}</th><th>{{ t("field.instance") }}</th><th>{{ t("field.host") }}</th><th>{{ t("field.release") }}</th><th>{{ t("field.status") }}</th><th>{{ t("field.checked") }}</th></tr>
+  </thead>
+  <tbody>
+  {% for database in databases %}
+    <tr>
+      <td>{{ database.name }}</td>
+      <td class="mono">{{ database.type }}</td>
+      <td class="mono">{{ database.instance_name or "" }}</td>
+      <td><a href="/hosts/{{ database.host_id }}">{{ database.host.name }}</a></td>
+      <td class="mono">{{ database.release or "" }}</td>
+      <td>{{ ui.status_badge(database.last_status, t) }}</td>
+      <td class="muted">{{ database.status_checked_at | time }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+</section>
+{% endif %}
+{% endblock %}

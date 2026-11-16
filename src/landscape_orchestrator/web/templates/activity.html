@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}{{ t("activity.title") }} {{ activity.id }}{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>{{ t("activity.title") }} {{ activity.id }}: {{ t("kind." ~ activity.kind) }} <span class="mono">{{ activity.target_label }}</span></h1>
+  {{ ui.status_badge(activity.status, t, "activity") }}
+</div>
+{% if refresh %}<p class="muted" role="status">{{ t("activity.refreshing") }}</p>{% endif %}
+{% if activity.error %}<p class="flash error" role="alert">{{ activity.error }}</p>{% endif %}
+
+<section class="card">
+  <dl>
+    <dt>{{ t("field.target") }}</dt>
+    <dd>{{ t("target." ~ activity.target_type) }}
+      {% if activity.system_id %}<a class="mono" href="/systems/{{ activity.system_id }}">{{ activity.target_label }}</a>{% else %}<span class="mono">{{ activity.target_label }}</span>{% endif %}
+    </dd>
+    <dt>{{ t("field.requested") }}</dt><dd>{{ activity.requested_at | time }}</dd>
+    <dt>{{ t("field.finished") }}</dt><dd>{{ activity.finished_at | time }}</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2>{{ t("activity.log") }}</h2>
+  <div class="table-wrap">
+  <table class="log">
+    <thead><tr><th>{{ t("field.time") }}</th><th>{{ t("field.message") }}</th></tr></thead>
+    <tbody>
+    {% for entry in activity.entries %}
+      <tr class="level-{{ entry.level | lower }}"><td class="muted">{{ entry.timestamp | time }}</td><td>{{ entry.message }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if language != "en" %}<p class="muted">{{ t("activity.log_language") }}</p>{% endif %}
+</section>
+{% endblock %}

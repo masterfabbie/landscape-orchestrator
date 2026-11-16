@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="{{ language }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% if refresh %}<meta http-equiv="refresh" content="{{ refresh }}">{% endif %}
+  <title>{% block title %}{% endblock %} · {{ t("app.title") }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">{{ t("app.title") }}</a>
+  {% block nav %}
+  <nav aria-label="Main">
+    <a href="/" {% if path == "/" or path.startswith("/systems") %}aria-current="page"{% endif %}>{{ t("nav.overview") }}</a>
+    <a href="/hosts" {% if path.startswith("/hosts") %}aria-current="page"{% endif %}>{{ t("nav.hosts") }}</a>
+    <a href="/activities" {% if path.startswith("/activities") %}aria-current="page"{% endif %}>{{ t("nav.activities") }}</a>
+  </nav>
+  {% endblock %}
+  <div class="topbar-end">
+    <span class="languages" aria-label="Language">
+      {% for code in languages %}
+        {% if code == language %}<strong>{{ code | upper }}</strong>{% else %}<a href="/language/{{ code }}?next={{ path | urlencode }}">{{ code | upper }}</a>{% endif %}
+      {% endfor %}
+    </span>
+    {% block session %}
+    <form method="post" action="/logout"><button class="link" type="submit">{{ t("nav.logout") }}</button></form>
+    {% endblock %}
+  </div>
+</header>
+<main>
+  {% if notice %}<p class="flash notice" role="status">{{ notice }}</p>{% endif %}
+  {% if error %}<p class="flash error" role="alert">{{ error }}</p>{% endif %}
+  {% if warnings %}
+  <div class="flash warning" role="status">
+    <strong>{{ t("warning.discovery") }}</strong>
+    <ul>{% for warning in warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

@@ -32,6 +32,7 @@ from ..operations import (
     TargetNotFoundError,
 )
 from ..settings import Settings
+from ..web import AppContext, register_web
 from .schemas import (
     ActivityDetail,
     ActivityOut,
@@ -266,4 +267,5 @@ def create_app(
 
     app.state.runner = runner
     app.mount("/api", api)
+    register_web(app, AppContext(settings, secret_box, clients, session_factory, runner))
     return app

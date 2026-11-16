@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}{{ system.sid }}{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>{{ t("field.system") }} {{ system.sid }}</h1>
+  {% if active %}
+    <a class="badge badge-running" href="/activities/{{ active.id }}">{{ t("overview.running") }}: {{ t("kind." ~ active.kind) }} {{ active.target_label }}</a>
+  {% endif %}
+  {{ ui.operation_buttons("/systems/" ~ system.id, t, active, system=true) }}
+</div>
+<section class="card">
+  <h2>{{ t("field.instances") }}</h2>
+  {{ ui.instance_table(system.instances, t, instance_type, disabled=active) }}
+</section>
+<section class="card">
+  <h2>{{ t("credentials.title") }}</h2>
+  {{ ui.credentials_form("/systems/" ~ system.id ~ "/credentials", system, t("credentials.system_hint"), t) }}
+</section>
+{% endblock %}

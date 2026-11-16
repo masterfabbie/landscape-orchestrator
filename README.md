@@ -15,7 +15,7 @@ Dies ist ein unabhängiges Projekt und kein SAP-Produkt.
 | SOAP-Clients für Host Agent und sapstartsrv | vorhanden, gegen den Mock getestet |
 | Inventar (Hosts, Systeme, Instanzen, Datenbanken) mit Discovery und REST-API | vorhanden, gegen den Mock getestet |
 | Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | vorhanden, gegen den Mock getestet |
-| Web-UI | geplant |
+| Web-Oberfläche (Deutsch und Englisch) | vorhanden, gegen den Mock getestet |
 
 Nicht Teil der ersten Version: Verschieben von Instanzen (Adaptive Computing),
 kundendefinierte Operationen und Hooks.
@@ -65,6 +65,36 @@ Hosts die eingebaute simulierte Landschaft an:
 ```bash
 .venv/bin/lo-server --mock
 ```
+
+## Web-Oberfläche
+
+Nach dem Start ist die Oberfläche unter `http://127.0.0.1:8000/` erreichbar. Angemeldet wird
+mit dem Wert aus `LO_API_TOKEN`.
+
+| Seite | Inhalt |
+|---|---|
+| Übersicht | Systeme mit Instanzen und Status, Datenbanken, Knöpfe für Start, Stopp und Neustart |
+| Hosts | Hosts auflisten und anlegen; Detailseite mit Discovery, Zugangsdaten und Löschen |
+| System | Instanzen eines Systems, Operationen, Zugangsdaten für den sapstartsrv |
+| Aktivitäten | Liste aller Operationen; Detailseite mit Protokoll |
+
+- **Sprache:** Deutsch und Englisch, umschaltbar oben rechts. Ohne Auswahl gilt die Sprache
+  des Browsers. Protokollmeldungen der Aktivitäten werden auf Englisch aufgezeichnet.
+- **Aktualisierung:** Die Seite einer laufenden Aktivität lädt sich alle 2 Sekunden neu,
+  Übersicht und Systemseite alle 5 Sekunden, solange eine Aktivität läuft.
+- **Keine externen Dateien:** Die Oberfläche lädt nichts aus dem Internet und kommt bis auf
+  die Rückfrage vor Operationen ohne JavaScript aus.
+- **Anmeldung:** Ein signiertes Sitzungs-Cookie, 8 Stunden gültig, `HttpOnly` und
+  `SameSite=Strict`. Wird `LO_API_TOKEN` geändert, sind alle Sitzungen ungültig.
+  Formulare von fremden Websites werden abgelehnt.
+
+Einschränkungen:
+
+- Es gibt nur das gemeinsame Token, keine Benutzer und Rollen. Wer sich anmelden kann, darf
+  alles, auch Systeme stoppen.
+- Fehlgeschlagene Anmeldeversuche werden nicht begrenzt.
+- Das Cookie wird nur mit dem Attribut `Secure` gesetzt, wenn der Server die Anfrage als
+  HTTPS sieht. Hinter einem Reverse-Proxy muss dieser das Protokoll weiterreichen.
 
 ## Inventar und REST-API
 
@@ -153,6 +183,8 @@ curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/
   Instanzen läuft, werden weitere mit HTTP 409 abgelehnt.
 - **Status der Aktivität:** `PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`. Das Protokoll hält
   jede Statusänderung fest, und der Status im Inventar wird dabei aktualisiert.
+- **Datenbanken:** Am Ende jeder Aktivität wird der Status der Datenbanken auf den
+  beteiligten Hosts neu gelesen, damit er zum Zustand der Instanzen passt.
 - **Serverneustart:** Aktivitäten, die beim Beenden des Servers noch liefen, werden als
   `FAILED` mit dem Hinweis „Interrupted“ vermerkt. Der Zustand des Ziels ist dann unbekannt
   und sollte per Discovery geprüft werden.

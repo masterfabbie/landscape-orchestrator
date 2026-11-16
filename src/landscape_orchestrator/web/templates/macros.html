@@ -1,0 +1,60 @@
+{% macro status_badge(status, t, prefix="status") %}
+<span class="badge badge-{{ status | lower }}">{{ t(prefix ~ "." ~ status) }}</span>
+{% endmacro %}
+
+{% macro operation_buttons(action, t, disabled=false, system=false) %}
+<span class="buttons">
+  {% for name in ("start", "stop", "restart") %}
+  <form method="post" action="{{ action }}/{{ name }}" data-confirm="{{ t('op.confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+    <button type="submit" class="{{ 'danger' if name != 'start' else '' }}" {% if disabled %}disabled{% endif %}>
+      {{ t("op." ~ name ~ ("_system" if system else "")) }}
+    </button>
+  </form>
+  {% endfor %}
+</span>
+{% endmacro %}
+
+{% macro instance_table(instances, t, instance_type, show_system=false, show_host=true, disabled=false) %}
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      {% if show_system %}<th>{{ t("field.system") }}</th>{% endif %}
+      <th>{{ t("field.instance") }}</th>
+      <th>{{ t("field.type") }}</th>
+      {% if show_host %}<th>{{ t("field.host") }}</th>{% endif %}
+      <th>{{ t("field.status") }}</th>
+      <th>{{ t("field.checked") }}</th>
+      <th>{{ t("field.actions") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for instance in instances %}
+    <tr>
+      {% if show_system %}<td><a href="/systems/{{ instance.system_id }}">{{ instance.system.sid }}</a></td>{% endif %}
+      <td class="mono">{{ instance.number }}</td>
+      <td>{{ instance_type(instance.features) }}</td>
+      {% if show_host %}<td><a href="/hosts/{{ instance.host_id }}">{{ instance.host.name }}</a></td>{% endif %}
+      <td>{{ status_badge(instance.last_status, t) }}</td>
+      <td class="muted">{{ instance.status_checked_at | time }}</td>
+      <td>{{ operation_buttons("/instances/" ~ instance.id, t, disabled) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endmacro %}
+
+{% macro credentials_form(action, owner, hint, t) %}
+<form method="post" action="{{ action }}" class="stack">
+  <p class="muted">{{ hint }}</p>
+  <p>{{ t("field.status") }}:
+    {% if owner.has_credentials %}<strong>{{ t("credentials.set") }}</strong> ({{ owner.username }}){% else %}{{ t("credentials.missing") }}{% endif %}
+  </p>
+  <div class="fields">
+    <label>{{ t("field.username") }} <input name="username" autocomplete="off" required value="{{ owner.username or '' }}"></label>
+    <label>{{ t("field.password") }} <input name="password" type="password" autocomplete="new-password" required></label>
+  </div>
+  <div><button type="submit">{{ t("credentials.save") }}</button></div>
+</form>
+{% endmacro %}

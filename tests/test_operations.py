@@ -297,3 +297,36 @@ async def test_activities_interrupted_by_restart_are_marked_failed(
             assert "Interrupted" in stored["error"]
             # The system is free for new operations again.
             assert (await client.post("/api/instances/1/stop")).status_code == 202
+
+
+async def test_database_status_follows_operations(app, api):
+    async def database_statuses() -> set[str]:
+        host = (await api.get("/api/hosts/2")).json()
+        return {database["last_status"] for database in host["databases"]}
+
+    (system,) = (await api.get("/api/systems")).json()
+    assert await database_statuses() == {"STOPPED"}
+
+    await run(app, api, f"/api/systems/{system['id']}/start")
+    assert await database_statuses() == {"RUNNING"}
+
+    hana = await instance_id(api, "02")
+    await run(app, api, f"/api/instances/{hana}/stop")
+    assert await database_statuses() == {"STOPPED"}
+
+
+async def test_database_refresh_failure_does_not_fail_the_activity(app, api, transport):
+    hana = await instance_id(api, "02")
+    original = transport._transports[11128].handle_async_request
+    calls = {"count": 0}
+
+    async def flaky(request):
+        # The start request itself succeeds; the later database query finds the agent down.
+        calls["count"] += 1
+        if calls["count"] > 1:
+            raise httpx.ConnectError("host agent went away")
+        return await original(request)
+
+    transport._transports[11128].handle_async_request = flaky
+    activity = await run(app, api, f"/api/instances/{hana}/start")
+    assert activity["status"] == "SUCCEEDED"
