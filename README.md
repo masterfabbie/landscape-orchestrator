@@ -104,11 +104,12 @@ Verhalten:
 
 ### Einschränkungen der Mock-Umgebung
 
-- Die SAPHostControl-Nachrichten sind gegen die WSDL eines Host Agent 7.22 abgeglichen
-  (Elementnamen, Enum-Werte). Inhalte, die die WSDL nicht festlegt, sind Beispielwerte, etwa die
-  Eigenschaften von `GetComputerSystem` und die Datenbank-Komponenten.
-- Die SAPControl-Nachrichten sind der öffentlichen Schnittstellenbeschreibung nachempfunden und
-  noch **nicht** gegen eine echte WSDL (`http://<host>:5<NR>13/?wsdl`) geprüft.
+- Elementnamen und Enum-Werte beider Dienste sind gegen die WSDLs eines Host Agent 7.22 und
+  eines sapstartsrv abgeglichen.
+- Inhalte, die die WSDLs offenlassen, orientieren sich an echten `saphostctrl`-Ausgaben: die
+  CIM-Klassen von `GetComputerSystem` und die Datenbank-Komponenten. Annahmen bleiben die
+  Verschachtelung der CIM-Klassen sowie die Property-Schlüssel für Vendor und Release.
+- Gegen einen echten Host getestet ist der Mock noch nicht.
 - Nur HTTP, kein HTTPS.
 - Die Mock-Umgebung ist ein Entwicklungswerkzeug und darf nicht in nicht vertrauenswürdigen
   Netzen erreichbar sein.

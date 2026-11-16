@@ -1,8 +1,8 @@
 """ASGI apps simulating SAPHostControl (host agent) and SAPControl (sapstartsrv).
 
-SAPHostControl messages follow the WSDL of a host agent 7.22 (element names, enum values).
-SAPControl messages are modelled on the public interface description and are not yet
-verified against a real WSDL (``http://<host>:5<NR>13/?wsdl``).
+Element names and enum values follow the WSDLs of a host agent 7.22 and a sapstartsrv.
+Contents the WSDLs leave open are modelled on sample output of ``saphostctrl`` (CIM classes of
+GetComputerSystem, database components). Assumptions are marked in comments.
 """
 
 from __future__ import annotations
@@ -227,6 +227,10 @@ def _properties(values: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"mKey": key, "mValue": value} for key, value in values.items()]
 
 
+def _cim_attributes(*attributes: tuple[str, str, Any]) -> list[dict[str, Any]]:
+    return [{"mName": name, "mType": type_, "mValue": value} for name, type_, value in attributes]
+
+
 def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
     host: MockHost = landscape.host(host_name)
 
@@ -257,18 +261,36 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
             )
         return {"aInstances": result}
 
-    def _database_properties(db_name: str, db_type: str) -> list[dict[str, Any]]:
-        return _properties(
-            {"Database/Name": db_name, "Database/Type": db_type, "Database/Host": host.name}
-        )
+    def _database_properties(db: MockDatabase) -> list[dict[str, Any]]:
+        # Name, Type, InstanceName and Host are documented in the WSDL. Vendor and Release
+        # appear in saphostctrl output; their property keys are assumptions.
+        values = {"Database/Name": db.name, "Database/Type": db.type}
+        instance = host.instance(db.instance_nr) if db.instance_nr is not None else None
+        if instance is not None:
+            values["Database/InstanceName"] = f"{instance.kind}{instance.nr:02d}"
+        values |= {
+            "Database/Host": host.name,
+            "Database/Vendor": db.type.upper(),
+            "Database/Release": "2.00.000.00",
+        }
+        return _properties(values)
 
     def _components(db: MockDatabase) -> list[dict[str, Any]]:
-        # The WSDL only fixes the structure; the property keys of a component are mock values.
+        status = landscape.database_status(host, db)
+        instance = host.instance(db.instance_nr) if db.instance_nr is not None else None
+        processes = instance.kind_info.processes if instance else (("database", "Database"),)
         return [
             {
-                "mProperties": _properties({"Database/ComponentName": "Instance"}),
-                "mStatus": _DB_STATUS[landscape.database_status(host, db)],
+                "mProperties": _properties(
+                    {
+                        "Database/ComponentName": name,
+                        "Database/ComponentDescription": description,
+                        "Database/ComponentStatusDescription": STATUS_TEXT[status],
+                    }
+                ),
+                "mStatus": _DB_STATUS[status],
             }
+            for name, description in processes
         ]
 
     def list_databases(_: dict[str, Any]) -> dict[str, Any]:
@@ -276,7 +298,7 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
             "result": [
                 {
                     "mStatus": _DB_STATUS[landscape.database_status(host, db)],
-                    "mDatabase": _database_properties(db.name, db.type),
+                    "mDatabase": _database_properties(db),
                     "mComponents": _components(db),
                 }
                 for db in host.databases
@@ -299,20 +321,40 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
         raise SoapFault(f"Database '{name}' not found")
 
     def get_computer_system(_: dict[str, Any]) -> dict[str, Any]:
-        properties = {
-            "Name": host.name,
-            "Hostnames": host.name,
-            "OpSysCategory": host.opsys,
-            "OpSysReleaseName": "Mock OS 1.0",
-            "CPUInfo": "Mock CPU",
-            "TotalMemory": "16384",
-        }
+        # Classes, attribute names (including the spelling "IPAdresses") and types follow real
+        # saphostctrl output. Nesting the other classes as members of the computer system is
+        # an assumption; the WSDL only defines mProperties and mMembers.
+        hostnames = sorted({host.name} | {inst.hostname for inst in host.instances})
         return {
             "result": {
-                "mProperties": [
-                    {"mName": key, "mType": "string", "mValue": value}
-                    for key, value in properties.items()
-                ]
+                "mProperties": _cim_attributes(
+                    ("CreationClassName", "String", "ITSAMComputerSystem"),
+                    ("Name", "String", host.name),
+                    ("Hostnames", "String[] sep=;", "".join(f"{name};" for name in hostnames)),
+                    ("IPAdresses", "String[] sep=;", f"{host.bind};"),
+                ),
+                "mMembers": [
+                    {
+                        "mProperties": _cim_attributes(
+                            ("CreationClassName", "String", "ITSAMOperatingSystem"),
+                            ("Name", "String", host.opsys),
+                            ("Version", "String", "6.4.0-mock"),
+                            ("TotalVisibleMemorySize", "uint64", 16777216),
+                            ("FreePhysicalMemory", "uint64", 8388608),
+                            ("CPU Count", "uint16", 4),
+                        )
+                    },
+                    {
+                        "mProperties": _cim_attributes(
+                            ("CreationClassName", "String", "ITSAMFileSystem"),
+                            ("Name", "String", "/"),
+                            ("FileSystemSize", "uint64", 102400),
+                            ("AvailableSpace", "uint64", 51200),
+                            ("FileSystemType", "String", "xfs"),
+                            ("Remote", "boolean", "false"),
+                        )
+                    },
+                ],
             }
         }
 

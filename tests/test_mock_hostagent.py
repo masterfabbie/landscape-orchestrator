@@ -65,9 +65,18 @@ def test_start_unknown_instance_returns_fault(client):
 
 def test_get_computer_system(client):
     _, result = soap_call(client, NS, "GetComputerSystem")
-    attributes = result.find("result/mProperties")
-    properties = {p.findtext("mName"): p.findtext("mValue") for p in attributes}
-    assert properties["Name"] == "sapapp1"
+    def attributes(cim_object) -> dict[str, str]:
+        return {p.findtext("mName"): p.findtext("mValue") for p in cim_object.find("mProperties")}
+
+    system = attributes(result.find("result"))
+    assert system["CreationClassName"] == "ITSAMComputerSystem"
+    assert system["Name"] == "sapapp1"
+    assert system["Hostnames"] == "sapapp1;"
+    members = [attributes(member) for member in result.find("result/mMembers")]
+    assert [m["CreationClassName"] for m in members] == [
+        "ITSAMOperatingSystem",
+        "ITSAMFileSystem",
+    ]
 
 
 def test_databases_on_database_host(landscape, clock):
@@ -76,13 +85,12 @@ def test_databases_on_database_host(landscape, clock):
     _, result = soap_call(client, NS, "ListDatabases")
     database = result.find("result")[0]
     properties = {p.findtext("mKey"): p.findtext("mValue") for p in database.find("mDatabase")}
-    assert properties == {
-        "Database/Name": "DEV",
-        "Database/Type": "hdb",
-        "Database/Host": "sapdb1",
-    }
+    assert properties["Database/Name"] == "DEV"
+    assert properties["Database/Type"] == "hdb"
+    assert properties["Database/InstanceName"] == "HDB02"
+    assert properties["Database/Host"] == "sapdb1"
     assert database.findtext("mStatus") == "SAPHostControl-DB-STOPPED"
-    assert len(database.find("mComponents")) == 1
+    assert len(database.find("mComponents")) == 3
 
     hdb = "<aInstance><mSid>DEV</mSid><mSystemNumber>02</mSystemNumber></aInstance>"
     soap_call(client, NS, "StartInstance", hdb, auth=AUTH)
@@ -96,6 +104,12 @@ def test_databases_on_database_host(landscape, clock):
     assert result.findtext("status") == "SAPHostControl-DB-RUNNING"
     component = result.find("result")[0]
     assert component.findtext("mStatus") == "SAPHostControl-DB-RUNNING"
+    details = {p.findtext("mKey"): p.findtext("mValue") for p in component.find("mProperties")}
+    assert details == {
+        "Database/ComponentName": "hdbdaemon",
+        "Database/ComponentDescription": "HDB Daemon",
+        "Database/ComponentStatusDescription": "Running",
+    }
 
 
 def test_host_without_databases_returns_empty_list(client):
