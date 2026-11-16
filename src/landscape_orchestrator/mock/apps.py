@@ -1,8 +1,8 @@
 """ASGI apps simulating SAPHostControl (host agent) and SAPControl (sapstartsrv).
 
-Message formats are modelled on the public interface descriptions, not generated from the
-real WSDLs. Verify against ``http://<host>:1128/SAPHostControl/?wsdl`` and
-``http://<host>:5<NR>13/?wsdl`` before relying on details.
+SAPHostControl messages follow the WSDL of a host agent 7.22 (element names, enum values).
+SAPControl messages are modelled on the public interface description and are not yet
+verified against a real WSDL (``http://<host>:5<NR>13/?wsdl``).
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request, Response
 from .landscape import (
     STATUS_COLOR,
     STATUS_TEXT,
+    MockDatabase,
     MockHost,
     MockInstance,
     MockLandscape,
@@ -217,8 +218,8 @@ HOSTCONTROL_PROTECTED = frozenset({"StartInstance", "StopInstance"})
 _DB_STATUS = {
     Status.RUNNING: "SAPHostControl-DB-RUNNING",
     Status.STOPPED: "SAPHostControl-DB-STOPPED",
-    Status.STARTING: "SAPHostControl-DB-WARNING",
-    Status.STOPPING: "SAPHostControl-DB-WARNING",
+    Status.STARTING: "SAPHostControl-DB-STARTING",
+    Status.STOPPING: "SAPHostControl-DB-STOPPING",
 }
 
 
@@ -231,36 +232,52 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
 
     def list_instances(params: dict[str, Any]) -> dict[str, Any]:
         selector = params.get("aSelector")
-        wanted = selector.get("aInstanceStatus") if isinstance(selector, dict) else None
+        selector = selector if isinstance(selector, dict) else {}
+        wanted = selector.get("aInstanceStatus") or "S-INSTALLED"
+        if wanted not in ("S-INSTALLED", "S-RUNNING", "S-STOPPED"):
+            raise SoapFault(f"Invalid instance status '{wanted}'", "SOAP-ENV:Client")
+        hostname = selector.get("aHostname")
         now = landscape.clock()
         result = []
         for inst in host.instances:
             stopped = inst.status(now) is Status.STOPPED
-            if wanted == "S-INSTANCE-RUNNING" and stopped:
+            if wanted == "S-RUNNING" and stopped:
                 continue
-            if wanted == "S-INSTANCE-STOPPED" and not stopped:
+            if wanted == "S-STOPPED" and not stopped:
+                continue
+            if hostname and inst.hostname != hostname:
                 continue
             result.append(
                 {
-                    "mHostname": inst.hostname,
                     "mSid": inst.sid,
+                    "mHostname": inst.hostname,
                     "mSystemNumber": f"{inst.nr:02d}",
                     "mSapVersionInfo": "753, patch 1100, changelist 2200000",
                 }
             )
-        return {"result": result}
+        return {"aInstances": result}
 
     def _database_properties(db_name: str, db_type: str) -> list[dict[str, Any]]:
         return _properties(
             {"Database/Name": db_name, "Database/Type": db_type, "Database/Host": host.name}
         )
 
+    def _components(db: MockDatabase) -> list[dict[str, Any]]:
+        # The WSDL only fixes the structure; the property keys of a component are mock values.
+        return [
+            {
+                "mProperties": _properties({"Database/ComponentName": "Instance"}),
+                "mStatus": _DB_STATUS[landscape.database_status(host, db)],
+            }
+        ]
+
     def list_databases(_: dict[str, Any]) -> dict[str, Any]:
         return {
             "result": [
                 {
-                    "mDatabase": _database_properties(db.name, db.type),
                     "mStatus": _DB_STATUS[landscape.database_status(host, db)],
+                    "mDatabase": _database_properties(db.name, db.type),
+                    "mComponents": _components(db),
                 }
                 for db in host.databases
             ]
@@ -276,8 +293,8 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
         for db in host.databases:
             if db.name == name:
                 return {
+                    "result": _components(db),
                     "status": _DB_STATUS[landscape.database_status(host, db)],
-                    "result": _database_properties(db.name, db.type),
                 }
         raise SoapFault(f"Database '{name}' not found")
 
@@ -291,15 +308,12 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
             "TotalMemory": "16384",
         }
         return {
-            "result": [
-                {
-                    "mClassname": "SAP_ITSAMComputerSystem",
-                    "mProperties": [
-                        {"mName": key, "mType": "string", "mValue": value}
-                        for key, value in properties.items()
-                    ],
-                }
-            ]
+            "result": {
+                "mProperties": [
+                    {"mName": key, "mType": "string", "mValue": value}
+                    for key, value in properties.items()
+                ]
+            }
         }
 
     def _find_instance(params: dict[str, Any]) -> MockInstance:
@@ -313,7 +327,7 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
 
     def _operation_result(description: str) -> dict[str, Any]:
         return {
-            "result": {
+            "response": {
                 "mOperationID": "",
                 "mOperationResults": [
                     {"mMessageKey": "description", "mMessageValue": description}

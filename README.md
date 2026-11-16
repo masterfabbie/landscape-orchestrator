@@ -104,9 +104,11 @@ Verhalten:
 
 ### Einschränkungen der Mock-Umgebung
 
-- Die Nachrichtenformate sind der öffentlichen Schnittstellenbeschreibung nachempfunden und
-  **nicht** aus den echten WSDLs generiert. Vor dem Einsatz gegen echte Hosts müssen sie gegen
-  `http://<host>:1128/SAPHostControl/?wsdl` und `http://<host>:5<NR>13/?wsdl` geprüft werden.
+- Die SAPHostControl-Nachrichten sind gegen die WSDL eines Host Agent 7.22 abgeglichen
+  (Elementnamen, Enum-Werte). Inhalte, die die WSDL nicht festlegt, sind Beispielwerte, etwa die
+  Eigenschaften von `GetComputerSystem` und die Datenbank-Komponenten.
+- Die SAPControl-Nachrichten sind der öffentlichen Schnittstellenbeschreibung nachempfunden und
+  noch **nicht** gegen eine echte WSDL (`http://<host>:5<NR>13/?wsdl`) geprüft.
 - Nur HTTP, kein HTTPS.
 - Die Mock-Umgebung ist ein Entwicklungswerkzeug und darf nicht in nicht vertrauenswürdigen
   Netzen erreichbar sein.

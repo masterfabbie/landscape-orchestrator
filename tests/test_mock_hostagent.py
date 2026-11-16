@@ -21,37 +21,39 @@ def listed(client: TestClient, selector: str | None = None) -> list[str]:
     )
     status, result = soap_call(client, NS, "ListInstances", params)
     assert status == 200
-    return sorted(item.findtext("mSystemNumber") for item in result.find("result"))
+    return sorted(item.findtext("mSystemNumber") for item in result.find("aInstances"))
 
 
 def test_list_instances(client):
     status, result = soap_call(client, NS, "ListInstances")
     assert status == 200
-    first = result.find("result")[0]
+    first = result.find("aInstances")[0]
     assert first.findtext("mSid") == "DEV"
     assert first.findtext("mHostname") == "sapapp1"
     assert listed(client) == ["00", "01"]
 
 
 def test_list_instances_filters_by_status(client, clock):
-    assert listed(client, "S-INSTANCE-RUNNING") == []
-    assert listed(client, "S-INSTANCE-STOPPED") == ["00", "01"]
+    assert listed(client, "S-RUNNING") == []
+    assert listed(client, "S-STOPPED") == ["00", "01"]
 
-    status, _ = soap_call(client, NS, "StartInstance", INSTANCE_00, auth=AUTH)
+    status, result = soap_call(client, NS, "StartInstance", INSTANCE_00, auth=AUTH)
     assert status == 200
+    message = result.find("response/mOperationResults")[0]
+    assert "Start of instance DEV/00" in message.findtext("mMessageValue")
     clock.advance(3)
-    assert listed(client, "S-INSTANCE-RUNNING") == ["00"]
-    assert listed(client, "S-INSTANCE-STOPPED") == ["01"]
+    assert listed(client, "S-RUNNING") == ["00"]
+    assert listed(client, "S-STOPPED") == ["01"]
 
     soap_call(client, NS, "StopInstance", INSTANCE_00, auth=AUTH)
     clock.advance(2)
-    assert listed(client, "S-INSTANCE-RUNNING") == []
+    assert listed(client, "S-RUNNING") == []
 
 
 def test_start_instance_requires_credentials(client):
     status, _ = soap_call(client, NS, "StartInstance", INSTANCE_00)
     assert status == 401
-    assert listed(client, "S-INSTANCE-RUNNING") == []
+    assert listed(client, "S-RUNNING") == []
 
 
 def test_start_unknown_instance_returns_fault(client):
@@ -63,9 +65,8 @@ def test_start_unknown_instance_returns_fault(client):
 
 def test_get_computer_system(client):
     _, result = soap_call(client, NS, "GetComputerSystem")
-    item = result.find("result")[0]
-    assert item.findtext("mClassname") == "SAP_ITSAMComputerSystem"
-    properties = {p.findtext("mName"): p.findtext("mValue") for p in item.find("mProperties")}
+    attributes = result.find("result/mProperties")
+    properties = {p.findtext("mName"): p.findtext("mValue") for p in attributes}
     assert properties["Name"] == "sapapp1"
 
 
@@ -81,6 +82,7 @@ def test_databases_on_database_host(landscape, clock):
         "Database/Host": "sapdb1",
     }
     assert database.findtext("mStatus") == "SAPHostControl-DB-STOPPED"
+    assert len(database.find("mComponents")) == 1
 
     hdb = "<aInstance><mSid>DEV</mSid><mSystemNumber>02</mSystemNumber></aInstance>"
     soap_call(client, NS, "StartInstance", hdb, auth=AUTH)
@@ -88,10 +90,12 @@ def test_databases_on_database_host(landscape, clock):
         "<aArguments><item><mKey>Database/Name</mKey><mValue>DEV</mValue></item></aArguments>"
     )
     _, result = soap_call(client, NS, "GetDatabaseStatus", arguments)
-    assert result.findtext("status") == "SAPHostControl-DB-WARNING"
+    assert result.findtext("status") == "SAPHostControl-DB-STARTING"
     clock.advance(3)
     _, result = soap_call(client, NS, "GetDatabaseStatus", arguments)
     assert result.findtext("status") == "SAPHostControl-DB-RUNNING"
+    component = result.find("result")[0]
+    assert component.findtext("mStatus") == "SAPHostControl-DB-RUNNING"
 
 
 def test_host_without_databases_returns_empty_list(client):
@@ -107,3 +111,19 @@ def test_unknown_database_returns_fault(client):
     status, fault = soap_call(client, NS, "GetDatabaseStatus", arguments)
     assert status == 500
     assert "not found" in fault.findtext("faultstring")
+
+
+def test_list_instances_rejects_unknown_status(client):
+    params = "<aSelector><aInstanceStatus>S-INSTANCE-ALL</aInstanceStatus></aSelector>"
+    status, fault = soap_call(client, NS, "ListInstances", params)
+    assert status == 500
+    assert "Invalid instance status" in fault.findtext("faultstring")
+
+
+def test_list_instances_filters_by_hostname(client):
+    params = (
+        "<aSelector><aInstanceStatus>S-INSTALLED</aInstanceStatus>"
+        "<aHostname>otherhost</aHostname></aSelector>"
+    )
+    _, result = soap_call(client, NS, "ListInstances", params)
+    assert len(result.find("aInstances")) == 0
