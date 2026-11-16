@@ -22,6 +22,11 @@ class FakeClock:
 
 
 @pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+@pytest.fixture
 def clock() -> FakeClock:
     return FakeClock()
 

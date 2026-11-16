@@ -12,7 +12,7 @@ Dies ist ein unabhängiges Projekt und kein SAP-Produkt.
 |---|---|
 | Projektgerüst, CI | vorhanden |
 | Mock-Umgebung (simulierter Host Agent und sapstartsrv) | vorhanden |
-| SOAP-Clients für Host Agent und sapstartsrv | geplant |
+| SOAP-Clients für Host Agent und sapstartsrv | vorhanden, gegen den Mock getestet |
 | Inventar (Hosts, Systeme, Instanzen, Datenbanken) | geplant |
 | Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | geplant |
 | Web-UI | geplant |
@@ -37,6 +37,51 @@ python3 -m venv .venv
 ```bash
 .venv/bin/ruff check .
 ```
+
+## SOAP-Clients
+
+Die Clients sind asynchron und liegen in `landscape_orchestrator.clients`.
+
+```python
+from landscape_orchestrator.clients import HostAgentClient, SapControlClient
+
+async with HostAgentClient("sapapp1", auth=("sapadm", "...")) as agent:
+    instances = await agent.list_instances()
+    databases = await agent.list_databases()
+    system = await agent.get_computer_system()
+
+async with SapControlClient("sapapp1", 0, auth=("devadm", "...")) as sap:
+    processes = await sap.get_process_list()
+    await sap.start()
+```
+
+| Client | Methoden |
+|---|---|
+| `HostAgentClient` | `list_instances`, `list_databases`, `get_database_status`, `get_computer_system`, `start_instance`, `stop_instance` |
+| `SapControlClient` | `get_process_list`, `get_system_instance_list`, `start`, `stop`, `restart_instance`, `start_system`, `stop_system`, `restart_system` |
+
+- Ports: Host Agent 1128 (HTTP) bzw. 1129 (HTTPS), sapstartsrv 5NN13 bzw. 5NN14. Mit `https=True`
+  wird HTTPS genutzt, mit `port=` lässt sich der Port überschreiben.
+- `verify` steuert die Zertifikatsprüfung bei HTTPS: `True` (Standard), Pfad zu einem CA-Bundle
+  oder `False`.
+- Start und Stopp kehren sofort zurück. Den Fortschritt liest man über `get_process_list` bzw.
+  `get_system_instance_list`.
+- Umgebungsvariablen für Proxys werden ignoriert, verwaltete Hosts werden direkt angesprochen.
+
+Fehler sind Unterklassen von `SoapError`:
+
+| Fehler | Bedeutung |
+|---|---|
+| `SoapConnectionError` | Host nicht erreichbar oder Zeitüberschreitung |
+| `AuthenticationRequiredError` | geschützte Methode ohne Anmeldedaten (HTTP 401) |
+| `InvalidCredentialsError` | Benutzer oder Passwort falsch |
+| `PermissionDeniedError` | Benutzer nicht berechtigt |
+| `SoapFaultError` | sonstiger Fehler des Dienstes, mit `faultstring` |
+| `SoapProtocolError` | Antwort ist kein gültiges SOAP oder enthält unbekannte Werte |
+
+Noch offen: Die Clients sind bisher nur gegen den Mock getestet, nicht gegen echte Hosts.
+`start_instance` und `stop_instance` senden standardmäßig das Flag `O-INSTANCE`; ob der Host
+Agent das so erwartet, muss der erste Test gegen einen echten Host zeigen.
 
 ## Mock-Umgebung
 
