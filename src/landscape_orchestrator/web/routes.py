@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode, urlsplit
 
-from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -28,9 +28,19 @@ from ..connections import ClientFactory
 from ..crypto import SecretBox
 from ..dependencies import DependencyError, load_graph, set_dependencies, would_create_cycle
 from ..discovery import DiscoveryError, discover_host
-from ..models import STATUS_UNKNOWN, Activity, ActivityLogEntry, Host, Instance, Pool, System
+from ..models import (
+    STATUS_UNKNOWN,
+    Activity,
+    ActivityLogEntry,
+    Host,
+    Instance,
+    Pool,
+    Sid,
+    System,
+)
 from ..operations import (
     ACTIVE_STATUSES,
+    NotAssignedError,
     OperationConflictError,
     OperationKind,
     OperationRunner,
@@ -38,6 +48,19 @@ from ..operations import (
 )
 from ..pools import UnknownPoolError, assign_pool
 from ..settings import Settings
+from ..systems import (
+    SystemChangeError,
+    assign_instances,
+    create_system,
+    delete_system,
+    depends_on_sids,
+    sids_of_system,
+    suggest_name,
+    suggestions,
+    unassign_instance,
+    unassigned_instances,
+    update_system,
+)
 from .i18n import LANGUAGES, instance_type_key, pick_language, translate
 from .sessions import SESSION_COOKIE, SESSION_LIFETIME_SECONDS, create_session, is_valid_session
 
@@ -259,9 +282,10 @@ async def _all_systems(session: AsyncSession) -> list[System]:
     return list(
         await session.scalars(
             select(System)
-            .order_by(System.sid)
+            .order_by(System.name)
             .options(
                 selectinload(System.instances).selectinload(Instance.host),
+                selectinload(System.instances).selectinload(Instance.sid),
                 selectinload(System.depends_on),
                 selectinload(System.pool),
             )
@@ -294,6 +318,7 @@ STATUS_ORDER = ("GREEN", "YELLOW", "RED", "GRAY", STATUS_UNKNOWN)
 async def overview(request: Request, session: DbSession) -> HTMLResponse:
     systems = await _all_systems(session)
     hosts = await _all_hosts(session)
+    # Only instances of systems; unassigned instances are not part of the landscape yet.
     instances = [instance for system in systems for instance in system.instances]
     host_states = [
         "UNKNOWN" if host.reachable is None else ("GREEN" if host.reachable else "RED")
@@ -357,6 +382,7 @@ async def _load_host(session: AsyncSession, host_id: int) -> Host:
         .where(Host.id == host_id)
         .options(
             selectinload(Host.instances).selectinload(Instance.system),
+            selectinload(Host.instances).selectinload(Instance.sid),
             selectinload(Host.databases),
         )
     )
@@ -378,10 +404,12 @@ async def _load_system(session: AsyncSession, system_id: int) -> System:
         .where(System.id == system_id)
         .options(
             selectinload(System.instances).selectinload(Instance.host),
+            selectinload(System.instances).selectinload(Instance.sid),
             selectinload(System.depends_on),
             selectinload(System.required_by),
             selectinload(System.pool),
         )
+        .execution_options(populate_existing=True)
     )
     if system is None:
         raise HTTPException(404, "System not found")
@@ -393,7 +421,14 @@ async def system_detail(request: Request, system_id: int, session: DbSession) ->
     system = await _load_system(session, system_id)
     active = (await _active_by_system(session)).get(system.id)
     refresh = OVERVIEW_REFRESH_SECONDS if active else None
-    return render(request, "system.html", system=system, active=active, refresh=refresh)
+    return render(
+        request,
+        "system.html",
+        system=system,
+        active=active,
+        refresh=refresh,
+        depends=depends_on_sids(system),
+    )
 
 
 @pages.post("/systems/{system_id}/{operation}")
@@ -422,6 +457,8 @@ async def operate_instance(
         activity = await context.runner.submit_instance(
             session, instance_id, OperationKind(operation.upper())
         )
+    except NotAssignedError:
+        return redirect(f"/hosts/{instance.host_id}", error="not_assigned")
     except OperationConflictError:
         return redirect(f"/systems/{instance.system_id}", error="conflict")
     return redirect(f"/activities/{activity.id}")
@@ -479,7 +516,13 @@ async def configuration(
     if tab == "hosts":
         context["hosts"] = await _all_hosts(session)
     elif tab == "systems":
-        context["systems"] = await _all_systems(session)
+        systems = await _all_systems(session)
+        context |= {
+            "systems": systems,
+            "unassigned": await unassigned_instances(session),
+            "suggested": await suggestions(session),
+            "depends": {s.id: depends_on_sids(s) for s in systems},
+        }
     else:
         context["pools"] = await _all_pools(session)
     return render(request, "configuration.html", **context)
@@ -589,6 +632,87 @@ async def delete_host(host_id: int, session: DbSession) -> Response:
     return redirect("/configuration", tab="hosts", notice="host_deleted")
 
 
+SYSTEMS_TAB = "/configuration?tab=systems"
+
+
+def _change_error(target: str, exc: SystemChangeError | UnknownPoolError) -> Response:
+    code = exc.code if isinstance(exc, SystemChangeError) else "unknown_pool"
+    return redirect(target, error=f"system_{code}" if code != "unknown_pool" else "invalid_input")
+
+
+@pages.get("/configuration/systems/new")
+async def new_system(
+    request: Request,
+    session: DbSession,
+    instance_id: Annotated[list[int], Query()] = [],  # noqa: B006 - FastAPI copies it
+) -> Response:
+    """Confirmation page for a new system from the selected unassigned instances."""
+    selected = [i for i in await unassigned_instances(session) if i.id in set(instance_id)]
+    if not selected:
+        return redirect(SYSTEMS_TAB, error="system_no_instances")
+    pools = list(await session.scalars(select(Pool).order_by(Pool.name)))
+    return render(
+        request,
+        "config_system_new.html",
+        instances=selected,
+        suggested_name=suggest_name(selected),
+        pools=pools,
+    )
+
+
+@pages.post("/configuration/systems")
+async def create_system_form(
+    session: DbSession,
+    name: Annotated[str, Form()] = "",
+    description: Annotated[str, Form()] = "",
+    pool_id: Annotated[str, Form()] = "",
+    instance_id: Annotated[list[int], Form()] = [],  # noqa: B006 - FastAPI copies it
+) -> Response:
+    try:
+        system = await create_system(
+            session,
+            name,
+            instance_id,
+            pool_id=int(pool_id) if pool_id.isdigit() else None,
+            description=description,
+        )
+    except (SystemChangeError, UnknownPoolError) as exc:
+        await session.rollback()
+        return _change_error(SYSTEMS_TAB, exc)
+    await session.commit()
+    return redirect(SYSTEMS_TAB, notice="system_created", n_name=system.name)
+
+
+@pages.post("/configuration/systems/assign")
+async def assign_selected(
+    session: DbSession,
+    system_id: Annotated[str, Form()] = "",
+    instance_id: Annotated[list[int], Form()] = [],  # noqa: B006 - FastAPI copies it
+) -> Response:
+    """Assign the selected unassigned instances to an existing system."""
+    if not system_id.isdigit():
+        return redirect(SYSTEMS_TAB, error="system_unknown_system")
+    try:
+        await assign_instances(session, int(system_id), instance_id)
+    except SystemChangeError as exc:
+        await session.rollback()
+        return _change_error(SYSTEMS_TAB, exc)
+    await session.commit()
+    return redirect(SYSTEMS_TAB, notice="instances_assigned")
+
+
+@pages.post("/configuration/systems/{system_id}/assign/{instance_id}")
+async def assign_suggested(system_id: int, instance_id: int, session: DbSession) -> Response:
+    """Accept the suggestion for one unassigned instance."""
+    try:
+        await assign_instances(session, system_id, [instance_id])
+    except SystemChangeError as exc:
+        await session.rollback()
+        return _change_error(SYSTEMS_TAB, exc)
+    await session.commit()
+    return redirect(SYSTEMS_TAB, notice="instances_assigned")
+
+
 @pages.get("/configuration/systems/{system_id}")
 async def configure_system(request: Request, system_id: int, session: DbSession) -> HTMLResponse:
     system = await _load_system(session, system_id)
@@ -596,15 +720,67 @@ async def configure_system(request: Request, system_id: int, session: DbSession)
     linked = {s.id for s in system.depends_on}
     candidates = [
         other
-        for other in await session.scalars(select(System).order_by(System.sid))
+        for other in await session.scalars(select(System).order_by(System.name))
         if other.id != system.id
         and other.id not in linked
         and not would_create_cycle(system.id, other.id, graph)
     ]
     pools = list(await session.scalars(select(Pool).order_by(Pool.name)))
     return render(
-        request, "config_system.html", system=system, candidates=candidates, pools=pools
+        request,
+        "config_system.html",
+        system=system,
+        candidates=candidates,
+        pools=pools,
+        sids=await sids_of_system(session, system.id),
+        depends=depends_on_sids(system),
     )
+
+
+@pages.post("/configuration/systems/{system_id}")
+async def save_system(
+    system_id: int,
+    session: DbSession,
+    name: Annotated[str, Form()] = "",
+    description: Annotated[str, Form()] = "",
+) -> Response:
+    target = f"/configuration/systems/{system_id}"
+    try:
+        await update_system(session, system_id, name, description)
+    except SystemChangeError as exc:
+        await session.rollback()
+        if exc.code == "unknown_system":
+            raise HTTPException(404, "System not found") from exc
+        return _change_error(target, exc)
+    await session.commit()
+    return redirect(target, notice="system_saved")
+
+
+@pages.post("/configuration/systems/{system_id}/delete")
+async def delete_system_form(system_id: int, session: DbSession) -> Response:
+    try:
+        await delete_system(session, system_id)
+    except SystemChangeError as exc:
+        await session.rollback()
+        if exc.code == "unknown_system":
+            raise HTTPException(404, "System not found") from exc
+        return _change_error(f"/configuration/systems/{system_id}", exc)
+    await session.commit()
+    return redirect(SYSTEMS_TAB, notice="system_deleted")
+
+
+@pages.post("/configuration/systems/{system_id}/instances/{instance_id}/remove")
+async def remove_instance(
+    system_id: int, instance_id: int, session: DbSession, back: Annotated[str, Form()] = ""
+) -> Response:
+    target = f"/configuration/systems/{system_id}" if back == "system" else SYSTEMS_TAB
+    try:
+        await unassign_instance(session, system_id, instance_id)
+    except SystemChangeError as exc:
+        await session.rollback()
+        return _change_error(target, exc)
+    await session.commit()
+    return redirect(target, notice="instance_removed")
 
 
 async def _change_dependencies(
@@ -633,20 +809,25 @@ async def remove_dependency(system_id: int, depends_on: int, session: DbSession)
     return await _change_dependencies(session, system_id, lambda current: current - {depends_on})
 
 
-@pages.post("/configuration/systems/{system_id}/credentials")
-async def set_system_credentials(
+@pages.post("/configuration/systems/{system_id}/sids/{sid_id}/credentials")
+async def set_sid_credentials(
     system_id: int,
+    sid_id: int,
     context: Context,
     session: DbSession,
     username: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
 ) -> Response:
-    system = await _load_system(session, system_id)
+    """Credentials for the sapstartsrv of one SID, maintained from a system using it."""
+    await _load_system(session, system_id)
     target = f"/configuration/systems/{system_id}"
+    sid = await session.get(Sid, sid_id)
+    if sid is None or sid.id not in {s.id for s in await sids_of_system(session, system_id)}:
+        raise HTTPException(404, "SID not found in this system")
     if not username.strip() or not password:
         return redirect(target, error="credentials_incomplete")
-    system.username = username.strip()
-    system.password_encrypted = context.secret_box.encrypt(password)
+    sid.username = username.strip()
+    sid.password_encrypted = context.secret_box.encrypt(password)
     await session.commit()
     return redirect(target, notice="credentials_saved")
 

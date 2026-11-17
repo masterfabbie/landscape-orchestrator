@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}{{ t("system.create_title") }}{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/configuration?tab=systems">{{ t("nav.configuration") }}</a> / {{ t("tab.systems") }}</p>
+<h1>{{ t("system.create_title") }}</h1>
+<section class="card">
+  <form method="post" action="/configuration/systems" class="stack">
+    <p class="muted">{{ t("system.create_hint") }}</p>
+    <div class="fields">
+      <label>{{ t("field.name") }} <input name="name" required maxlength="64" value="{{ suggested_name }}"></label>
+      <label>{{ t("field.description") }} <input name="description" maxlength="1000"></label>
+      <label>{{ t("field.pool") }}
+        <select name="pool_id">
+          <option value="">{{ t("pool.none") }}</option>
+          {% for pool in pools %}<option value="{{ pool.id }}">{{ pool.name }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <h2>{{ t("system.selected") }}</h2>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>{{ t("field.instance") }}</th><th>{{ t("field.sid") }}</th><th>{{ t("field.type") }}</th><th>{{ t("field.host") }}</th></tr></thead>
+      <tbody>
+      {% for instance in instances %}
+        <tr>
+          <td class="mono">{{ instance.label }}<input type="hidden" name="instance_id" value="{{ instance.id }}"></td>
+          <td class="mono">{{ instance.sid.name }}</td>
+          <td>{{ instance_type(instance.features) }}</td>
+          <td>{{ instance.host.name }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <div><button type="submit">{{ t("system.create_title") }}</button></div>
+  </form>
+</section>
+{% endblock %}

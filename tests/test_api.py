@@ -108,23 +108,86 @@ async def test_discover_fills_inventory(api):
     assert detail["os_name"] == "Linux"
     assert [i["number"] for i in detail["instances"]] == ["00", "01"]
     assert detail["instances"][0]["features"] == "ABAP|GATEWAY|ICMAN|IGS"
+    assert {(i["sid"], i["system_id"]) for i in detail["instances"]} == {("DEV", None)}
     assert detail["databases"] == []
+    assert (await api.get("/api/systems")).json() == []
 
 
-async def test_systems_from_two_hosts(api):
-    for body in (APP_HOST, DB_HOST):
+async def discover_hosts(api, *bodies: dict) -> dict[str, int]:
+    """Discover the hosts; returns instance label -> instance id."""
+    for body in bodies:
         host = await create_host(api, body)
         assert (await api.post(f"/api/hosts/{host['id']}/discover")).status_code == 200
+    instances = (await api.get("/api/instances")).json()
+    return {f"{i['sid']}/{i['number']}": i["id"] for i in instances}
 
-    dev, hdv = (await api.get("/api/systems")).json()
-    assert (dev["sid"], hdv["sid"]) == ("DEV", "HDV")
-    assert dev["has_credentials"] is False
-    assert [i["number"] for i in dev["instances"]] == ["00", "01"]
-    assert [i["number"] for i in hdv["instances"]] == ["02"]
-    assert dev["depends_on_ids"] == [] and hdv["required_by_ids"] == []
+
+async def create_system(api, name: str, *instance_ids: int, **extra) -> dict:
+    body = {"name": name, "instance_ids": list(instance_ids)} | extra
+    response = await api.post("/api/systems", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def test_create_system_from_instances_of_two_sids(api):
+    ids = await discover_hosts(api, APP_HOST, DB_HOST)
+    assert set(ids) == {"DEV/00", "DEV/01", "HDV/02"}
+    unassigned = (await api.get("/api/instances", params={"unassigned": True})).json()
+    assert len(unassigned) == 3
+
+    system = await create_system(api, "DEV", *ids.values(), description="Development")
+    assert (system["name"], system["description"]) == ("DEV", "Development")
+    assert sorted(f"{i['sid']}/{i['number']}" for i in system["instances"]) == sorted(ids)
+    assert (await api.get("/api/instances", params={"unassigned": True})).json() == []
+    assert (await api.get(f"/api/systems/{system['id']}")).json()["name"] == "DEV"
 
     db_detail = (await api.get("/api/hosts/2")).json()
     assert [d["name"] for d in db_detail["databases"]] == ["HDV@HDV", "SYSTEMDB@HDV"]
+
+
+async def test_create_system_errors(api):
+    ids = await discover_hosts(api, APP_HOST)
+    await create_system(api, "DEV", ids["DEV/00"])
+
+    taken = await api.post("/api/systems", json={"name": "dev", "instance_ids": [ids["DEV/01"]]})
+    assert taken.status_code == 409 and "already exists" in taken.json()["detail"]
+    assigned = await api.post("/api/systems", json={"name": "X", "instance_ids": [ids["DEV/00"]]})
+    assert assigned.status_code == 409 and "DEV/00" in assigned.json()["detail"]
+    unknown = await api.post("/api/systems", json={"name": "X", "instance_ids": [99]})
+    assert unknown.status_code == 422
+    pool = await api.post(
+        "/api/systems", json={"name": "X", "instance_ids": [ids["DEV/01"]], "pool_id": 99}
+    )
+    assert pool.status_code == 422
+    assert [s["name"] for s in (await api.get("/api/systems")).json()] == ["DEV"]
+
+
+async def test_assign_suggest_unassign_and_delete(api):
+    ids = await discover_hosts(api, APP_HOST, DB_HOST)
+    system = await create_system(api, "DEV", ids["DEV/00"])
+
+    listed = {i["id"]: i for i in (await api.get("/api/instances")).json()}
+    assert listed[ids["DEV/01"]]["suggested_system_id"] == system["id"]
+    assert listed[ids["HDV/02"]]["suggested_system_id"] is None
+
+    response = await api.post(
+        f"/api/systems/{system['id']}/instances",
+        json={"instance_ids": [ids["DEV/01"], ids["HDV/02"]]},
+    )
+    assert response.status_code == 200
+    assert len(response.json()["instances"]) == 3
+
+    path = f"/api/systems/{system['id']}/instances/{ids['HDV/02']}"
+    assert (await api.delete(path)).status_code == 204
+    assert (await api.delete(path)).status_code == 422
+
+    renamed = await api.patch(f"/api/systems/{system['id']}", json={"name": "Development"})
+    assert renamed.json()["name"] == "Development"
+
+    assert (await api.delete(f"/api/systems/{system['id']}")).status_code == 204
+    assert (await api.get("/api/systems")).json() == []
+    unassigned = (await api.get("/api/instances", params={"unassigned": True})).json()
+    assert len(unassigned) == 3
 
 
 async def test_discover_unreachable_host_returns_502(api):
@@ -148,18 +211,20 @@ async def test_set_credentials(api):
     assert (await api.get(f"/api/hosts/{host['id']}")).json()["username"] == "devadm"
 
     await api.post(f"/api/hosts/{host['id']}/discover")
-    (system,) = (await api.get("/api/systems")).json()
-    response = await api.put(f"/api/systems/{system['id']}/credentials", json=credentials)
+    (sid,) = (await api.get("/api/sids")).json()
+    assert (sid["name"], sid["has_credentials"]) == ("DEV", False)
+    response = await api.put(f"/api/sids/{sid['id']}/credentials", json=credentials)
     assert response.status_code == 204
-    assert (await api.get("/api/systems")).json()[0]["has_credentials"] is True
+    assert (await api.get("/api/sids")).json()[0]["has_credentials"] is True
 
 
 async def test_delete_host_removes_its_instances(api):
-    host = await create_host(api, APP_HOST)
-    await api.post(f"/api/hosts/{host['id']}/discover")
+    ids = await discover_hosts(api, APP_HOST)
+    await create_system(api, "DEV", *ids.values())
 
-    assert (await api.delete(f"/api/hosts/{host['id']}")).status_code == 204
+    assert (await api.delete("/api/hosts/1")).status_code == 204
     assert (await api.get("/api/hosts")).json() == []
+    assert (await api.get("/api/instances")).json() == []
     assert (await api.get("/api/systems")).json()[0]["instances"] == []
 
 
@@ -175,17 +240,27 @@ async def test_unknown_host_returns_404(api, method, path):
     assert (await api.request(method, path)).status_code == 404
 
 
-async def test_unknown_system_returns_404(api):
-    body = {"username": "u", "password": "p"}
-    assert (await api.put("/api/systems/99/credentials", json=body)).status_code == 404
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("PUT", "/api/sids/99/credentials", {"username": "u", "password": "p"}),
+        ("GET", "/api/systems/99", None),
+        ("PATCH", "/api/systems/99", {"name": "X"}),
+        ("DELETE", "/api/systems/99", None),
+        ("POST", "/api/systems/99/instances", {"instance_ids": [1]}),
+        ("POST", "/api/systems/99/start", None),
+    ],
+)
+async def test_unknown_system_or_sid_returns_404(api, method, path, body):
+    assert (await api.request(method, path, json=body)).status_code == 404
 
 
 async def discover_both(api) -> tuple[int, int]:
-    for body in (APP_HOST, DB_HOST):
-        host = await create_host(api, body)
-        await api.post(f"/api/hosts/{host['id']}/discover")
-    systems = {s["sid"]: s["id"] for s in (await api.get("/api/systems")).json()}
-    return systems["DEV"], systems["HDV"]
+    """Two systems as in a real landscape: DEV (ABAP) and HDV (its HANA database)."""
+    ids = await discover_hosts(api, APP_HOST, DB_HOST)
+    dev = await create_system(api, "DEV", ids["DEV/00"], ids["DEV/01"])
+    hdv = await create_system(api, "HDV", ids["HDV/02"])
+    return dev["id"], hdv["id"]
 
 
 async def test_set_dependencies(api):
@@ -195,7 +270,7 @@ async def test_set_dependencies(api):
     assert response.status_code == 200
     assert response.json()["depends_on_ids"] == [hdv]
 
-    systems = {s["sid"]: s for s in (await api.get("/api/systems")).json()}
+    systems = {s["name"]: s for s in (await api.get("/api/systems")).json()}
     assert systems["HDV"]["required_by_ids"] == [dev]
 
     cleared = await api.put(f"/api/systems/{dev}/dependencies", json={"depends_on": []})
@@ -246,6 +321,6 @@ async def test_pools(api):
     await api.put(f"/api/systems/{dev}/pool", json={"pool_id": pool["id"]})
     assert (await api.delete(f"/api/pools/{pool['id']}")).status_code == 204
     assert (await api.get("/api/pools")).json() == []
-    systems = {s["sid"]: s for s in (await api.get("/api/systems")).json()}
+    systems = {s["name"]: s for s in (await api.get("/api/systems")).json()}
     assert systems["DEV"]["pool_id"] is None
     assert (await api.delete("/api/pools/99")).status_code == 404

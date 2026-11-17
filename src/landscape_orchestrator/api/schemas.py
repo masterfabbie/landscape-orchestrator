@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class Credentials(BaseModel):
@@ -28,7 +28,10 @@ class InstanceOut(BaseModel):
 
     id: int
     host_id: int
-    system_id: int
+    sid_id: int
+    sid: str = Field(validation_alias=AliasChoices("sid_name", "sid"))
+    # None while the instance is not assigned to a system.
+    system_id: int | None
     number: str
     hostname: str
     sap_version_info: str | None
@@ -36,6 +39,11 @@ class InstanceOut(BaseModel):
     start_priority: str | None
     last_status: str
     status_checked_at: datetime | None
+
+
+class InstanceListOut(InstanceOut):
+    # For an unassigned instance: the system that already holds instances of its SID.
+    suggested_system_id: int | None = None
 
 
 class DatabaseOut(BaseModel):
@@ -78,13 +86,21 @@ class HostDetail(HostOut):
     databases: list[DatabaseOut]
 
 
+class SidOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    username: str | None
+    has_credentials: bool
+
+
 class SystemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    sid: str
-    username: str | None
-    has_credentials: bool
+    name: str
+    description: str | None
     pool_id: int | None
     depends_on_ids: list[int]
     required_by_ids: list[int]
@@ -130,6 +146,22 @@ class ActivityOut(BaseModel):
 
 class ActivityDetail(ActivityOut):
     entries: list[ActivityLogEntryOut]
+
+
+class SystemCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=1000)
+    instance_ids: list[int] = Field(min_length=1, max_length=200)
+    pool_id: int | None = None
+
+
+class SystemUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class InstanceIds(BaseModel):
+    instance_ids: list[int] = Field(min_length=1, max_length=200)
 
 
 class DependenciesIn(BaseModel):

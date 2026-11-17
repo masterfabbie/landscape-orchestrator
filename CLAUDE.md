@@ -51,11 +51,12 @@ Alles liegt unter `src/landscape_orchestrator/`.
 |---|---|
 | `soapxml.py` | SOAP-Envelopes bauen und lesen, gemeinsam für Clients und Mock |
 | `clients/` | asynchrone SOAP-Clients: `HostAgentClient` (SAPHostControl, Port 1128/1129), `SapControlClient` (sapstartsrv, Port 5NN13/5NN14), gemeinsame Fehlerklassen in `base.py` |
-| `models.py`, `db.py` | Datenmodell (SQLAlchemy, asynchron): Host, System, Pool, Instance, Database, Activity, ActivityLogEntry |
+| `models.py`, `db.py` | Datenmodell (SQLAlchemy, asynchron): Host, Sid, Instance, System, Pool, Database, Activity, ActivityLogEntry; Schemaversion und Prüfung beim Start |
 | `crypto.py`, `settings.py` | Verschlüsselung gespeicherter Passwörter (Fernet), Konfiguration aus Umgebungsvariablen |
 | `connections.py` | baut Clients für Inventareinträge samt Zugangsdaten |
 | `discovery.py` | liest einen Host aus und aktualisiert das Inventar |
 | `dependencies.py` | Abhängigkeiten zwischen Systemen, Reihenfolge von Start und Stopp |
+| `systems.py` | Systeme als Gruppen von Instanzen: anlegen, zuordnen, entfernen, löschen, Namens- und Zuordnungsvorschläge, abgeleitete „Hängt ab von“-SIDs |
 | `pools.py` | Zuordnung von Systemen zu Pools |
 | `operations.py` | Start, Stopp, Neustart als Hintergrund-Aktivitäten (`OperationRunner`) |
 | `api/` | REST-API unter `/api`, geschützt durch ein Bearer-Token; `create_app` baut die Anwendung |
@@ -69,17 +70,29 @@ Wichtige Entwurfsentscheidungen:
   nach Startpriorität, Stopp umgekehrt. `StartSystem` und `StopSystem` des sapstartsrv werden
   nicht genutzt, weil echte Systeme sie für `sapadm` ablehnen. Den sapstartsrv liest das Tool
   nur (`GetProcessList`, `GetSystemInstanceList`).
-- **Zugangsdaten** gibt es auf zwei Ebenen: Die des Hosts gelten für den Host Agent, die des
-  Systems für den sapstartsrv. Fehlen die des Systems, gelten die des Hosts.
-- **Datenbanken haben in echten Landschaften eine eigene SID.** Ein ABAP-System hängt dann vom
-  Datenbanksystem ab. Abhängigkeiten werden von Hand gepflegt; Start geht erst über die
+- **Systeme sind selbst angelegte Gruppen von Instanzen** mit frei wählbarem Namen; die
+  Instanzen dürfen verschiedene SIDs haben (z. B. ABAP-System samt HANA-Instanz mit eigener
+  SID). Die Discovery legt nur SIDs (Tabelle `sids`) und nicht zugeordnete Instanzen an
+  (`instances.system_id` ist dann NULL), nie Systeme. Nur Instanzen eines Systems lassen sich
+  bedienen und erscheinen in der Landscape. Vorschläge (Name aus der SID der
+  Anwendungsinstanzen, Zuordnung zu dem einen System, das die SID schon enthält) werden nie
+  automatisch übernommen. „Hängt ab von“ je Instanz wird aus den Startprioritäten abgeleitet
+  und nur angezeigt.
+- **Zugangsdaten** gibt es auf zwei Ebenen: Die des Hosts gelten für den Host Agent, die der
+  SID für den sapstartsrv. Fehlen die der SID, gelten die des Hosts.
+- **Abhängigkeiten zwischen Systemen** werden von Hand gepflegt, z. B. wenn ein
+  Datenbanksystem von mehreren Systemen genutzt wird. Start geht erst über die
   Abhängigkeiten, Stopp umgekehrt, und eine Abhängigkeit, die ein anderes System noch braucht,
-  bleibt laufen.
+  bleibt laufen. Innerhalb eines Systems ordnen die Startprioritäten über alle SIDs.
 - **Nur eine aktive Aktivität pro System.** Eine Aktivität sperrt alle beteiligten Systeme
-  (Tabelle `activity_systems`); weitere werden abgelehnt.
-- **Schema nur durch neue Tabellen erweitern**, solange es keine Migrationen gibt. Neue
-  Tabellen legt `create_all` beim Start auch in bestehenden Datenbanken an; neue Spalten in
-  bestehenden Tabellen nicht.
+  (Tabelle `activity_systems`); weitere werden abgelehnt. Solange sie läuft, lässt sich das
+  System auch nicht ändern (Instanzen zuordnen oder entfernen, löschen).
+- **Schema:** Es gibt keine Migrationen. Kompatible Erweiterungen nur durch neue Tabellen;
+  `create_all` legt sie beim Start auch in bestehenden Datenbanken an, neue Spalten in
+  bestehenden Tabellen nicht. Für inkompatible Änderungen `SCHEMA_VERSION` in `models.py`
+  erhöhen; der Server weist ältere Datenbanken dann mit einer Meldung ab (Tabelle
+  `schema_info`). Schema 2 (Systeme als Gruppen) war ein solcher Bruch; der Eigentümer hat
+  dafür seine Daten gelöscht.
 - **Discovery löscht nichts**, sie meldet fehlende Einträge nur.
 - **Die Oberfläche lädt keine externen Dateien** und nutzt kein JavaScript-Framework.
 - **Aufbau der Oberfläche:** Übersicht (Kennzahlen), Landscape (beobachten und bedienen:
@@ -96,9 +109,11 @@ Wichtige Entwurfsentscheidungen:
 
 - Die Tests laufen gegen die simulierte Landschaft in `mock/`. `MockLandscapeTransport`
   leitet Anfragen ohne Netzwerk nach Port an die Mock-Dienste weiter.
-- Die Standardlandschaft hat zwei Systeme: `DEV` (ABAP) und `HDV` (HANA, eigene SID). Die
-  Fixture `single_sid_landscape` legt HANA in `DEV`; damit wird die Startreihenfolge innerhalb
-  eines Systems getestet.
+- Die Standardlandschaft hat zwei SIDs: `DEV` (ABAP) und `HDV` (HANA, eigene SID). Nach der
+  Discovery sind alle Instanzen nicht zugeordnet; die Tests der Operationen, der API und der
+  Oberfläche legen daraus die Systeme `DEV` und `HDV` an. Ein Test fasst alle drei Instanzen
+  in einem System zusammen und prüft die Reihenfolge über SIDs hinweg. Die Fixture
+  `single_sid_landscape` legt HANA in `DEV`; sie testet den simulierten `StartSystem`.
 - Zeit wird über eine falsche Uhr gesteuert (`FakeClock` in `tests/conftest.py`). Tests, die
   Operationen ausführen, übergeben `sleep` und `clock` an `create_app`.
 - Neue Funktionen brauchen Tests, auch für Fehlerfälle. Verhalten, das der Mock simulieren
@@ -128,16 +143,20 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
   Host Agent.
 - Stopp und Start einer Dialoginstanz über den Host Agent mit `sapadm` funktionieren; das Flag
   `O-INSTANCE` wird akzeptiert, und die Instanz meldet danach alle Prozesse grau bzw. grün.
-- Noch nicht gegen echte Systeme getestet: ganze Systeme über den Host Agent, zentrale Dienste
-  und HANA-Instanzen über den Host Agent, Abhängigkeiten.
+- Ganze Systeme über den Host Agent funktionieren: ABAP-System (zentrale Dienste und
+  Dialoginstanz) nach Startpriorität, HANA-Instanz, und ein vollständiger Neustart mit
+  Abhängigkeit vom Datenbanksystem. Der Statuswechsel kann nach der Anforderung einige
+  Sekunden auf sich warten lassen.
+- Noch nicht gegen echte Systeme getestet: das neue Systemmodell (Schema 2), insbesondere ein
+  System mit Instanzen mehrerer SIDs.
 
 ## Offene Annahmen, die ein Test mit einer echten Instanz klären muss
 
 1. **Flag `O-INSTANCE`:** Geklärt, ein echter Host Agent akzeptiert es.
 2. **Operation-ID:** Der Client ruft Start und Stopp mit Timeout 0 (asynchron) auf und wertet
    die zurückgegebene Operation-ID nicht aus. `GetOperationResults` ist nicht umgesetzt.
-3. **Zielzustand:** Für eine Dialoginstanz geklärt (alle Prozesse grün bzw. grau). Offen für
-   zentrale Dienste und HANA-Instanzen.
+3. **Zielzustand:** Geklärt für Dialoginstanz, zentrale Dienste und HANA-Instanz (alle
+   Prozesse grün bzw. grau).
 4. **Geschützte Methoden am sapstartsrv:** Geklärt: Lesen geht mit `sapadm`, `StopSystem`
    nicht. Ob `<sid>adm` für `StartSystem` reicht, ist ohne Belang, weil das Tool es nicht
    mehr nutzt.
@@ -160,6 +179,8 @@ Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 - keine eigenen Datenbank-Operationen (`StartDatabase`, `StopDatabase`)
 - jede SID nur einmal
 - Abhängigkeiten zwischen Systemen werden nicht automatisch erkannt
+- eine Instanz gehört zu höchstens einem System; Verschieben geht nur über Entfernen und
+  erneutes Zuordnen
 - Protokollmeldungen der Aktivitäten sind nur englisch
 - kein Verschieben von Instanzen (Adaptive Computing)
 - Übersicht nur mit einfachen Kennzahlen; Diagramme und Diagnosenachrichten fehlen noch

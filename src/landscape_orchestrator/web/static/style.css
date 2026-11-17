@@ -216,3 +216,9 @@ a.button-link {
 .fill-yellow, .fill-running, .fill-pending { background: var(--yellow-fg); }
 .fill-red, .fill-failed { background: var(--red-fg); }
 .fill-gray { background: var(--muted); }
+
+/* Expandable systems in the configuration */
+.systems-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.system-row { border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.75rem; }
+.system-row > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: baseline; }
+.system-row[open] > summary { margin-bottom: 0.5rem; }

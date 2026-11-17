@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 
 import uvicorn
 
 from .api import create_app
+from .db import SchemaError, create_engine, create_tables
 from .settings import Settings, SettingsError
+
+
+async def _prepare_database(database_url: str) -> None:
+    """Create or check the schema before serving, so an old database fails clearly."""
+    engine = create_engine(database_url)
+    try:
+        await create_tables(engine)
+    finally:
+        await engine.dispose()
 
 
 def main() -> None:
@@ -26,6 +37,10 @@ def main() -> None:
         settings = Settings.from_env()
     except SettingsError as exc:
         sys.exit(f"Configuration error: {exc}")
+    try:
+        asyncio.run(_prepare_database(settings.database_url))
+    except SchemaError as exc:
+        sys.exit(f"Database error: {exc}")
 
     transport = None
     if args.mock:

@@ -2,8 +2,9 @@
 
 All starts and stops go through the host agent (StartInstance, StopInstance), which needs
 only the host credentials (sapadm). sapstartsrv rejects StartSystem and StopSystem for
-sapadm on real systems, so whole systems are orchestrated here: their instances are started
-in ascending start priority and stopped in descending order, one priority group at a time.
+sapadm on real systems, so whole systems are orchestrated here: their instances, which may
+belong to several SIDs, are started in ascending start priority and stopped in descending
+order, one priority group at a time.
 Systems the target depends on (see :mod:`dependencies`) are started before it and stopped
 after it. Progress is read from sapstartsrv (GetProcessList, allowed for sapadm) until the
 target state is reached or the timeout expires.
@@ -80,6 +81,10 @@ class TargetNotFoundError(Exception):
     """The instance or system does not exist."""
 
 
+class NotAssignedError(Exception):
+    """The instance is not assigned to a system and cannot be operated."""
+
+
 class OperationFailedError(Exception):
     """The operation did not reach its target state."""
 
@@ -100,22 +105,27 @@ def explain_fault(
             f"Check the credentials of host {host.name}; the host agent usually expects sapadm."
         )
     else:
-        system = instance.system
-        where = f"the sapstartsrv of instance {system.sid}/{instance.number} on {host.name}"
-        admin = f"{system.sid.lower()}adm"
-        if system.has_credentials:
-            used = f"the credentials of system {system.sid} ({system.username})"
+        sid = instance.sid
+        where = f"the sapstartsrv of instance {instance.label} on {host.name}"
+        admin = f"{sid.name.lower()}adm"
+        if sid.has_credentials:
+            used = f"the credentials of SID {sid.name} ({sid.username})"
             advice = f"Administrative calls at sapstartsrv need a user such as {admin}."
         else:
             user = host.username
             used = (
-                f"no credentials of system {system.sid}, so those of host {host.name} ({user})"
+                f"no credentials of SID {sid.name}, so those of host {host.name} ({user})"
                 if user
                 else "no credentials"
             )
+            place = (
+                f"in the configuration of system {instance.system.name}"
+                if instance.system is not None
+                else "in the configuration of its system"
+            )
             advice = (
                 f"Administrative calls at sapstartsrv need a user such as {admin}: "
-                f"store its credentials on the page of system {system.sid}."
+                f"store credentials for SID {sid.name} {place}."
             )
 
     if isinstance(exc, AuthenticationRequiredError):
@@ -134,13 +144,6 @@ def explain_fault(
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-def _priority(instance: Instance) -> float:
-    try:
-        return float(instance.start_priority or "")
-    except ValueError:
-        return float("inf")
 
 
 class OperationRunner:
@@ -173,16 +176,17 @@ class OperationRunner:
         instance = await session.scalar(
             select(Instance)
             .where(Instance.id == instance_id)
-            .options(selectinload(Instance.system))
+            .options(selectinload(Instance.sid))
         )
         if instance is None:
             raise TargetNotFoundError("Instance not found")
-        label = f"{instance.system.sid}/{instance.number}"
+        if instance.system_id is None:
+            raise NotAssignedError(f"Instance {instance.label} is not assigned to a system")
         return await self._submit(
             session,
             kind,
             TargetType.INSTANCE,
-            label,
+            instance.label,
             instance.system_id,
             instance.id,
             timeout_seconds,
@@ -204,7 +208,7 @@ class OperationRunner:
             session,
             kind,
             TargetType.SYSTEM,
-            system.sid,
+            system.name,
             system.id,
             None,
             timeout_seconds,
@@ -213,9 +217,9 @@ class OperationRunner:
 
     @staticmethod
     async def _plan(session: AsyncSession, root: int) -> SystemPlan:
-        sids = dict((await session.execute(select(System.id, System.sid))).all())
+        names = dict((await session.execute(select(System.id, System.name))).all())
         graph = await load_graph(session)
-        return plan(root, graph, key=lambda system_id: sids.get(system_id, ""))
+        return plan(root, graph, key=lambda system_id: names.get(system_id, ""))
 
     async def _submit(
         self,
@@ -398,10 +402,16 @@ class OperationRunner:
             instance = await session.scalar(
                 select(Instance)
                 .where(Instance.id == activity.instance_id)
-                .options(selectinload(Instance.host), selectinload(Instance.system))
+                .options(
+                    selectinload(Instance.host),
+                    selectinload(Instance.sid),
+                    selectinload(Instance.system),
+                )
             )
             if instance is None:
                 raise OperationFailedError("The instance no longer exists")
+            if instance.system_id is None:
+                raise OperationFailedError("The instance is no longer assigned to a system")
             for start in phases:
                 await self._instance_phase(session, activity, instance, start)
         else:
@@ -409,10 +419,12 @@ class OperationRunner:
                 raise OperationFailedError("The system no longer exists")
             system_plan = await self._plan(session, activity.system_id)
             instances_by_system = await self._instances_by_system(session, system_plan.involved)
-            sids = dict(
+            names = dict(
                 (
                     await session.execute(
-                        select(System.id, System.sid).where(System.id.in_(system_plan.involved))
+                        select(System.id, System.name).where(
+                            System.id.in_(system_plan.involved)
+                        )
                     )
                 ).all()
             )
@@ -423,24 +435,25 @@ class OperationRunner:
                         session,
                         activity,
                         f"{'Start' if start else 'Stop'} order including dependencies: "
-                        + ", ".join(sids.get(s, f"#{s}") for s in order),
+                        + ", ".join(names.get(s, f"#{s}") for s in order),
                     )
                 if not start:
                     for kept, needed_by in sorted(system_plan.kept_running.items()):
                         await self._log(
                             session,
                             activity,
-                            f"System {sids.get(kept, kept)} keeps running: also required by "
-                            + ", ".join(sorted(sids.get(s, f"#{s}") for s in needed_by)),
+                            f"System {names.get(kept, kept)} keeps running: also required by "
+                            + ", ".join(sorted(names.get(s, f"#{s}") for s in needed_by)),
                         )
                 for system_id in order:
                     instances = instances_by_system.get(system_id, [])
                     if not instances:
                         raise OperationFailedError(
-                            f"System {sids.get(system_id, f'#{system_id}')} has no instances "
+                            f"System {names.get(system_id, f'#{system_id}')} has no instances "
                             "in the inventory"
                         )
-                    await self._system_phase(session, activity, instances, start)
+                    name = names.get(system_id, f"#{system_id}")
+                    await self._system_phase(session, activity, name, instances, start)
 
     @staticmethod
     async def _instances_by_system(
@@ -449,13 +462,18 @@ class OperationRunner:
         rows = await session.scalars(
             select(Instance)
             .where(Instance.system_id.in_(system_ids))
-            .options(selectinload(Instance.host), selectinload(Instance.system))
+            .options(
+                selectinload(Instance.host),
+                selectinload(Instance.sid),
+                selectinload(Instance.system),
+            )
         )
         grouped: dict[int, list[Instance]] = {system_id: [] for system_id in system_ids}
         for instance in rows:
-            grouped[instance.system_id].append(instance)
+            if instance.system_id is not None:
+                grouped[instance.system_id].append(instance)
         for instances in grouped.values():
-            instances.sort(key=_priority)
+            instances.sort(key=lambda instance: instance.priority)
         return grouped
 
     def _deadline_reached(self, deadline: float) -> bool:
@@ -491,7 +509,7 @@ class OperationRunner:
         """Status from sapstartsrv; UNKNOWN while it cannot be reached."""
         try:
             async with self._clients.sapcontrol(
-                instance.host, int(instance.number), instance.system
+                instance.host, int(instance.number), instance.sid
             ) as sapcontrol:
                 return instance_status(await sapcontrol.get_process_list())
         except SoapConnectionError:
@@ -502,7 +520,12 @@ class OperationRunner:
     # --- whole system -------------------------------------------------------------------
 
     async def _system_phase(
-        self, session: AsyncSession, activity: Activity, instances: list[Instance], start: bool
+        self,
+        session: AsyncSession,
+        activity: Activity,
+        name: str,
+        instances: list[Instance],
+        start: bool,
     ) -> None:
         """Start or stop all instances of one system through their host agents.
 
@@ -512,21 +535,20 @@ class OperationRunner:
         """
         target = StateColor.GREEN.name if start else StateColor.GRAY.name
         timeout = activity.timeout_seconds
-        sid = instances[0].system.sid
         deadline = self._clock() + timeout
 
         levels: dict[float, list[Instance]] = {}
         for instance in instances:
-            levels.setdefault(_priority(instance), []).append(instance)
+            levels.setdefault(instance.priority, []).append(instance)
         order = sorted(levels, reverse=not start)
 
         statuses = await self._read_statuses(instances)
         last = self._summary(instances, statuses)
         self._store_statuses(instances, statuses)
-        await self._log(session, activity, f"System {sid} status: {last}")
+        await self._log(session, activity, f"System {name} status: {last}")
         if all(statuses[i.id] == target for i in instances):
             state = "running" if start else "stopped"
-            await self._log(session, activity, f"System {sid} is already {state}")
+            await self._log(session, activity, f"System {name} is already {state}")
             return
 
         for priority in order:
@@ -539,7 +561,7 @@ class OperationRunner:
                     break
                 if self._deadline_reached(deadline):
                     raise OperationFailedError(
-                        f"Timeout after {timeout} s: system {sid} is {last}, "
+                        f"Timeout after {timeout} s: system {name} is {last}, "
                         f"expected all {target}"
                     )
                 await self._sleep(self._poll_interval)
@@ -548,17 +570,17 @@ class OperationRunner:
                 if summary != last:
                     last = summary
                     self._store_statuses(instances, statuses)
-                    await self._log(session, activity, f"System {sid} status: {summary}")
+                    await self._log(session, activity, f"System {name} status: {summary}")
 
     async def _request_via_hostagent(
         self, session: AsyncSession, activity: Activity, instance: Instance, start: bool
     ) -> None:
         verb, call = ("Start", "StartInstance") if start else ("Stop", "StopInstance")
-        label = f"{instance.system.sid}/{instance.number}"
+        label = instance.label
         try:
             async with self._clients.hostagent(instance.host) as agent:
                 operation = agent.start_instance if start else agent.stop_instance
-                await operation(instance.system.sid, instance.number)
+                await operation(instance.sid.name, instance.number)
         except SoapFaultError as exc:
             raise explain_fault(exc, call, instance.host) from exc
         except SoapConnectionError as exc:
@@ -577,8 +599,8 @@ class OperationRunner:
 
     @staticmethod
     def _summary(instances: list[Instance], statuses: dict[int, str]) -> str:
-        ordered = sorted(instances, key=lambda instance: instance.number)
-        return " ".join(f"{i.number}:{statuses[i.id]}" for i in ordered)
+        ordered = sorted(instances, key=lambda instance: (instance.sid.name, instance.number))
+        return " ".join(f"{i.label}:{statuses[i.id]}" for i in ordered)
 
     @staticmethod
     def _store_statuses(instances: list[Instance], statuses: dict[int, str]) -> None:

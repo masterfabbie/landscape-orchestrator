@@ -10,7 +10,7 @@ from landscape_orchestrator.crypto import SecretBox, generate_secret_key
 from landscape_orchestrator.db import create_engine, create_session_factory, create_tables
 from landscape_orchestrator.discovery import DiscoveryError, discover_host, instance_status
 from landscape_orchestrator.mock.transport import MockLandscapeTransport
-from landscape_orchestrator.models import Database, Host, Instance, System
+from landscape_orchestrator.models import Database, Host, Instance, Sid, System
 
 pytestmark = pytest.mark.anyio
 
@@ -52,7 +52,7 @@ def make_host(secret_box: SecretBox, name: str, offset: int = 0) -> Host:
 
 async def instances_of(session, host: Host) -> dict[str, Instance]:
     rows = await session.scalars(
-        select(Instance).where(Instance.host_id == host.id).options(selectinload(Instance.system))
+        select(Instance).where(Instance.host_id == host.id).options(selectinload(Instance.sid))
     )
     return {instance.number: instance for instance in rows}
 
@@ -70,7 +70,7 @@ def test_instance_status_aggregation():
     assert instance_status([process(StateColor.GREEN), process(StateColor.RED)]) == "RED"
 
 
-async def test_discovery_stores_host_instances_and_system(session, secret_box, clients):
+async def test_discovery_stores_host_and_unassigned_instances(session, secret_box, clients):
     host = make_host(secret_box, "sapapp1")
     session.add(host)
     await session.flush()
@@ -85,13 +85,16 @@ async def test_discovery_stores_host_instances_and_system(session, secret_box, c
 
     instances = await instances_of(session, host)
     dialog = instances["00"]
-    assert dialog.system.sid == "DEV"
+    assert dialog.sid.name == "DEV"
+    assert dialog.system_id is None
     assert dialog.hostname == "sapapp1"
     assert dialog.features == "ABAP|GATEWAY|ICMAN|IGS"
     assert dialog.start_priority == "3"
     assert dialog.last_status == "GRAY"
     assert instances["01"].features == "MESSAGESERVER|ENQUE"
-    assert len(list(await session.scalars(select(System)))) == 1
+    assert [sid.name for sid in await session.scalars(select(Sid))] == ["DEV"]
+    # Systems are created by the user, never by discovery.
+    assert list(await session.scalars(select(System))) == []
 
 
 async def test_discovery_is_repeatable_and_refreshes_status(
@@ -132,7 +135,7 @@ async def test_discovery_of_database_host(session, secret_box, clients):
     assert (await instances_of(session, host))["02"].features == "HDB|HDB_WORKER"
 
 
-async def test_database_has_its_own_system(session, secret_box, clients):
+async def test_database_has_its_own_sid(session, secret_box, clients):
     app_host = make_host(secret_box, "sapapp1")
     db_host = make_host(secret_box, "sapdb1", offset=10000)
     session.add_all([app_host, db_host])
@@ -140,10 +143,10 @@ async def test_database_has_its_own_system(session, secret_box, clients):
     await discover_host(session, app_host, clients)
     await discover_host(session, db_host, clients)
 
-    systems = await session.scalars(
-        select(System).order_by(System.sid).options(selectinload(System.instances))
+    sids = await session.scalars(
+        select(Sid).order_by(Sid.name).options(selectinload(Sid.instances))
     )
-    assert {s.sid: sorted(i.number for i in s.instances) for s in systems} == {
+    assert {s.name: sorted(i.number for i in s.instances) for s in sids} == {
         "DEV": ["00", "01"],
         "HDV": ["02"],
     }
@@ -181,10 +184,10 @@ async def test_unreachable_host_agent_raises_and_marks_host(session, secret_box,
 
 async def test_missing_instances_are_reported_but_kept(session, secret_box, clients):
     host = make_host(secret_box, "sapapp1")
-    system = System(sid="OLD")
-    session.add_all([host, system])
+    sid = Sid(name="OLD")
+    session.add_all([host, sid])
     await session.flush()
-    session.add(Instance(host=host, system=system, number="42", hostname="sapapp1"))
+    session.add(Instance(host=host, sid=sid, number="42", hostname="sapapp1"))
     await session.flush()
 
     result = await discover_host(session, host, clients)
@@ -193,14 +196,14 @@ async def test_missing_instances_are_reported_but_kept(session, secret_box, clie
     assert "42" in await instances_of(session, host)
 
 
-async def test_system_credentials_take_precedence(session, secret_box, transport):
-    """Protected sapstartsrv calls use the system's credentials when it has any."""
+async def test_sid_credentials_take_precedence(session, secret_box, transport):
+    """Protected sapstartsrv calls use the credentials of the SID when it has any."""
     host = make_host(secret_box, "sapapp1")
     host.password_encrypted = secret_box.encrypt("wrong")
-    system = System(sid="DEV", username="devadm", password_encrypted=secret_box.encrypt("mock"))
+    sid = Sid(name="DEV", username="devadm", password_encrypted=secret_box.encrypt("mock"))
     factory = ClientFactory(secret_box, transport=transport)
 
-    async with factory.sapcontrol(host, 0, system) as sapcontrol:
+    async with factory.sapcontrol(host, 0, sid) as sapcontrol:
         await sapcontrol.start()
     async with factory.sapcontrol(host, 0) as sapcontrol:
         with pytest.raises(Exception, match="Invalid Credentials"):

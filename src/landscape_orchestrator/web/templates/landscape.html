@@ -21,14 +21,14 @@
     <tbody>
     {% for system in systems %}
       <tr>
-        <td><a class="strong" href="/systems/{{ system.id }}">{{ system.sid }}</a></td>
+        <td><a class="strong" href="/systems/{{ system.id }}">{{ system.name }}</a></td>
         <td>{{ system.pool.name if system.pool else "" }}</td>
         <td>
           {{ ui.status_badge(system_status(system), t) }}
           {% if active.get(system.id) %}<a class="badge badge-running" href="/activities/{{ active[system.id].id }}">{{ t("overview.running") }}</a>{% endif %}
         </td>
-        <td>{% for instance in system.instances %}<span class="mono" title="{{ instance_type(instance.features) }}">{{ instance.number }}</span>{% if not loop.last %} {% endif %}{% endfor %}</td>
-        <td>{% for dependency in system.depends_on %}<a class="mono" href="/systems/{{ dependency.id }}">{{ dependency.sid }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</td>
+        <td>{% for instance in system.instances | sort(attribute="priority") %}<span class="mono" title="{{ instance_type(instance.features) }}">{{ instance.label }}</span>{% if not loop.last %} {% endif %}{% endfor %}</td>
+        <td>{% for dependency in system.depends_on %}<a href="/systems/{{ dependency.id }}">{{ dependency.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</td>
         <td>{{ ui.operation_buttons("/systems/" ~ system.id, t, active.get(system.id)) }}</td>
       </tr>
     {% endfor %}

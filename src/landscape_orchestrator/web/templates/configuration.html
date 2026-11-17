@@ -49,25 +49,88 @@
 </section>
 
 {% elif tab == "systems" %}
+<p class="muted">{{ t("config.systems_hint") }}</p>
 <section class="card">
+  <h2>{{ t("unassigned.title") }}</h2>
+  {% if unassigned %}
+  <form method="post" action="/configuration/systems/assign" class="stack">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>{{ t("unassigned.select") }}</th><th>{{ t("field.instance") }}</th><th>{{ t("field.sid") }}</th><th>{{ t("field.type") }}</th><th>{{ t("field.host") }}</th><th>{{ t("field.status") }}</th><th>{{ t("unassigned.suggestion") }}</th></tr></thead>
+      <tbody>
+      {% for instance in unassigned %}
+        <tr>
+          <td><input type="checkbox" name="instance_id" value="{{ instance.id }}" aria-label="{{ instance.label }}"></td>
+          <td class="mono">{{ instance.label }}</td>
+          <td class="mono">{{ instance.sid.name }}</td>
+          <td>{{ instance_type(instance.features) }}</td>
+          <td><a href="/hosts/{{ instance.host_id }}">{{ instance.host.name }}</a></td>
+          <td>{{ ui.status_badge(instance.last_status, t) }}</td>
+          <td>{% if suggested.get(instance.id) %}<button type="submit" class="link" formaction="/configuration/systems/{{ suggested[instance.id].id }}/assign/{{ instance.id }}">{{ t("unassigned.assign_to", name=suggested[instance.id].name) }}</button>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <div class="row">
+      <button type="submit" formaction="/configuration/systems/new" formmethod="get">{{ t("system.create") }}</button>
+      {% if systems %}
+      <label class="inline-label">{{ t("field.system") }}
+        <select name="system_id">
+          {% for system in systems %}<option value="{{ system.id }}">{{ system.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit">{{ t("system.assign") }}</button>
+      {% endif %}
+    </div>
+  </form>
+  {% else %}
+  <p class="muted">{{ t("unassigned.none") }}</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>{{ t("tab.systems") }}</h2>
   {% if systems %}
-  <p class="muted">{{ t("config.systems_hint") }}</p>
-  <div class="table-wrap">
-  <table>
-    <thead><tr><th>{{ t("field.system") }}</th><th>{{ t("field.pool") }}</th><th>{{ t("deps.depends_on") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("credentials.title") }}</th></tr></thead>
-    <tbody>
-    {% for system in systems %}
-      <tr>
-        <td><a class="strong" href="/configuration/systems/{{ system.id }}">{{ system.sid }}</a></td>
-        <td>{{ system.pool.name if system.pool else "" }}</td>
-        <td>{% for dependency in system.depends_on %}<span class="mono">{{ dependency.sid }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</td>
-        <td>{% for instance in system.instances %}<span class="mono">{{ instance.number }}</span> ({{ instance.host.name }}){% if not loop.last %}, {% endif %}{% endfor %}</td>
-        <td>{{ system.username ~ " (" ~ t("credentials.set") ~ ")" if system.has_credentials else t("credentials.host_used") }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  <div class="systems-list">
+  {% for system in systems %}
+    <details class="system-row">
+      <summary>
+        <span class="strong">{{ system.name }}</span>
+        <span class="muted">{{ system.pool.name if system.pool else t("pool.none") }}</span>
+        <span class="muted">{{ system.instances | length }} {{ t("field.instances") }}</span>
+      </summary>
+      {% if system.instances %}
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>{{ t("field.instance") }}</th><th>{{ t("field.sid") }}</th><th>{{ t("field.type") }}</th><th>{{ t("field.host") }}</th><th>{{ t("deps.depends_on") }}</th><th>{{ t("field.pool") }}</th><th>{{ t("field.actions") }}</th></tr></thead>
+        <tbody>
+        {% for instance in system.instances | sort(attribute="priority") %}
+          <tr>
+            <td class="mono">{{ instance.label }}</td>
+            <td class="mono">{{ instance.sid.name }}</td>
+            <td>{{ instance_type(instance.features) }}</td>
+            <td>{{ instance.host.name }}</td>
+            <td class="mono">{{ depends[system.id][instance.id] | join(", ") }}</td>
+            <td>{{ system.pool.name if system.pool else "" }}</td>
+            <td>
+              <form method="post" action="/configuration/systems/{{ system.id }}/instances/{{ instance.id }}/remove" data-confirm="{{ t('system.remove_instance_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+                <button type="submit" class="link">{{ t("system.remove_instance") }}</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+      <p class="muted">{{ t("system.no_instances") }}</p>
+      {% endif %}
+      <p><a href="/configuration/systems/{{ system.id }}">{{ t("action.configure") }}</a></p>
+    </details>
+  {% endfor %}
   </div>
+  <p class="muted">{{ t("system.depends_hint") }}</p>
   {% else %}
   <p>{{ t("config.no_systems") }}</p>
   {% endif %}
@@ -85,7 +148,7 @@
       <tr>
         <td class="strong">{{ pool.name }}</td>
         <td>{{ pool.description or "" }}</td>
-        <td>{% for system in pool.systems %}<a class="mono" href="/configuration/systems/{{ system.id }}">{{ system.sid }}</a>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">{{ t("deps.none") }}</span>{% endfor %}</td>
+        <td>{% for system in pool.systems %}<a href="/configuration/systems/{{ system.id }}">{{ system.name }}</a>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">{{ t("deps.none") }}</span>{% endfor %}</td>
         <td>
           <form method="post" action="/configuration/pools/{{ pool.id }}/delete" data-confirm="{{ t('pool.delete_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
             <button type="submit" class="danger">{{ t("pool.delete") }}</button>

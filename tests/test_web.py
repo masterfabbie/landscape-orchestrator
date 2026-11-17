@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sqlite3
 
 import httpx
 import pytest
 
 from landscape_orchestrator.api import create_app
 from landscape_orchestrator.crypto import generate_api_token, generate_secret_key
+from landscape_orchestrator.db import SchemaError, create_engine, create_tables
 from landscape_orchestrator.mock.transport import MockLandscapeTransport
 from landscape_orchestrator.settings import Settings
 from landscape_orchestrator.web.i18n import TEXTS, instance_type_key, pick_language, translate
@@ -71,12 +73,22 @@ async def browser(anonymous, settings):
     return anonymous
 
 
-async def add_hosts(browser: httpx.AsyncClient) -> None:
-    """Hosts 1 (sapapp1) and 2 (sapdb1); systems 1 (DEV) and 2 (HDV); instances 1-3."""
+async def add_hosts(browser: httpx.AsyncClient, systems: bool = True) -> None:
+    """Hosts 1 (sapapp1) and 2 (sapdb1) with instances 1 (DEV/01), 2 (DEV/00), 3 (HDV/02).
+
+    With ``systems``, also systems 1 (DEV: instances 1, 2) and 2 (HDV: instance 3).
+    """
     for number, body in enumerate((APP_HOST, DB_HOST), start=1):
         assert (await browser.post("/configuration/hosts", data=body)).status_code == 303
         response = await browser.post(f"/configuration/hosts/{number}/discover")
         assert response.status_code == 303
+    if systems:
+        for name, ids in (("DEV", ["1", "2"]), ("HDV", ["3"])):
+            data = {"name": name, "instance_id": ids}
+            response = await browser.post("/configuration/systems", data=data)
+            assert response.headers["location"].startswith(
+                "/configuration?tab=systems&notice=system_created"
+            ), response.headers["location"]
 
 
 # --- sessions and translations -----------------------------------------------------------
@@ -354,11 +366,132 @@ async def test_credentials_forms(browser):
     assert incomplete.headers["location"] == "/configuration/hosts/1?error=credentials_incomplete"
 
     await browser.post("/configuration/hosts/1/discover")
-    systems = (await browser.get("/configuration?tab=systems")).text
-    assert "those of the host" in systems
-    saved = await browser.post("/configuration/systems/1/credentials", data=CREDENTIALS)
+    await browser.post("/configuration/systems", data={"name": "DEV", "instance_id": ["1"]})
+    page = (await browser.get("/configuration/systems/1")).text
+    assert "Credentials per SID" in page
+    assert 'action="/configuration/systems/1/sids/1/credentials"' in page
+    saved = await browser.post("/configuration/systems/1/sids/1/credentials", data=CREDENTIALS)
     assert saved.headers["location"] == "/configuration/systems/1?notice=credentials_saved"
     assert "stored" in (await browser.get("/configuration/systems/1")).text
+    other = await browser.post("/configuration/systems/1/sids/99/credentials", data=CREDENTIALS)
+    assert other.status_code == 404
+
+
+# --- systems as groups of instances --------------------------------------------------------
+
+
+async def test_discovered_instances_are_unassigned(browser):
+    await add_hosts(browser, systems=False)
+    page = (await browser.get("/configuration?tab=systems")).text
+    assert "Unassigned instances" in page
+    for number in ("1", "2", "3"):
+        assert f'name="instance_id" value="{number}"' in page
+    assert 'formaction="/configuration/systems/new"' in page
+    assert "Assign to existing" not in page  # there is no system yet
+    assert "No systems yet." in page
+    # Unassigned instances are not part of the landscape.
+    landscape = (await browser.get("/landscape")).text
+    assert "DEV/00" not in landscape
+    host = (await browser.get("/hosts/1")).text
+    assert "not assigned" in host and 'action="/instances/1/start"' not in host
+
+
+async def test_create_system_suggests_a_name(browser):
+    await add_hosts(browser, systems=False)
+    page = await browser.get("/configuration/systems/new?instance_id=3&instance_id=2")
+    assert page.status_code == 200
+    # The SID of the application instance, not that of the HANA database.
+    assert 'name="name" required maxlength="64" value="DEV"' in page.text
+    assert 'type="hidden" name="instance_id" value="2"' in page.text
+    assert 'type="hidden" name="instance_id" value="3"' in page.text
+
+    hana_only = (await browser.get("/configuration/systems/new?instance_id=3")).text
+    assert 'value="HDV"' in hana_only
+
+    nothing = await browser.get("/configuration/systems/new")
+    assert nothing.headers["location"] == "/configuration?tab=systems&error=system_no_instances"
+
+
+async def test_create_system_with_pool_and_errors(browser):
+    await add_hosts(browser, systems=False)
+    await browser.post("/configuration/pools", data={"name": "xPool"})
+    created = await browser.post(
+        "/configuration/systems",
+        data={"name": " XDV ", "instance_id": ["2", "3"], "pool_id": "1", "description": "d"},
+    )
+    assert created.headers["location"] == (
+        "/configuration?tab=systems&notice=system_created&n_name=XDV"
+    )
+    page = (await browser.get(created.headers["location"])).text
+    assert "System XDV created." in page
+    assert "<details" in page and "xPool" in page
+    # Derived dependency: the DEV instance starts after the HANA instance of HDV.
+    assert re.search(r"DEV/00</td>.*?<td class=\"mono\">HDV</td>", page, re.S)
+
+    def location(response: httpx.Response) -> str:
+        return response.headers["location"]
+
+    taken = await browser.post("/configuration/systems", data={"name": "xdv", "instance_id": "1"})
+    assert location(taken) == "/configuration?tab=systems&error=system_name_taken"
+    assigned = await browser.post("/configuration/systems", data={"name": "X", "instance_id": "2"})
+    assert location(assigned) == "/configuration?tab=systems&error=system_assigned"
+    empty = await browser.post("/configuration/systems", data={"name": "X"})
+    assert location(empty) == "/configuration?tab=systems&error=system_no_instances"
+    nameless = await browser.post("/configuration/systems", data={"name": " ", "instance_id": "1"})
+    assert location(nameless) == "/configuration?tab=systems&error=system_name_missing"
+
+
+async def test_suggestion_and_assign_to_existing(browser):
+    await add_hosts(browser, systems=False)
+    await browser.post("/configuration/systems", data={"name": "DEV", "instance_id": "2"})
+    page = (await browser.get("/configuration?tab=systems")).text
+    # DEV/01 has the SID of system DEV: suggested, but not assigned yet.
+    assert 'formaction="/configuration/systems/1/assign/1"' in page
+    assert "Assign to DEV" in page
+    assert "/configuration/systems/1/assign/3" not in page  # HDV has no system yet
+
+    accepted = await browser.post("/configuration/systems/1/assign/1")
+    assert accepted.headers["location"] == "/configuration?tab=systems&notice=instances_assigned"
+    again = await browser.post("/configuration/systems/1/assign/1")
+    assert again.headers["location"] == "/configuration?tab=systems&error=system_assigned"
+
+    assigned = await browser.post(
+        "/configuration/systems/assign", data={"system_id": "1", "instance_id": ["3"]}
+    )
+    assert assigned.headers["location"] == "/configuration?tab=systems&notice=instances_assigned"
+    page = (await browser.get("/configuration?tab=systems")).text
+    assert "All known instances belong to a system." in page
+    missing = await browser.post("/configuration/systems/assign", data={"instance_id": ["3"]})
+    assert missing.headers["location"] == "/configuration?tab=systems&error=system_unknown_system"
+
+
+async def test_rename_remove_instance_and_delete_system(browser):
+    await add_hosts(browser)
+    renamed = await browser.post("/configuration/systems/1", data={"name": "Development"})
+    assert renamed.headers["location"] == "/configuration/systems/1?notice=system_saved"
+    assert ">Development</a>" in (await browser.get("/landscape")).text
+    taken = await browser.post("/configuration/systems/1", data={"name": "HDV"})
+    assert taken.headers["location"] == "/configuration/systems/1?error=system_name_taken"
+
+    removed = await browser.post(
+        "/configuration/systems/1/instances/2/remove", data={"back": "system"}
+    )
+    assert removed.headers["location"] == "/configuration/systems/1?notice=instance_removed"
+    page = (await browser.get("/configuration?tab=systems")).text
+    assert 'name="instance_id" value="2"' in page
+
+    deleted = await browser.post("/configuration/systems/1/delete")
+    assert deleted.headers["location"] == "/configuration?tab=systems&notice=system_deleted"
+    page = (await browser.get("/configuration?tab=systems")).text
+    assert 'name="instance_id" value="1"' in page
+    assert (await browser.get("/systems/1")).status_code == 404
+
+
+async def test_unassigned_instance_cannot_be_started(browser):
+    await add_hosts(browser)
+    await browser.post("/configuration/systems/1/instances/2/remove")
+    response = await browser.post("/instances/2/start")
+    assert response.headers["location"] == "/hosts/1?error=not_assigned"
 
 
 async def test_delete_host(browser):
@@ -573,3 +706,19 @@ async def test_static_stylesheet_is_served(anonymous):
     response = await anonymous.get("/static/style.css")
     assert response.status_code == 200
     assert "text/css" in response.headers["content-type"]
+
+
+async def test_old_database_is_refused(tmp_path):
+    """A database of the previous schema (systems per SID) must be deleted first."""
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE systems (id INTEGER PRIMARY KEY, sid VARCHAR(8))")
+    engine = create_engine(f"sqlite+aiosqlite:///{path}")
+    with pytest.raises(SchemaError, match="incompatible version"):
+        await create_tables(engine)
+    await engine.dispose()
+
+    fresh = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'new.db'}")
+    await create_tables(fresh)
+    await create_tables(fresh)  # an existing database of the current schema is accepted
+    await fresh.dispose()

@@ -1,4 +1,7 @@
-"""Discovery: read what runs on a host and store it in the inventory."""
+"""Discovery: read what runs on a host and store it in the inventory.
+
+New instances are not assigned to a system; the user groups them into systems.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +16,7 @@ from .clients.hostagent import CimObject
 from .clients.hostagent import Database as AgentDatabase
 from .clients.sapcontrol import OSProcess, StateColor, SystemInstance
 from .connections import ClientFactory
-from .models import STATUS_UNKNOWN, Database, Host, Instance, System
+from .models import STATUS_UNKNOWN, Database, Host, Instance, Sid
 
 
 class DiscoveryError(Exception):
@@ -69,16 +72,16 @@ def _own_entry(instance: Instance, system_instances: list[SystemInstance]) -> Sy
 
 
 async def _read_instance_details(
-    host: Host, instance: Instance, system: System, clients: ClientFactory
+    host: Host, instance: Instance, sid: Sid, clients: ClientFactory
 ) -> str | None:
     """Update status, features and priority from sapstartsrv. Returns a warning on failure."""
     try:
-        async with clients.sapcontrol(host, int(instance.number), system) as sapcontrol:
+        async with clients.sapcontrol(host, int(instance.number), sid) as sapcontrol:
             processes = await sapcontrol.get_process_list()
             system_instances = await sapcontrol.get_system_instance_list()
     except SoapError as exc:
         instance.last_status = STATUS_UNKNOWN
-        return f"{system.sid}/{instance.number}: sapstartsrv could not be queried ({exc})"
+        return f"{sid.name}/{instance.number}: sapstartsrv could not be queried ({exc})"
     instance.last_status = instance_status(processes)
     entry = _own_entry(instance, system_instances)
     if entry is not None:
@@ -113,23 +116,25 @@ async def discover_host(
     result = DiscoveryResult()
 
     rows = await session.execute(
-        select(Instance, System).join(System).where(Instance.host_id == host.id)
+        select(Instance, Sid).join(Sid, Instance.sid_id == Sid.id).where(
+            Instance.host_id == host.id
+        )
     )
-    known_instances = {(system.sid, instance.number): instance for instance, system in rows}
-    systems = {system.sid: system for system in await session.scalars(select(System))}
+    known_instances = {(sid.name, instance.number): instance for instance, sid in rows}
+    sids = {sid.name: sid for sid in await session.scalars(select(Sid))}
 
     seen: set[tuple[str, str]] = set()
     for found in agent_instances:
         key = (found.sid, found.system_number)
         label = f"{found.sid}/{found.system_number}"
         seen.add(key)
-        system = systems.get(found.sid)
-        if system is None:
-            system = systems[found.sid] = System(sid=found.sid)
-            session.add(system)
+        sid = sids.get(found.sid)
+        if sid is None:
+            sid = sids[found.sid] = Sid(name=found.sid)
+            session.add(sid)
         instance = known_instances.get(key)
         if instance is None:
-            instance = Instance(host=host, system=system, number=found.system_number)
+            instance = Instance(host=host, sid=sid, number=found.system_number)
             session.add(instance)
             result.instances_added.append(label)
         else:
@@ -137,7 +142,7 @@ async def discover_host(
         instance.hostname = found.hostname
         instance.sap_version_info = found.sap_version_info or None
         instance.status_checked_at = now
-        warning = await _read_instance_details(host, instance, system, clients)
+        warning = await _read_instance_details(host, instance, sid, clients)
         if warning:
             result.warnings.append(warning)
     result.instances_missing = [

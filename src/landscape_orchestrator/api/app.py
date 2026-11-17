@@ -24,9 +24,10 @@ from ..crypto import SecretBox
 from ..db import create_engine, create_session_factory, create_tables
 from ..dependencies import DependencyError, set_dependencies
 from ..discovery import DiscoveryError, discover_host
-from ..models import Activity, Host, Pool, System
+from ..models import Activity, Host, Instance, Pool, Sid, System
 from ..operations import (
     DEFAULT_TIMEOUT_SECONDS,
+    NotAssignedError,
     OperationConflictError,
     OperationKind,
     OperationRunner,
@@ -34,6 +35,15 @@ from ..operations import (
 )
 from ..pools import UnknownPoolError, assign_pool
 from ..settings import Settings
+from ..systems import (
+    SystemChangeError,
+    assign_instances,
+    create_system,
+    delete_system,
+    suggestions,
+    unassign_instance,
+    update_system,
+)
 from ..web import AppContext, register_web
 from .schemas import (
     ActivityDetail,
@@ -44,19 +54,28 @@ from .schemas import (
     HostCreate,
     HostDetail,
     HostOut,
+    InstanceIds,
+    InstanceListOut,
+    InstanceOut,
     PoolAssignment,
     PoolCreate,
     PoolOut,
+    SidOut,
+    SystemCreate,
     SystemOut,
+    SystemUpdate,
 )
+
+# Status codes of SystemChangeError.code; everything else is 422.
+_CHANGE_STATUS = {"unknown_system": 404, "name_taken": 409, "assigned": 409, "busy": 409}
 
 
 def _systems_query():
     return (
         select(System)
-        .order_by(System.sid)
+        .order_by(System.name)
         .options(
-            selectinload(System.instances),
+            selectinload(System.instances).selectinload(Instance.sid),
             selectinload(System.depends_on),
             selectinload(System.required_by),
             selectinload(System.pool),
@@ -137,7 +156,10 @@ def create_app(
         host = await session.scalar(
             select(Host)
             .where(Host.id == host_id)
-            .options(selectinload(Host.instances), selectinload(Host.databases))
+            .options(
+                selectinload(Host.instances).selectinload(Instance.sid),
+                selectinload(Host.databases),
+            )
         )
         if host is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Host not found")
@@ -205,9 +227,113 @@ def create_app(
         await session.commit()
         return result
 
+    async def load_system(session: AsyncSession, system_id: int) -> System:
+        session.expire_all()
+        system = await session.scalar(_systems_query().where(System.id == system_id))
+        if system is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "System not found")
+        return system
+
+    async def change(session: AsyncSession, operation: Awaitable[object]) -> None:
+        try:
+            await operation
+        except SystemChangeError as exc:
+            await session.rollback()
+            raise HTTPException(_CHANGE_STATUS.get(exc.code, 422), str(exc)) from exc
+        except UnknownPoolError as exc:
+            await session.rollback()
+            raise HTTPException(422, str(exc)) from exc
+        await session.commit()
+
+    @api.get("/instances", response_model=list[InstanceListOut])
+    async def list_instances(
+        session: Session,
+        unassigned: Annotated[
+            bool, Query(description="Only instances that belong to no system")
+        ] = False,
+    ) -> list[dict[str, object]]:
+        query = select(Instance).options(selectinload(Instance.sid)).order_by(Instance.id)
+        if unassigned:
+            query = query.where(Instance.system_id.is_(None))
+        proposed = await suggestions(session)
+        result = []
+        for instance in await session.scalars(query):
+            data = InstanceOut.model_validate(instance).model_dump()
+            suggestion = proposed.get(instance.id)
+            data["suggested_system_id"] = suggestion.id if suggestion else None
+            result.append(data)
+        return result
+
+    @api.get("/sids", response_model=list[SidOut])
+    async def list_sids(session: Session) -> list[Sid]:
+        return list(await session.scalars(select(Sid).order_by(Sid.name)))
+
+    @api.put("/sids/{sid_id}/credentials", status_code=status.HTTP_204_NO_CONTENT)
+    async def set_sid_credentials(sid_id: int, body: Credentials, session: Session) -> Response:
+        """Credentials of <sid>adm for the sapstartsrv of the instances of this SID."""
+        sid = await session.get(Sid, sid_id)
+        if sid is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "SID not found")
+        sid.username = body.username
+        sid.password_encrypted = secret_box.encrypt(body.password)
+        await session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @api.get("/systems", response_model=list[SystemOut])
     async def list_systems(session: Session) -> list[System]:
         return list(await session.scalars(_systems_query()))
+
+    @api.post("/systems", response_model=SystemOut, status_code=status.HTTP_201_CREATED)
+    async def create_system_route(body: SystemCreate, session: Session) -> System:
+        """Create a system from unassigned instances, which may belong to several SIDs."""
+        created: list[System] = []
+
+        async def create() -> None:
+            created.append(
+                await create_system(
+                    session,
+                    body.name,
+                    body.instance_ids,
+                    pool_id=body.pool_id,
+                    description=body.description,
+                )
+            )
+
+        await change(session, create())
+        return await load_system(session, created[0].id)
+
+    @api.get("/systems/{system_id}", response_model=SystemOut)
+    async def get_system(system_id: int, session: Session) -> System:
+        return await load_system(session, system_id)
+
+    @api.patch("/systems/{system_id}", response_model=SystemOut)
+    async def update_system_route(
+        system_id: int, body: SystemUpdate, session: Session
+    ) -> System:
+        await change(session, update_system(session, system_id, body.name, body.description))
+        return await load_system(session, system_id)
+
+    @api.delete("/systems/{system_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_system_route(system_id: int, session: Session) -> Response:
+        """Delete a system. Its instances stay in the inventory, unassigned."""
+        await change(session, delete_system(session, system_id))
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @api.post("/systems/{system_id}/instances", response_model=SystemOut)
+    async def assign_instances_route(
+        system_id: int, body: InstanceIds, session: Session
+    ) -> System:
+        await change(session, assign_instances(session, system_id, body.instance_ids))
+        return await load_system(session, system_id)
+
+    @api.delete(
+        "/systems/{system_id}/instances/{instance_id}", status_code=status.HTTP_204_NO_CONTENT
+    )
+    async def unassign_instance_route(
+        system_id: int, instance_id: int, session: Session
+    ) -> Response:
+        await change(session, unassign_instance(session, system_id, instance_id))
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @api.put("/systems/{system_id}/dependencies", response_model=SystemOut)
     async def set_system_dependencies(
@@ -221,22 +347,10 @@ def create_app(
         except DependencyError as exc:
             raise HTTPException(422, str(exc)) from exc
         await session.commit()
-        session.expire_all()
-        return await session.scalar(_systems_query().where(System.id == system_id))
-
-    @api.put("/systems/{system_id}/credentials", status_code=status.HTTP_204_NO_CONTENT)
-    async def set_system_credentials(
-        system_id: int, body: Credentials, session: Session
-    ) -> Response:
-        system = await session.get(System, system_id)
-        if system is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "System not found")
-        system.username = body.username
-        system.password_encrypted = secret_box.encrypt(body.password)
-        await session.commit()
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
+        return await load_system(session, system_id)
 
     OperationName = Literal["start", "stop", "restart"]
+
     @api.get("/pools", response_model=list[PoolOut])
     async def list_pools(session: Session) -> list[Pool]:
         query = select(Pool).order_by(Pool.name).options(selectinload(Pool.systems))
@@ -273,8 +387,7 @@ def create_app(
         except UnknownPoolError as exc:
             raise HTTPException(422, str(exc)) from exc
         await session.commit()
-        session.expire_all()
-        return await session.scalar(_systems_query().where(System.id == system_id))
+        return await load_system(session, system_id)
 
     Timeout = Annotated[
         int,
@@ -286,7 +399,7 @@ def create_app(
             return await submission
         except TargetNotFoundError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
-        except OperationConflictError as exc:
+        except (OperationConflictError, NotAssignedError) as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
     @api.post(

@@ -47,12 +47,85 @@ TEXTS: dict[str, tuple[str, str]] = {
         "Test- und Produktivsystem eines Produkts. Ein System gehört zu höchstens einem Pool.",
     ),
     "config.systems_hint": (
-        "Systems are created by the discovery of their hosts.",
-        "Systeme entstehen durch die Discovery ihrer Hosts.",
+        "A system groups instances that are started and stopped together, for example an "
+        "ABAP system with the HANA instance of its database. Its instances may have "
+        "different SIDs. Discovery finds instances; you assign them to systems here.",
+        "Ein System fasst Instanzen zusammen, die gemeinsam gestartet und gestoppt werden, "
+        "zum Beispiel ein ABAP-System mit der HANA-Instanz seiner Datenbank. Seine Instanzen "
+        "dürfen verschiedene SIDs haben. Die Discovery findet Instanzen, hier ordnest du sie "
+        "Systemen zu.",
     ),
-    "config.no_systems": (
-        "No systems yet. Add a host and run a discovery.",
-        "Noch keine Systeme. Lege einen Host an und starte eine Discovery.",
+    "config.no_systems": ("No systems yet.", "Noch keine Systeme."),
+    "unassigned.title": ("Unassigned instances", "Nicht zugeordnete Instanzen"),
+    "unassigned.none": (
+        "All known instances belong to a system. New instances appear here after a discovery.",
+        "Alle bekannten Instanzen gehören zu einem System. Neue Instanzen erscheinen hier "
+        "nach einer Discovery.",
+    ),
+    "unassigned.select": ("Select", "Auswählen"),
+    "unassigned.suggestion": ("Suggestion", "Vorschlag"),
+    "unassigned.assign_to": ("Assign to {name}", "{name} zuordnen"),
+    "unassigned.label": ("not assigned", "nicht zugeordnet"),
+    "system.create": ("Create System", "Create System"),
+    "system.assign": ("Assign to existing", "Assign to existing"),
+    "system.create_title": ("Create system", "System anlegen"),
+    "system.create_hint": (
+        "The name is suggested from the SID of the application instances and can be changed.",
+        "Der Name ist aus der SID der Anwendungsinstanzen vorgeschlagen und kann geändert "
+        "werden.",
+    ),
+    "system.selected": ("Selected instances", "Ausgewählte Instanzen"),
+    "system.remove_instance": ("Remove", "Entfernen"),
+    "system.remove_instance_confirm": (
+        "Remove this instance from the system? It stays in the inventory, unassigned.",
+        "Diese Instanz aus dem System entfernen? Sie bleibt im Inventar, ohne Zuordnung.",
+    ),
+    "system.delete": ("Delete system", "System löschen"),
+    "system.delete_confirm": (
+        "Delete this system? Its instances stay in the inventory, unassigned.",
+        "Dieses System löschen? Seine Instanzen bleiben im Inventar, ohne Zuordnung.",
+    ),
+    "system.general": ("General", "Allgemein"),
+    "system.no_instances": ("No instances.", "Keine Instanzen."),
+    "system.depends_hint": (
+        "“Depends on” shows other SIDs of this system whose instances start earlier. It "
+        "follows from the start priorities and cannot be edited.",
+        "„Hängt ab von“ zeigt andere SIDs dieses Systems, deren Instanzen früher starten. Es "
+        "ergibt sich aus den Startprioritäten und lässt sich nicht bearbeiten.",
+    ),
+    "field.sid": ("SID", "SID"),
+    "sid.credentials_title": ("Credentials per SID", "Zugangsdaten je SID"),
+    "notice.system_created": ("System {name} created.", "System {name} angelegt."),
+    "notice.system_saved": ("System saved.", "System gespeichert."),
+    "notice.system_deleted": ("System deleted.", "System gelöscht."),
+    "notice.instances_assigned": ("Instances assigned.", "Instanzen zugeordnet."),
+    "notice.instance_removed": ("Instance removed.", "Instanz entfernt."),
+    "error.system_name_missing": ("The system needs a name.", "Das System braucht einen Namen."),
+    "error.system_name_too_long": (
+        "The name may have at most 64 characters.",
+        "Der Name darf höchstens 64 Zeichen haben.",
+    ),
+    "error.system_name_taken": (
+        "A system with this name already exists.",
+        "Ein System mit diesem Namen existiert bereits.",
+    ),
+    "error.system_no_instances": (
+        "Select at least one instance.",
+        "Wähle mindestens eine Instanz aus.",
+    ),
+    "error.system_unknown_instance": ("Unknown instance.", "Unbekannte Instanz."),
+    "error.system_unknown_system": ("Unknown system.", "Unbekanntes System."),
+    "error.system_assigned": (
+        "An instance is already assigned to a system.",
+        "Eine Instanz ist bereits einem System zugeordnet.",
+    ),
+    "error.system_busy": (
+        "An activity is still running for this system. Try again later.",
+        "Für dieses System läuft noch eine Aktivität. Versuche es später erneut.",
+    ),
+    "error.not_assigned": (
+        "Only instances that belong to a system can be started or stopped.",
+        "Nur Instanzen, die zu einem System gehören, lassen sich starten oder stoppen.",
     ),
     "credentials.host_used": ("those of the host", "die des Hosts"),
     "logs.hint": (
@@ -87,8 +160,9 @@ TEXTS: dict[str, tuple[str, str]] = {
     "overview.systems": ("Systems", "Systeme"),
     "overview.databases": ("Databases", "Datenbanken"),
     "overview.empty": (
-        "No systems yet. Add a host and run a discovery.",
-        "Noch keine Systeme. Lege einen Host an und starte eine Discovery.",
+        "No systems yet. Add a host, run a discovery and create systems from its instances.",
+        "Noch keine Systeme. Lege einen Host an, starte eine Discovery und lege aus den "
+        "Instanzen Systeme an.",
     ),
     "overview.status_note": (
         "Status as of the last discovery or operation.",
@@ -119,13 +193,13 @@ TEXTS: dict[str, tuple[str, str]] = {
         "Used for the host agent, typically sapadm.",
         "Gilt für den Host Agent, typischerweise sapadm.",
     ),
-    "credentials.system_hint": (
+    "credentials.sid_hint": (
         "Optional. Starts and stops run through the host agent with the credentials of the "
-        "host, and sapstartsrv is only read. Store credentials here, typically <sid>adm, only "
-        "if the sapstartsrv of this system rejects reading with those of the host.",
+        "host, and sapstartsrv is only read. Store credentials for a SID, typically <sid>adm, "
+        "only if its sapstartsrv rejects reading with those of the host.",
         "Optional. Start und Stopp laufen über den Host Agent mit den Zugangsdaten des Hosts, "
-        "den sapstartsrv liest das Tool nur. Hinterlege hier Zugangsdaten, typischerweise "
-        "<sid>adm, nur wenn der sapstartsrv dieses Systems das Lesen mit denen des Hosts "
+        "den sapstartsrv liest das Tool nur. Hinterlege Zugangsdaten für eine SID, "
+        "typischerweise <sid>adm, nur wenn ihr sapstartsrv das Lesen mit denen des Hosts "
         "ablehnt.",
     ),
     "field.name": ("Name", "Name"),

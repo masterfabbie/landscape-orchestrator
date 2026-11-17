@@ -13,9 +13,10 @@ Dies ist ein unabhängiges Projekt und kein SAP-Produkt.
 | Projektgerüst, CI | vorhanden |
 | Mock-Umgebung (simulierter Host Agent und sapstartsrv) | vorhanden |
 | SOAP-Clients für Host Agent und sapstartsrv | vorhanden; Host-Agent-Teil gegen echte Hosts bestätigt |
-| Inventar (Hosts, Systeme, Instanzen, Datenbanken) mit Discovery und REST-API | vorhanden; Discovery von Hosts ohne Instanzen gegen echte Hosts bestätigt |
-| Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | vorhanden, bisher nur gegen den Mock getestet |
-| Abhängigkeiten zwischen Systemen | vorhanden, bisher nur gegen den Mock getestet |
+| Inventar (Hosts, SIDs, Instanzen, Datenbanken) mit Discovery und REST-API | vorhanden; gegen echte Hosts bestätigt |
+| Systeme als selbst angelegte Gruppen von Instanzen | vorhanden, bisher nur gegen den Mock getestet |
+| Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | vorhanden; gegen ein echtes System bestätigt |
+| Abhängigkeiten zwischen Systemen | vorhanden; gegen ein echtes System bestätigt |
 | Web-Oberfläche (Deutsch und Englisch) | vorhanden |
 
 ### Teststand gegen echte Hosts
@@ -43,13 +44,15 @@ Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenban
 - **Stopp und Start einer Instanz über den Host Agent mit `sapadm`** funktionieren, das Flag
   `O-INSTANCE` wird akzeptiert. Die Dialoginstanz meldete danach alle Prozesse grau bzw. grün;
   der Stopp dauerte rund 35 Sekunden, der Start rund 15 Sekunden.
+- **Ganze Systeme über den Host Agent:** Stopp und Start eines ABAP-Systems mit zentralen
+  Diensten und Dialoginstanz in der Reihenfolge der Startpriorität funktionieren, ebenso Start
+  und Stopp der HANA-Instanz. Ein vollständiger Neustart mit angelegter Abhängigkeit vom
+  Datenbanksystem lief erfolgreich durch.
 
 Noch nicht gegen echte Hosts getestet:
 
-- Start und Stopp eines ganzen Systems über den Host Agent, in der Reihenfolge der
-  Startpriorität
-- Start und Stopp von zentralen Diensten und HANA-Instanzen über den Host Agent
-- Abhängigkeiten zwischen Systemen
+- das neue Systemmodell (Systeme als selbst angelegte Gruppen, auch mit Instanzen mehrerer
+  SIDs)
 - HTTPS
 
 Nicht Teil der ersten Version: Verschieben von Instanzen (Adaptive Computing),
@@ -112,9 +115,9 @@ Die Oberfläche hat fünf Bereiche. **Landscape** dient zum Beobachten und Bedie
 | Bereich | Inhalt |
 |---|---|
 | Übersicht | Kennzahlen zu Systemen, Instanzen, Hosts und Aktivitäten der letzten 24 Stunden |
-| Landscape | Tab „Systeme“ mit Status, Pool, Abhängigkeiten und Knöpfen für Start, Stopp, Neustart, filterbar nach Pool; Tab „Hosts“. Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken) |
+| Landscape | Tab „Systeme“ mit Status, Pool, Abhängigkeiten und Knöpfen für Start, Stopp, Neustart, filterbar nach Pool; Tab „Hosts“. Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
 | Activities | Tab „Aktivitäten“ mit allen Operationen und Detailseite mit Protokoll; Tab „Protokolle“ mit den letzten 200 Protokolleinträgen |
-| Configuration | Tab „Hosts“: anlegen, Discovery, Zugangsdaten, löschen. Tab „Systeme“: Pool, Abhängigkeiten, Zugangsdaten. Tab „Pools“: anlegen und löschen |
+| Configuration | Tab „Hosts“: anlegen, Discovery, Zugangsdaten, löschen. Tab „Systeme“: nicht zugeordnete Instanzen, Systeme anlegen und zuordnen, Systeme aufklappbar mit ihren Instanzen; Seite eines Systems mit Name, Instanzen, Pool, Abhängigkeiten, Zugangsdaten je SID, Löschen. Tab „Pools“: anlegen und löschen |
 | Administration | Versionsstand und aktuelle Einstellungen; Plattform-Einstellungen folgen |
 
 Die Hauptmenüpunkte heißen in beiden Sprachen Landscape, Activities, Configuration und
@@ -122,6 +125,32 @@ Administration; nur „Übersicht“ wird übersetzt.
 
 **Pools** fassen Systeme zusammen, die zusammengehören, z. B. Entwicklungs-, Test- und
 Produktivsystem eines Produkts. Ein System gehört zu höchstens einem Pool.
+
+### Systeme anlegen
+
+Ein **System** ist eine selbst angelegte Gruppe von Instanzen mit frei wählbarem Namen, z. B.
+ein ABAP-System mit der HANA-Instanz seiner Datenbank. Die Instanzen dürfen verschiedene SIDs
+haben. Die Discovery legt keine Systeme an; neue Instanzen sind zunächst nicht zugeordnet.
+
+1. Configuration → Hosts: Host anlegen und Discovery starten.
+2. Configuration → Systeme: Unter „Nicht zugeordnete Instanzen“ die Instanzen anhaken und
+   **Create System** wählen. Die folgende Seite schlägt als Namen die SID der
+   Anwendungsinstanzen vor (sonst die erste SID); Name, Beschreibung und Pool lassen sich
+   dort festlegen.
+3. Weitere Instanzen lassen sich mit **Assign to existing** einem bestehenden System
+   zuordnen.
+
+Gehören Instanzen einer SID bereits zu genau einem System, schlägt die Liste für neu
+gefundene Instanzen derselben SID dieses System vor. Zugeordnet wird erst per Klick.
+
+Die Spalte „Hängt ab von“ in den aufgeklappten Systemen zeigt andere SIDs desselben Systems,
+deren Instanzen früher starten. Sie ergibt sich aus den Startprioritäten und ist nicht
+bearbeitbar. Abhängigkeiten **zwischen** Systemen pflegt man weiterhin auf der Seite eines
+Systems.
+
+Wird eine Instanz aus einem System entfernt oder ein System gelöscht, bleiben die Instanzen
+im Inventar und sind wieder nicht zugeordnet. Solange für ein System eine Aktivität läuft,
+lässt es sich nicht ändern.
 
 - **Sprache:** Deutsch und Englisch, umschaltbar oben rechts. Ohne Auswahl gilt die Sprache
   des Browsers. Protokollmeldungen der Aktivitäten werden auf Englisch aufgezeichnet.
@@ -143,9 +172,10 @@ Einschränkungen:
 
 ## Inventar und REST-API
 
-Das Inventar kennt Hosts, SAP-Systeme (SID), Instanzen und Datenbanken. Ein Host wird angelegt
-und danach per Discovery ausgelesen: Der Host Agent liefert Betriebssystemdaten, Instanzen und
-Datenbanken, der sapstartsrv jeder Instanz liefert Status, Instanztyp und Startpriorität.
+Das Inventar kennt Hosts, SIDs, Instanzen, Datenbanken sowie Systeme und Pools. Ein Host wird
+angelegt und danach per Discovery ausgelesen: Der Host Agent liefert Betriebssystemdaten,
+Instanzen samt SID und Datenbanken, der sapstartsrv jeder Instanz liefert Status, Instanztyp und
+Startpriorität. Systeme legt man selbst aus Instanzen an (siehe „Systeme anlegen“).
 
 Alle Aufrufe unter `/api` verlangen den Header `Authorization: Bearer <LO_API_TOKEN>`.
 Die interaktive Schnittstellenbeschreibung unter `/api/docs` ist ohne Token lesbar; sie enthält
@@ -160,14 +190,22 @@ keine Inventardaten.
 | PUT | `/api/hosts/{id}/credentials` | Zugangsdaten des Hosts setzen |
 | DELETE | `/api/hosts/{id}` | Host samt Instanzen und Datenbanken löschen |
 | POST | `/api/hosts/{id}/discover` | Host auslesen und Inventar aktualisieren |
-| GET | `/api/systems` | Systeme mit ihren Instanzen und Abhängigkeiten über alle Hosts |
+| GET | `/api/instances` | alle Instanzen mit SID, System und Zuordnungsvorschlag (`suggested_system_id`); `?unassigned=true` nur nicht zugeordnete |
+| GET | `/api/sids` | SIDs mit Angabe, ob Zugangsdaten hinterlegt sind |
+| PUT | `/api/sids/{id}/credentials` | Zugangsdaten für den sapstartsrv der Instanzen einer SID setzen |
+| GET | `/api/systems` | Systeme mit ihren Instanzen und Abhängigkeiten |
+| POST | `/api/systems` | System aus nicht zugeordneten Instanzen anlegen (`{"name": "...", "instance_ids": [ids], "pool_id": id, "description": "..."}`) |
+| GET | `/api/systems/{id}` | ein System |
+| PATCH | `/api/systems/{id}` | Name und Beschreibung ändern |
+| DELETE | `/api/systems/{id}` | System löschen; seine Instanzen werden wieder nicht zugeordnet |
+| POST | `/api/systems/{id}/instances` | nicht zugeordnete Instanzen zuordnen (`{"instance_ids": [ids]}`) |
+| DELETE | `/api/systems/{id}/instances/{instance_id}` | Instanz aus dem System entfernen |
 | PUT | `/api/systems/{id}/dependencies` | Abhängigkeiten eines Systems setzen (`{"depends_on": [ids]}`) |
 | PUT | `/api/systems/{id}/pool` | System einem Pool zuordnen (`{"pool_id": id}`, `null` entfernt) |
 | GET | `/api/pools` | Pools mit ihren Systemen |
 | POST | `/api/pools` | Pool anlegen (`{"name": "...", "description": "..."}`) |
 | DELETE | `/api/pools/{id}` | Pool löschen; seine Systeme bleiben erhalten |
-| PUT | `/api/systems/{id}/credentials` | Zugangsdaten für den sapstartsrv eines Systems setzen |
-| POST | `/api/instances/{id}/start`, `/stop`, `/restart` | Operation für eine Instanz anstoßen |
+| POST | `/api/instances/{id}/start`, `/stop`, `/restart` | Operation für eine Instanz anstoßen; nur für Instanzen eines Systems, sonst HTTP 409 |
 | POST | `/api/systems/{id}/start`, `/stop`, `/restart` | Operation für ein ganzes System anstoßen |
 | GET | `/api/activities` | Aktivitäten, neueste zuerst (`?limit=`) |
 | GET | `/api/activities/{id}` | Aktivität mit Protokoll |
@@ -188,10 +226,11 @@ Verhalten:
 
 - **Zugangsdaten:** Passwörter werden verschlüsselt gespeichert und von der API nie
   zurückgegeben. Die Zugangsdaten des Hosts gelten für den Host Agent. Für den sapstartsrv
-  gelten die Zugangsdaten des Systems, falls gesetzt, sonst die des Hosts. Für den Betrieb
-  reicht `sapadm` am Host: Start und Stopp laufen über den Host Agent, und den sapstartsrv
-  liest das Tool nur. Zugangsdaten am System braucht man nur, wenn ein sapstartsrv auch das
-  Lesen mit `sapadm` ablehnt.
+  gelten die Zugangsdaten der SID der Instanz, falls gesetzt, sonst die des Hosts. Für den
+  Betrieb reicht `sapadm` am Host: Start und Stopp laufen über den Host Agent, und den
+  sapstartsrv liest das Tool nur. Zugangsdaten je SID braucht man nur, wenn ein sapstartsrv
+  auch das Lesen mit `sapadm` ablehnt. Gepflegt werden sie auf der Seite eines Systems, das
+  Instanzen der SID enthält.
 - **Discovery löscht nichts.** Instanzen und Datenbanken, die der Host nicht mehr meldet,
   bleiben im Inventar und werden im Ergebnis als fehlend aufgeführt.
 - **Nicht erreichbarer Host Agent:** Die Discovery antwortet mit HTTP 502, der Host wird als
@@ -207,10 +246,12 @@ Einschränkungen:
 - Die API kennt nur ein gemeinsames Token, keine Benutzer und Rollen.
 - Der Server selbst spricht nur HTTP. Für den Zugriff über ein Netzwerk gehört ein
   Reverse-Proxy mit TLS davor.
-- Das Datenbankschema wird beim Start angelegt. Neue Funktionen nutzen bisher nur neue
-  Tabellen, die beim Start einer bestehenden Datenbank hinzugefügt werden. Änderungen an
-  bestehenden Tabellen (Migrationen) sind noch nicht vorgesehen.
-- Jede SID gibt es nur einmal. Zwei Systeme mit gleicher SID lassen sich nicht unterscheiden.
+- Das Datenbankschema wird beim Start angelegt; Migrationen gibt es nicht. Die Datenbank
+  trägt eine Schemaversion. **Mit dem neuen Systemmodell (Schema 2) ist eine ältere Datenbank
+  nicht mehr verwendbar:** Der Server bricht mit einer Meldung ab. Die Datenbankdatei
+  (Standard `landscape.db`) löschen und das Inventar neu einrichten.
+- Jede SID gibt es nur einmal. Zwei Landschaften mit gleicher SID lassen sich nicht
+  unterscheiden.
 
 ## Operationen und Aktivitäten
 
@@ -224,19 +265,22 @@ curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/
 | Ziel | Weg | Fertig, wenn |
 |---|---|---|
 | Instanz | Host Agent (`StartInstance` / `StopInstance`) | alle Prozesse grün (Start) bzw. grau (Stopp) |
-| System | Host Agent, Instanz für Instanz | alle Instanzen grün bzw. grau |
+| System | Host Agent, Instanz für Instanz über alle Instanzen des Systems, auch mehrerer SIDs | alle Instanzen grün bzw. grau |
 
 - **Warum alles über den Host Agent:** `StartSystem` und `StopSystem` des sapstartsrv lehnen
   echte Systeme für `sapadm` ab. Über den Host Agent reicht `sapadm`.
 - **Reihenfolge im System:** Das Tool startet die Instanzen gruppenweise nach Startpriorität
-  (Datenbank, zentrale Dienste, Anwendungsserver) und stoppt in umgekehrter Reihenfolge. Jede
+  (Datenbank, zentrale Dienste, Anwendungsserver) und stoppt in umgekehrter Reihenfolge. Das
+  gilt über alle SIDs des Systems: Enthält ein System die HANA-Instanz seiner Datenbank,
+  startet sie zuerst und stoppt zuletzt. Jede
   Gruppe muss den Zielzustand erreichen, bevor die nächste beginnt. Instanzen, die schon im
   Zielzustand sind, werden übersprungen; ist das ganze System schon dort, endet die Aktivität
   sofort. Die Startpriorität stammt aus der Discovery.
-- **Abhängigkeiten zwischen Systemen:** Hat die Datenbank eine eigene SID, wie in echten
-  Landschaften üblich, legt man auf der Seite des ABAP-Systems fest, dass es vom
+- **Abhängigkeiten zwischen Systemen:** Ist die Datenbank ein eigenes System, z. B. weil
+  mehrere Systeme sie nutzen, legt man auf der Seite des ABAP-Systems fest, dass es vom
   Datenbanksystem abhängt (oder per API: `PUT /api/systems/{id}/dependencies` mit
-  `{"depends_on": [<id>]}`).
+  `{"depends_on": [<id>]}`). Gehört die HANA-Instanz zum selben System, ist keine
+  Abhängigkeit nötig.
   - **Start:** erst die Abhängigkeiten, jeweils bis alle Instanzen grün sind, dann das System.
   - **Stopp:** erst das System, dann seine Abhängigkeiten. Eine Abhängigkeit, die ein
     anderes System noch benötigt, bleibt laufen; das Protokoll vermerkt das.
@@ -256,8 +300,8 @@ curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/
 - **Datenbanken:** Am Ende jeder Aktivität wird der Status der Datenbanken auf den
   beteiligten Hosts neu gelesen, damit er zum Zustand der Instanzen passt.
 - **Fehlermeldungen:** Lehnt ein Dienst einen Aufruf ab, nennt die Meldung den Aufruf, den
-  Dienst, die verwendeten Zugangsdaten und was zu tun ist, z. B. dass am System Zugangsdaten
-  von `<sid>adm` fehlen.
+  Dienst, die verwendeten Zugangsdaten und was zu tun ist, z. B. dass für die SID
+  Zugangsdaten von `<sid>adm` fehlen.
 - **Serverneustart:** Aktivitäten, die beim Beenden des Servers noch liefen, werden als
   `FAILED` mit dem Hinweis „Interrupted“ vermerkt. Der Zustand des Ziels ist dann unbekannt
   und sollte per Discovery geprüft werden.
@@ -337,7 +381,8 @@ eigenes HANA-System `HDV`:
 | `sapdb1` | HANA-Instanz 02 (System `HDV`) | 60213 |
 
 Die HANA-Instanz meldet wie ein echtes Multi-Tenant-System zwei Datenbanken: `SYSTEMDB@HDV`
-und `HDV@HDV`. Eine Abhängigkeit von `DEV` auf `HDV` ist nicht voreingestellt.
+und `HDV@HDV`. Nach der Discovery sind alle Instanzen nicht zugeordnet; Systeme legt man
+selbst an, z. B. ein System `DEV` aus allen drei Instanzen.
 
 Alle Endpunkte lauschen auf `127.0.0.1`. Weil die Mock-Hosts auf demselben Rechner laufen,
 verschiebt `port_offset` die Ports des zweiten Hosts um 10000. Benutzer für geschützte

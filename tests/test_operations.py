@@ -69,16 +69,21 @@ async def api(app, settings):
         for body in (APP_HOST, DB_HOST):
             host = (await client.post("/api/hosts", json=body)).json()
             assert (await client.post(f"/api/hosts/{host['id']}/discover")).status_code == 200
+        # As in a real landscape: the ABAP system and the system of its HANA database.
+        ids = {i["number"]: i["id"] for i in (await client.get("/api/instances")).json()}
+        for name, numbers in (("DEV", ("00", "01")), ("HDV", ("02",))):
+            body = {"name": name, "instance_ids": [ids[n] for n in numbers]}
+            assert (await client.post("/api/systems", json=body)).status_code == 201
         yield client
 
 
 async def instance_id(api: httpx.AsyncClient, number: str) -> int:
-    systems = (await api.get("/api/systems")).json()
-    return next(i["id"] for s in systems for i in s["instances"] if i["number"] == number)
+    instances = (await api.get("/api/instances")).json()
+    return next(i["id"] for i in instances if i["number"] == number)
 
 
-async def system_id(api: httpx.AsyncClient, sid: str) -> int:
-    return next(s["id"] for s in (await api.get("/api/systems")).json() if s["sid"] == sid)
+async def system_id(api: httpx.AsyncClient, name: str) -> int:
+    return next(s["id"] for s in (await api.get("/api/systems")).json() if s["name"] == name)
 
 
 async def statuses(api: httpx.AsyncClient) -> dict[str, str]:
@@ -87,10 +92,10 @@ async def statuses(api: httpx.AsyncClient) -> dict[str, str]:
     return {i["number"]: i["last_status"] for s in systems for i in s["instances"]}
 
 
-async def depend(api: httpx.AsyncClient, sid: str, *on: str) -> None:
+async def depend(api: httpx.AsyncClient, name: str, *on: str) -> None:
     ids = [await system_id(api, other) for other in on]
     response = await api.put(
-        f"/api/systems/{await system_id(api, sid)}/dependencies", json={"depends_on": ids}
+        f"/api/systems/{await system_id(api, name)}/dependencies", json={"depends_on": ids}
     )
     assert response.status_code == 200, response.text
 
@@ -160,13 +165,13 @@ async def test_start_and_stop_system_without_dependencies(app, api):
     # Central services (priority 1) first, then the dialog instance (priority 3).
     # The HANA system is not touched.
     assert messages(start) == [
-        "System DEV status: 00:GRAY 01:GRAY",
+        "System DEV status: DEV/00:GRAY DEV/01:GRAY",
         "Start of DEV/01 requested via host agent of sapapp1",
-        "System DEV status: 00:GRAY 01:YELLOW",
-        "System DEV status: 00:GRAY 01:GREEN",
+        "System DEV status: DEV/00:GRAY DEV/01:YELLOW",
+        "System DEV status: DEV/00:GRAY DEV/01:GREEN",
         "Start of DEV/00 requested via host agent of sapapp1",
-        "System DEV status: 00:YELLOW 01:GREEN",
-        "System DEV status: 00:GREEN 01:GREEN",
+        "System DEV status: DEV/00:YELLOW DEV/01:GREEN",
+        "System DEV status: DEV/00:GREEN DEV/01:GREEN",
         "Finished successfully",
     ]
     assert await statuses(api) == {"00": "GREEN", "01": "GREEN", "02": "GRAY"}
@@ -189,7 +194,7 @@ async def test_system_already_in_target_state(app, api):
 
     assert again["status"] == "SUCCEEDED"
     assert messages(again) == [
-        "System DEV status: 00:GREEN 01:GREEN",
+        "System DEV status: DEV/00:GREEN DEV/01:GREEN",
         "System DEV is already running",
         "Finished successfully",
     ]
@@ -203,17 +208,17 @@ async def test_start_system_starts_dependencies_first(app, api):
     assert start["status"] == "SUCCEEDED"
     assert messages(start) == [
         "Start order including dependencies: HDV, DEV",
-        "System HDV status: 02:GRAY",
+        "System HDV status: HDV/02:GRAY",
         "Start of HDV/02 requested via host agent of sapdb1",
-        "System HDV status: 02:YELLOW",
-        "System HDV status: 02:GREEN",
-        "System DEV status: 00:GRAY 01:GRAY",
+        "System HDV status: HDV/02:YELLOW",
+        "System HDV status: HDV/02:GREEN",
+        "System DEV status: DEV/00:GRAY DEV/01:GRAY",
         "Start of DEV/01 requested via host agent of sapapp1",
-        "System DEV status: 00:GRAY 01:YELLOW",
-        "System DEV status: 00:GRAY 01:GREEN",
+        "System DEV status: DEV/00:GRAY DEV/01:YELLOW",
+        "System DEV status: DEV/00:GRAY DEV/01:GREEN",
         "Start of DEV/00 requested via host agent of sapapp1",
-        "System DEV status: 00:YELLOW 01:GREEN",
-        "System DEV status: 00:GREEN 01:GREEN",
+        "System DEV status: DEV/00:YELLOW DEV/01:GREEN",
+        "System DEV status: DEV/00:GREEN DEV/01:GREEN",
         "Finished successfully",
     ]
     assert set((await statuses(api)).values()) == {"GREEN"}
@@ -234,7 +239,7 @@ async def test_stop_system_stops_dependencies_afterwards(app, api):
         "Stop of DEV/01 requested via host agent of sapapp1",
         "Stop of HDV/02 requested via host agent of sapdb1",
     ]
-    assert log.index("System DEV status: 00:GRAY 01:GRAY") < log.index(
+    assert log.index("System DEV status: DEV/00:GRAY DEV/01:GRAY") < log.index(
         "Stop of HDV/02 requested via host agent of sapdb1"
     )
     assert set((await statuses(api)).values()) == {"GRAY"}
@@ -360,9 +365,9 @@ async def test_rejected_status_read_is_explained(app, api, transport):
     assert activity["error"] == (
         "GetProcessList at the sapstartsrv of instance DEV/00 on sapapp1 was rejected "
         "(Permission denied): the user is not authorized. The request used no credentials "
-        "of system DEV, so those of host sapapp1 (devadm). Administrative calls at "
-        "sapstartsrv need a user such as devadm: store its credentials on the page of "
-        "system DEV."
+        "of SID DEV, so those of host sapapp1 (devadm). Administrative calls at "
+        "sapstartsrv need a user such as devadm: store credentials for SID DEV in the "
+        "configuration of system DEV."
     )
 
 
@@ -383,7 +388,7 @@ async def test_unreadable_status_ends_in_timeout(app, api, transport):
 
     assert activity["status"] == "FAILED"
     assert activity["error"] == (
-        "Timeout after 10 s: system DEV is 00:GRAY 01:UNKNOWN, expected all GREEN"
+        "Timeout after 10 s: system DEV is DEV/00:GRAY DEV/01:UNKNOWN, expected all GREEN"
     )
 
 
@@ -416,6 +421,56 @@ async def test_only_one_activity_per_system(app, api):
     assert third.status_code == 202
     await app.state.runner.wait(third.json()["id"])
     await app.state.runner.wait(other.json()["id"])
+
+
+async def test_system_with_instances_of_two_sids(app, api, landscape, clock):
+    """One system may hold the HANA instance of its database; priorities order the start."""
+    hdv = await system_id(api, "HDV")
+    assert (await api.delete(f"/api/systems/{hdv}")).status_code == 204
+    dev = await system_id(api, "DEV")
+    body = {"instance_ids": [await instance_id(api, "02")]}
+    assert (await api.post(f"/api/systems/{dev}/instances", json=body)).status_code == 200
+
+    start = await run(app, api, f"/api/systems/{dev}/start")
+
+    assert start["status"] == "SUCCEEDED"
+    requested = [m for m in messages(start) if m.endswith(("sapapp1", "sapdb1"))]
+    assert requested == [
+        "Start of HDV/02 requested via host agent of sapdb1",
+        "Start of DEV/01 requested via host agent of sapapp1",
+        "Start of DEV/00 requested via host agent of sapapp1",
+    ]
+    assert messages(start)[0] == "System DEV status: DEV/00:GRAY DEV/01:GRAY HDV/02:GRAY"
+    assert await statuses(api) == {"00": "GREEN", "01": "GREEN", "02": "GREEN"}
+
+    stop = await run(app, api, f"/api/systems/{dev}/stop")
+    requested = [m for m in messages(stop) if m.endswith(("sapapp1", "sapdb1"))]
+    assert [m.split()[2] for m in requested] == ["DEV/00", "DEV/01", "HDV/02"]
+    assert landscape.host("sapdb1").instance(2).status(clock()) is Status.STOPPED
+
+
+async def test_unassigned_instance_cannot_be_operated(app, api):
+    dev = await system_id(api, "DEV")
+    dialog = await instance_id(api, "00")
+    assert (await api.delete(f"/api/systems/{dev}/instances/{dialog}")).status_code == 204
+
+    response = await api.post(f"/api/instances/{dialog}/start")
+
+    assert response.status_code == 409
+    assert "not assigned" in response.json()["detail"]
+
+
+async def test_system_cannot_change_while_active(app, api):
+    dev = await system_id(api, "DEV")
+    first = await api.post(f"/api/systems/{dev}/start")
+    assert first.status_code == 202
+
+    removed = await api.delete(f"/api/systems/{dev}/instances/{await instance_id(api, '00')}")
+    assert removed.status_code == 409
+    assert (await api.delete(f"/api/systems/{dev}")).status_code == 409
+
+    await app.state.runner.wait(first.json()["id"])
+    assert (await api.delete(f"/api/systems/{dev}")).status_code == 204
 
 
 async def test_activity_list_is_newest_first(app, api):
@@ -460,6 +515,8 @@ async def test_activities_interrupted_by_restart_are_marked_failed(
         ) as client:
             host = (await client.post("/api/hosts", json=APP_HOST)).json()
             await client.post(f"/api/hosts/{host['id']}/discover")
+            body = {"name": "DEV", "instance_ids": [1, 2]}
+            assert (await client.post("/api/systems", json=body)).status_code == 201
             activity = (await client.post("/api/instances/1/start")).json()
             await asyncio.sleep(0)
     # Leaving the lifespan shuts the server down while the activity is still running.

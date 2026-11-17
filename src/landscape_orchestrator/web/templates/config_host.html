@@ -28,7 +28,7 @@
   <h2>{{ t("field.instances") }}</h2>
   {% if host.instances %}
   <ul class="plain">
-    {% for instance in host.instances %}<li><a class="mono" href="/configuration/systems/{{ instance.system_id }}">{{ instance.system.sid }}</a> <span class="mono">{{ instance.number }}</span> · {{ instance_type(instance.features) }}</li>{% endfor %}
+    {% for instance in host.instances %}<li><span class="mono">{{ instance.label }}</span> · {{ instance_type(instance.features) }} · {% if instance.system %}<a href="/configuration/systems/{{ instance.system_id }}">{{ instance.system.name }}</a>{% else %}<a class="muted" href="/configuration?tab=systems">{{ t("unassigned.label") }}</a>{% endif %}</li>{% endfor %}
   </ul>
   {% else %}
   <p>{{ t("host.no_instances") }}</p>

@@ -14,7 +14,7 @@
 </span>
 {% endmacro %}
 
-{% macro instance_table(instances, t, instance_type, show_system=false, show_host=true, disabled=false) %}
+{% macro instance_table(instances, t, instance_type, show_system=false, show_host=true, disabled=false, depends=none) %}
 <div class="table-wrap">
 <table>
   <thead>
@@ -22,6 +22,7 @@
       {% if show_system %}<th>{{ t("field.system") }}</th>{% endif %}
       <th>{{ t("field.instance") }}</th>
       <th>{{ t("field.type") }}</th>
+      {% if depends is not none %}<th>{{ t("deps.depends_on") }}</th>{% endif %}
       {% if show_host %}<th>{{ t("field.host") }}</th>{% endif %}
       <th>{{ t("field.status") }}</th>
       <th>{{ t("field.checked") }}</th>
@@ -31,13 +32,14 @@
   <tbody>
   {% for instance in instances %}
     <tr>
-      {% if show_system %}<td><a href="/systems/{{ instance.system_id }}">{{ instance.system.sid }}</a></td>{% endif %}
-      <td class="mono">{{ instance.number }}</td>
+      {% if show_system %}<td>{% if instance.system %}<a href="/systems/{{ instance.system_id }}">{{ instance.system.name }}</a>{% else %}<a class="muted" href="/configuration?tab=systems">{{ t("unassigned.label") }}</a>{% endif %}</td>{% endif %}
+      <td class="mono">{{ instance.label }}</td>
       <td>{{ instance_type(instance.features) }}</td>
+      {% if depends is not none %}<td class="mono">{{ depends.get(instance.id, []) | join(", ") }}</td>{% endif %}
       {% if show_host %}<td><a href="/hosts/{{ instance.host_id }}">{{ instance.host.name }}</a></td>{% endif %}
       <td>{{ status_badge(instance.last_status, t) }}</td>
       <td class="muted">{{ instance.status_checked_at | time }}</td>
-      <td>{{ operation_buttons("/instances/" ~ instance.id, t, disabled) }}</td>
+      <td>{% if instance.system_id %}{{ operation_buttons("/instances/" ~ instance.id, t, disabled) }}{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
@@ -47,7 +49,7 @@
 
 {% macro credentials_form(action, owner, hint, t) %}
 <form method="post" action="{{ action }}" class="stack">
-  <p class="muted">{{ hint }}</p>
+  {% if hint %}<p class="muted">{{ hint }}</p>{% endif %}
   <p>{{ t("field.status") }}:
     {% if owner.has_credentials %}<strong>{{ t("credentials.set") }}</strong> ({{ owner.username }}){% else %}{{ t("credentials.missing") }}{% endif %}
   </p>

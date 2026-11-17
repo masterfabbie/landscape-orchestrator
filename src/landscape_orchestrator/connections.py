@@ -7,7 +7,7 @@ import httpx
 from .clients import HostAgentClient, SapControlClient
 from .clients.sapcontrol import sapcontrol_port
 from .crypto import SecretBox
-from .models import Host, System
+from .models import Host, Sid
 
 
 class ClientFactory:
@@ -23,7 +23,7 @@ class ClientFactory:
         # Only set in tests and local development, to reach the simulated landscape.
         self._transport = transport
 
-    def _auth(self, *owners: Host | System | None) -> tuple[str, str] | None:
+    def _auth(self, *owners: Host | Sid | None) -> tuple[str, str] | None:
         """Credentials of the first owner that has any."""
         for owner in owners:
             if owner is not None and owner.username and owner.password_encrypted:
@@ -42,7 +42,7 @@ class ClientFactory:
         )
 
     def sapcontrol(
-        self, host: Host, instance_number: int, system: System | None = None
+        self, host: Host, instance_number: int, sid: Sid | None = None
     ) -> SapControlClient:
         port = sapcontrol_port(instance_number, host.https) + host.sapcontrol_port_offset
         return SapControlClient(
@@ -51,7 +51,7 @@ class ClientFactory:
             port=port,
             https=host.https,
             verify=host.verify_tls,
-            auth=self._auth(system, host),
+            auth=self._auth(sid, host),
             timeout=self._timeout,
             transport=self._transport,
         )
