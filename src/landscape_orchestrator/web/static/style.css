@@ -53,7 +53,8 @@ a { color: var(--accent); }
   border-bottom: 1px solid var(--border);
 }
 .brand { font-weight: 650; color: var(--text); text-decoration: none; }
-.topbar nav { display: flex; gap: 4px; }
+.topbar nav { display: flex; flex-wrap: wrap; gap: 4px; }
+.tabs, .chips { flex-wrap: wrap; }
 .topbar nav a {
   padding: 6px 12px;
   border-radius: 6px;
@@ -168,3 +169,50 @@ input:not([type="checkbox"]) {
 .flash.error { background: var(--red-bg); color: var(--red-fg); }
 .flash.warning { background: var(--yellow-bg); color: var(--yellow-fg); }
 .flash ul { margin: 4px 0 0; padding-left: 20px; }
+
+.crumbs { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+.strong { font-weight: 600; }
+a.button-link {
+  display: inline-block;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 8px 0 4px; }
+.tabs a {
+  padding: 8px 14px;
+  color: var(--text);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.tabs a[aria-current="page"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; }
+.chips a {
+  padding: 2px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+}
+.chips a[aria-current="page"] { background: var(--blue-bg); color: var(--blue-fg); border-color: transparent; font-weight: 600; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.tile { margin: 0; }
+.tile h2 a { color: var(--text); }
+.tile-total { font-size: 32px; font-weight: 650; margin: 0 0 8px; }
+.tile-bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.tile-bars li { display: grid; grid-template-columns: 120px 1fr 36px; align-items: center; gap: 8px; font-size: 13px; }
+.tile-count { text-align: right; font-variant-numeric: tabular-nums; }
+.bar { height: 10px; border-radius: 5px; background: var(--gray-bg); overflow: hidden; }
+.bar-fill { display: block; height: 100%; background: var(--gray-fg); }
+.fill-green, .fill-succeeded { background: var(--green-fg); }
+.fill-yellow, .fill-running, .fill-pending { background: var(--yellow-fg); }
+.fill-red, .fill-failed { background: var(--red-fg); }
+.fill-gray { background: var(--muted); }

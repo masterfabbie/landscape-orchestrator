@@ -85,6 +85,7 @@ class SystemOut(BaseModel):
     sid: str
     username: str | None
     has_credentials: bool
+    pool_id: int | None
     depends_on_ids: list[int]
     required_by_ids: list[int]
     instances: list[InstanceOut]
@@ -133,3 +134,21 @@ class ActivityDetail(ActivityOut):
 
 class DependenciesIn(BaseModel):
     depends_on: list[int] = Field(max_length=100)
+
+
+class PoolCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class PoolOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: str | None
+    system_ids: list[int]
+
+
+class PoolAssignment(BaseModel):
+    pool_id: int | None

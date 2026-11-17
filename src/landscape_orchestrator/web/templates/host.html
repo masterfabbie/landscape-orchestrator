@@ -2,43 +2,21 @@
 {% import "macros.html" as ui %}
 {% block title %}{{ host.name }}{% endblock %}
 {% block content %}
+<p class="crumbs"><a href="/landscape?tab=hosts">{{ t("nav.landscape") }}</a> / {{ t("tab.hosts") }}</p>
 <div class="card-head">
   <h1>{{ t("field.host") }} {{ host.name }}</h1>
-  <span class="buttons">
-    <form method="post" action="/hosts/{{ host.id }}/discover"><button type="submit">{{ t("host.discover") }}</button></form>
-    <form method="post" action="/hosts/{{ host.id }}/delete" data-confirm="{{ t('host.delete_confirm') }}" onsubmit="return confirm(this.dataset.confirm)"><button type="submit" class="danger">{{ t("host.delete") }}</button></form>
-  </span>
+  {{ ui.reach_badge(host, t) }}
+  <span class="buttons"><a class="button-link" href="/configuration/hosts/{{ host.id }}">{{ t("action.configure") }}</a></span>
 </div>
-
-<div class="grid">
 <section class="card">
-  <h2>{{ t("host.connection") }}</h2>
-  <dl>
-    <dt>{{ t("field.address") }}</dt><dd class="mono">{{ host.address }}</dd>
-    <dt>{{ t("field.hostagent_port") }}</dt><dd class="mono">{{ host.hostagent_port or (1129 if host.https else 1128) }}</dd>
-    <dt>{{ t("field.https") }}</dt><dd>{{ t("yes") if host.https else t("no") }}</dd>
-    <dt>{{ t("field.verify_tls") }}</dt><dd>{{ t("yes") if host.verify_tls else t("no") }}</dd>
-    {% if host.sapcontrol_port_offset %}<dt>{{ t("field.port_offset") }}</dt><dd class="mono">{{ host.sapcontrol_port_offset }}</dd>{% endif %}
-    <dt>{{ t("field.reachable") }}</dt>
-    <dd>
-      {% if host.reachable is none %}<span class="badge badge-unknown">{{ t("unknown") }}</span>
-      {% elif host.reachable %}<span class="badge badge-green">{{ t("yes") }}</span>
-      {% else %}<span class="badge badge-red">{{ t("no") }}</span>{% endif %}
-    </dd>
-    <dt>{{ t("field.last_discovery") }}</dt><dd>{{ host.last_discovery_at | time or t("hosts.never") }}</dd>
-    {% if host.last_error %}<dt>{{ t("field.last_error") }}</dt><dd class="error-text">{{ host.last_error }}</dd>{% endif %}
-  </dl>
-</section>
-<section class="card">
-  <h2>{{ t("host.system_info") }}</h2>
   <dl>
     <dt>{{ t("field.os") }}</dt><dd>{{ host.os_name or "" }} {{ host.os_version or "" }}</dd>
     <dt>{{ t("field.cpus") }}</dt><dd>{{ host.cpu_count or "" }}</dd>
     <dt>{{ t("field.memory") }}</dt><dd>{{ host.memory_kb | memory }}</dd>
+    <dt>{{ t("field.last_discovery") }}</dt><dd>{{ host.last_discovery_at | time or t("hosts.never") }}</dd>
+    {% if host.last_error %}<dt>{{ t("field.last_error") }}</dt><dd class="error-text">{{ host.last_error }}</dd>{% endif %}
   </dl>
 </section>
-</div>
-
 <section class="card">
   <h2>{{ t("field.instances") }}</h2>
   {% if host.instances %}
@@ -47,34 +25,8 @@
     <p>{{ t("host.no_instances") }}</p>
   {% endif %}
 </section>
-
 <section class="card">
   <h2>{{ t("overview.databases") }}</h2>
-  {% if host.databases %}
-  <div class="table-wrap">
-  <table>
-    <thead><tr><th>{{ t("field.database") }}</th><th>{{ t("field.type") }}</th><th>{{ t("field.instance") }}</th><th>{{ t("field.release") }}</th><th>{{ t("field.status") }}</th><th>{{ t("field.checked") }}</th></tr></thead>
-    <tbody>
-    {% for database in host.databases %}
-      <tr>
-        <td>{{ database.name }}</td>
-        <td class="mono">{{ database.type }}</td>
-        <td class="mono">{{ database.instance_name or "" }}</td>
-        <td class="mono">{{ database.release or "" }}</td>
-        <td>{{ ui.status_badge(database.last_status, t) }}</td>
-        <td class="muted">{{ database.status_checked_at | time }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  {% else %}
-    <p>{{ t("host.no_databases") }}</p>
-  {% endif %}
-</section>
-
-<section class="card">
-  <h2>{{ t("credentials.title") }}</h2>
-  {{ ui.credentials_form("/hosts/" ~ host.id ~ "/credentials", host, t("credentials.host_hint"), t) }}
+  {% if host.databases %}{{ ui.database_table(host.databases, t) }}{% else %}<p>{{ t("host.no_databases") }}</p>{% endif %}
 </section>
 {% endblock %}

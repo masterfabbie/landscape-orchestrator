@@ -106,17 +106,27 @@ Hosts die eingebaute simulierte Landschaft an:
 Nach dem Start ist die Oberfläche unter `http://127.0.0.1:8000/` erreichbar. Angemeldet wird
 mit dem Wert aus `LO_API_TOKEN`.
 
-| Seite | Inhalt |
+Die Oberfläche hat fünf Bereiche. **Landscape** dient zum Beobachten und Bedienen,
+**Configuration** zum Einrichten.
+
+| Bereich | Inhalt |
 |---|---|
-| Übersicht | Systeme mit Instanzen und Status, Datenbanken, Knöpfe für Start, Stopp und Neustart |
-| Hosts | Hosts auflisten und anlegen; Detailseite mit Discovery, Zugangsdaten und Löschen |
-| System | Instanzen eines Systems, Operationen, Zugangsdaten für den sapstartsrv |
-| Aktivitäten | Liste aller Operationen; Detailseite mit Protokoll |
+| Übersicht | Kennzahlen zu Systemen, Instanzen, Hosts und Aktivitäten der letzten 24 Stunden |
+| Landscape | Tab „Systeme“ mit Status, Pool, Abhängigkeiten und Knöpfen für Start, Stopp, Neustart, filterbar nach Pool; Tab „Hosts“. Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken) |
+| Activities | Tab „Aktivitäten“ mit allen Operationen und Detailseite mit Protokoll; Tab „Protokolle“ mit den letzten 200 Protokolleinträgen |
+| Configuration | Tab „Hosts“: anlegen, Discovery, Zugangsdaten, löschen. Tab „Systeme“: Pool, Abhängigkeiten, Zugangsdaten. Tab „Pools“: anlegen und löschen |
+| Administration | Versionsstand und aktuelle Einstellungen; Plattform-Einstellungen folgen |
+
+Die Hauptmenüpunkte heißen in beiden Sprachen Landscape, Activities, Configuration und
+Administration; nur „Übersicht“ wird übersetzt.
+
+**Pools** fassen Systeme zusammen, die zusammengehören, z. B. Entwicklungs-, Test- und
+Produktivsystem eines Produkts. Ein System gehört zu höchstens einem Pool.
 
 - **Sprache:** Deutsch und Englisch, umschaltbar oben rechts. Ohne Auswahl gilt die Sprache
   des Browsers. Protokollmeldungen der Aktivitäten werden auf Englisch aufgezeichnet.
 - **Aktualisierung:** Die Seite einer laufenden Aktivität lädt sich alle 2 Sekunden neu,
-  Übersicht und Systemseite alle 5 Sekunden, solange eine Aktivität läuft.
+  Übersicht, Landscape und Systemseite alle 5 Sekunden, solange eine Aktivität läuft.
 - **Keine externen Dateien:** Die Oberfläche lädt nichts aus dem Internet und kommt bis auf
   die Rückfrage vor Operationen ohne JavaScript aus.
 - **Anmeldung:** Ein signiertes Sitzungs-Cookie, 8 Stunden gültig, `HttpOnly` und
@@ -152,6 +162,10 @@ keine Inventardaten.
 | POST | `/api/hosts/{id}/discover` | Host auslesen und Inventar aktualisieren |
 | GET | `/api/systems` | Systeme mit ihren Instanzen und Abhängigkeiten über alle Hosts |
 | PUT | `/api/systems/{id}/dependencies` | Abhängigkeiten eines Systems setzen (`{"depends_on": [ids]}`) |
+| PUT | `/api/systems/{id}/pool` | System einem Pool zuordnen (`{"pool_id": id}`, `null` entfernt) |
+| GET | `/api/pools` | Pools mit ihren Systemen |
+| POST | `/api/pools` | Pool anlegen (`{"name": "...", "description": "..."}`) |
+| DELETE | `/api/pools/{id}` | Pool löschen; seine Systeme bleiben erhalten |
 | PUT | `/api/systems/{id}/credentials` | Zugangsdaten für den sapstartsrv eines Systems setzen |
 | POST | `/api/instances/{id}/start`, `/stop`, `/restart` | Operation für eine Instanz anstoßen |
 | POST | `/api/systems/{id}/start`, `/stop`, `/restart` | Operation für ein ganzes System anstoßen |

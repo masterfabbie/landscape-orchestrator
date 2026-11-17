@@ -221,3 +221,31 @@ async def test_invalid_dependencies(api, depends_on, message):
 async def test_dependencies_of_unknown_system(api):
     response = await api.put("/api/systems/99/dependencies", json={"depends_on": []})
     assert response.status_code == 404
+
+
+async def test_pools(api):
+    dev, hdv = await discover_both(api)
+
+    created = await api.post("/api/pools", json={"name": "xDV", "description": "Development"})
+    assert created.status_code == 201
+    pool = created.json()
+    assert (pool["name"], pool["system_ids"]) == ("xDV", [])
+    assert (await api.post("/api/pools", json={"name": "xDV"})).status_code == 409
+
+    assigned = await api.put(f"/api/systems/{dev}/pool", json={"pool_id": pool["id"]})
+    assert assigned.status_code == 200 and assigned.json()["pool_id"] == pool["id"]
+    assert (await api.get("/api/pools")).json()[0]["system_ids"] == [dev]
+
+    unknown = await api.put(f"/api/systems/{hdv}/pool", json={"pool_id": 99})
+    assert unknown.status_code == 422
+    assert (await api.put("/api/systems/99/pool", json={"pool_id": None})).status_code == 404
+
+    cleared = await api.put(f"/api/systems/{dev}/pool", json={"pool_id": None})
+    assert cleared.json()["pool_id"] is None
+
+    await api.put(f"/api/systems/{dev}/pool", json={"pool_id": pool["id"]})
+    assert (await api.delete(f"/api/pools/{pool['id']}")).status_code == 204
+    assert (await api.get("/api/pools")).json() == []
+    systems = {s["sid"]: s for s in (await api.get("/api/systems")).json()}
+    assert systems["DEV"]["pool_id"] is None
+    assert (await api.delete("/api/pools/99")).status_code == 404

@@ -72,9 +72,11 @@ async def browser(anonymous, settings):
 
 
 async def add_hosts(browser: httpx.AsyncClient) -> None:
+    """Hosts 1 (sapapp1) and 2 (sapdb1); systems 1 (DEV) and 2 (HDV); instances 1-3."""
     for number, body in enumerate((APP_HOST, DB_HOST), start=1):
-        assert (await browser.post("/hosts", data=body)).status_code == 303
-        assert (await browser.post(f"/hosts/{number}/discover")).status_code == 303
+        assert (await browser.post("/configuration/hosts", data=body)).status_code == 303
+        response = await browser.post(f"/configuration/hosts/{number}/discover")
+        assert response.status_code == 303
 
 
 # --- sessions and translations -----------------------------------------------------------
@@ -119,8 +121,24 @@ def test_instance_type_from_features():
 
 # --- sign in -----------------------------------------------------------------------------
 
+PAGES = [
+    "/",
+    "/landscape",
+    "/landscape?tab=hosts",
+    "/activities",
+    "/activities?tab=logs",
+    "/configuration",
+    "/configuration?tab=systems",
+    "/configuration?tab=pools",
+    "/administration",
+    "/hosts/1",
+    "/systems/1",
+    "/configuration/hosts/1",
+    "/configuration/systems/1",
+]
 
-@pytest.mark.parametrize("path", ["/", "/hosts", "/hosts/1", "/systems/1", "/activities"])
+
+@pytest.mark.parametrize("path", PAGES)
 async def test_pages_require_login(anonymous, path):
     response = await anonymous.get(path)
     assert response.status_code == 303
@@ -128,7 +146,7 @@ async def test_pages_require_login(anonymous, path):
 
 
 async def test_posts_require_login(anonymous):
-    response = await anonymous.post("/hosts", data=APP_HOST)
+    response = await anonymous.post("/configuration/hosts", data=APP_HOST)
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
     response = await anonymous.post("/instances/1/stop")
@@ -168,10 +186,12 @@ async def test_logout(browser):
 
 async def test_cross_site_post_is_rejected(browser):
     response = await browser.post(
-        "/hosts", data=APP_HOST, headers={"Origin": "https://evil.example"}
+        "/configuration/hosts", data=APP_HOST, headers={"Origin": "https://evil.example"}
     )
     assert response.status_code == 403
-    same_site = await browser.post("/hosts", data=APP_HOST, headers={"Origin": "http://test"})
+    same_site = await browser.post(
+        "/configuration/hosts", data=APP_HOST, headers={"Origin": "http://test"}
+    )
     assert same_site.status_code == 303
 
 
@@ -180,27 +200,43 @@ async def test_api_token_is_not_accepted_as_session_on_pages(anonymous, settings
     assert response.status_code == 303
 
 
-# --- pages -------------------------------------------------------------------------------
+# --- structure and language --------------------------------------------------------------
 
 
-async def test_empty_overview(browser):
-    response = await browser.get("/")
-    assert response.status_code == 200
-    assert "No systems yet." in response.text
+@pytest.mark.parametrize("path", PAGES[:9])
+async def test_main_pages_render_with_navigation(browser, path):
+    await add_hosts(browser)
+    page = (await browser.get(path)).text
+    for item in ("Overview", "Landscape", "Activities", "Configuration", "Administration"):
+        assert f">{item}</a>" in page
 
 
-async def test_language_switch(browser):
-    response = await browser.get("/language/de?next=/hosts")
-    assert response.headers["location"] == "/hosts"
-    page = await browser.get("/hosts")
-    assert "Host anlegen" in page.text and '<html lang="de">' in page.text
+async def test_detail_pages_render(browser):
+    await add_hosts(browser)
+    for path in PAGES[9:]:
+        assert (await browser.get(path)).status_code == 200, path
+
+
+async def test_navigation_names_in_german(browser):
+    await browser.get("/language/de")
+    page = (await browser.get("/")).text
+    assert ">Übersicht</a>" in page
+    for item in ("Landscape", "Activities", "Configuration", "Administration"):
+        assert f">{item}</a>" in page
+
+
+async def test_language_switch_keeps_the_tab(browser):
+    page = (await browser.get("/configuration?tab=pools&notice=pool_created")).text
+    assert 'href="/language/de?next=/configuration%3Ftab%3Dpools"' in page
+    response = await browser.get("/language/de?next=/configuration?tab=pools")
+    assert response.headers["location"] == "/configuration?tab=pools"
+    assert "Pool anlegen" in (await browser.get("/configuration?tab=pools")).text
 
     await browser.get("/language/en")
-    assert "Add host" in (await browser.get("/hosts")).text
-
+    assert "Add pool" in (await browser.get("/configuration?tab=pools")).text
     unknown = await browser.get("/language/xx")
     assert unknown.status_code == 303
-    assert "Add host" in (await browser.get("/hosts")).text
+    assert "Add pool" in (await browser.get("/configuration?tab=pools")).text
 
 
 async def test_accept_language_header_selects_german(anonymous):
@@ -208,33 +244,62 @@ async def test_accept_language_header_selects_german(anonymous):
     assert "Anmelden" in page.text
 
 
-async def test_add_host_and_discover(browser):
-    created = await browser.post("/hosts", data=APP_HOST)
-    assert created.headers["location"] == "/hosts/1?notice=host_created"
-    assert "Host created." in (await browser.get(created.headers["location"])).text
-
-    discovered = await browser.post("/hosts/1/discover")
-    location = discovered.headers["location"]
-    assert "notice=discovered" in location and "n_added=2" in location
-    page = await browser.get(location)
-    assert "Discovery finished: 2 new, 0 updated, 0 missing." in page.text
-    assert "ABAP application server" in page.text
-    assert "Central services" in page.text
-    assert "16.0 GB" in page.text
-
-    hosts = await browser.get("/hosts")
-    assert "sapapp1" in hosts.text and "stored" in hosts.text
+async def test_old_hosts_page_redirects_to_landscape(browser):
+    response = await browser.get("/hosts")
+    assert response.headers["location"] == "/landscape?tab=hosts"
 
 
-async def test_overview_shows_systems_and_databases(browser):
+@pytest.mark.parametrize(
+    ("path", "active"),
+    [("/landscape", "Systems"), ("/landscape?tab=hosts", "Hosts"), ("/landscape?tab=x", "Systems")],
+)
+async def test_landscape_tabs(browser, path, active):
+    page = (await browser.get(path)).text
+    assert f'aria-current="page">{active}</a>' in page
+
+
+# --- overview ----------------------------------------------------------------------------
+
+
+async def test_empty_overview(browser):
+    page = (await browser.get("/")).text
+    assert page.count('class="tile-total">0<') == 4
+    assert "Nothing yet." in page
+
+
+async def test_overview_counts(browser, app):
     await add_hosts(browser)
     page = (await browser.get("/")).text
-    assert ">DEV</a>" in page and ">HDV</a>" in page
-    assert "SAP HANA" in page
-    assert "SYSTEMDB@HDV" in page and "HDV@HDV" in page
-    assert page.count("badge-gray") == 3
-    assert 'action="/systems/1/start"' in page
-    assert 'action="/instances/1/stop"' in page
+    assert '<p class="tile-total">2</p>' in page  # systems and hosts
+    assert '<p class="tile-total">3</p>' in page  # instances
+    assert "stopped" in page and "reachable" in page
+
+    await browser.post("/systems/1/start")
+    await app.state.runner.wait(1)
+    page = (await browser.get("/")).text
+    assert "running" in page and "succeeded" in page
+    assert '<p class="tile-total">1</p>' in page  # activities in the last 24 hours
+
+
+# --- configuration: hosts ----------------------------------------------------------------
+
+
+async def test_add_host_and_discover(browser):
+    created = await browser.post("/configuration/hosts", data=APP_HOST)
+    assert created.headers["location"] == "/configuration/hosts/1?notice=host_created"
+    assert "Host created." in (await browser.get(created.headers["location"])).text
+
+    discovered = await browser.post("/configuration/hosts/1/discover")
+    location = discovered.headers["location"]
+    assert location.startswith("/configuration/hosts/1?notice=discovered&n_added=2")
+    page = await browser.get(location)
+    assert "Discovery finished: 2 new, 0 updated, 0 missing." in page.text
+    assert "ABAP application server" in page.text and "Central services" in page.text
+
+    listing = (await browser.get("/configuration?tab=hosts")).text
+    assert "sapapp1" in listing and "devadm (stored)" in listing
+    landscape = (await browser.get("/landscape?tab=hosts")).text
+    assert 'href="/hosts/1"' in landscape
 
 
 async def test_invalid_host_input(browser):
@@ -243,17 +308,17 @@ async def test_invalid_host_input(browser):
         (APP_HOST | {"password": ""}, "credentials_incomplete"),
         ({"name": "  "}, "invalid_input"),
     ]:
-        response = await browser.post("/hosts", data=body)
-        assert response.headers["location"] == f"/hosts?error={error}"
-    await browser.post("/hosts", data=APP_HOST)
-    duplicate = await browser.post("/hosts", data=APP_HOST)
-    assert duplicate.headers["location"] == "/hosts?error=host_exists"
+        response = await browser.post("/configuration/hosts", data=body)
+        assert response.headers["location"] == f"/configuration?tab=hosts&error={error}"
+    await browser.post("/configuration/hosts", data=APP_HOST)
+    duplicate = await browser.post("/configuration/hosts", data=APP_HOST)
+    assert duplicate.headers["location"] == "/configuration?tab=hosts&error=host_exists"
     assert "already exists" in (await browser.get(duplicate.headers["location"])).text
 
 
 async def test_discovery_failure_is_shown(browser):
-    await browser.post("/hosts", data=APP_HOST | {"hostagent_port": "4711"})
-    response = await browser.post("/hosts/1/discover")
+    await browser.post("/configuration/hosts", data=APP_HOST | {"hostagent_port": "4711"})
+    response = await browser.post("/configuration/hosts/1/discover")
     page = await browser.get(response.headers["location"])
     assert "The host agent could not be queried" in page.text
     assert "Connection refused" in page.text
@@ -261,48 +326,145 @@ async def test_discovery_failure_is_shown(browser):
 
 
 async def test_discovery_warning_is_shown(browser, app):
-    await browser.post("/hosts", data=APP_HOST)
+    await browser.post("/configuration/hosts", data=APP_HOST)
     app.state.context.clients._transport.remove_port(50013)
-    response = await browser.post("/hosts/1/discover")
+    response = await browser.post("/configuration/hosts/1/discover")
     page = await browser.get(response.headers["location"])
     assert "Warnings" in page.text
     assert "DEV/00: sapstartsrv could not be queried" in page.text
 
 
 async def test_host_values_are_escaped(browser):
-    await browser.post("/hosts", data={"name": "<script>alert(1)</script>"})
-    page = (await browser.get("/hosts")).text
+    await browser.post("/configuration/hosts", data={"name": "<script>alert(1)</script>"})
+    page = (await browser.get("/configuration?tab=hosts")).text
     assert "<script>alert(1)</script>" not in page
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
 
 
 async def test_credentials_forms(browser):
-    await browser.post("/hosts", data={"name": "sapapp1", "address": "127.0.0.1"})
-    assert "not set" in (await browser.get("/hosts/1")).text
+    await browser.post("/configuration/hosts", data={"name": "sapapp1", "address": "127.0.0.1"})
+    assert "not set" in (await browser.get("/configuration/hosts/1")).text
 
-    saved = await browser.post("/hosts/1/credentials", data=CREDENTIALS)
-    assert saved.headers["location"] == "/hosts/1?notice=credentials_saved"
-    page = (await browser.get("/hosts/1")).text
+    saved = await browser.post("/configuration/hosts/1/credentials", data=CREDENTIALS)
+    assert saved.headers["location"] == "/configuration/hosts/1?notice=credentials_saved"
+    page = (await browser.get("/configuration/hosts/1")).text
     assert "stored" in page and "devadm" in page and "mock" not in page
 
-    incomplete = await browser.post("/hosts/1/credentials", data={"username": "devadm"})
-    assert incomplete.headers["location"] == "/hosts/1?error=credentials_incomplete"
+    incomplete = await browser.post("/configuration/hosts/1/credentials", data={"username": "x"})
+    assert incomplete.headers["location"] == "/configuration/hosts/1?error=credentials_incomplete"
 
-    await browser.post("/hosts/1/discover")
-    saved = await browser.post("/systems/1/credentials", data=CREDENTIALS)
-    assert saved.headers["location"] == "/systems/1?notice=credentials_saved"
-    assert "stored" in (await browser.get("/systems/1")).text
+    await browser.post("/configuration/hosts/1/discover")
+    systems = (await browser.get("/configuration?tab=systems")).text
+    assert "those of the host" in systems
+    saved = await browser.post("/configuration/systems/1/credentials", data=CREDENTIALS)
+    assert saved.headers["location"] == "/configuration/systems/1?notice=credentials_saved"
+    assert "stored" in (await browser.get("/configuration/systems/1")).text
 
 
 async def test_delete_host(browser):
     await add_hosts(browser)
-    response = await browser.post("/hosts/1/delete")
-    assert response.headers["location"] == "/hosts?notice=host_deleted"
-    page = (await browser.get("/hosts")).text
+    response = await browser.post("/configuration/hosts/1/delete")
+    assert response.headers["location"] == "/configuration?tab=hosts&notice=host_deleted"
+    page = (await browser.get("/configuration?tab=hosts")).text
     assert "sapapp1" not in page and "sapdb1" in page
 
 
-# --- operations --------------------------------------------------------------------------
+# --- configuration: pools and dependencies ---------------------------------------------
+
+
+async def test_pools(browser):
+    await add_hosts(browser)
+    assert "No pools yet." in (await browser.get("/configuration?tab=pools")).text
+
+    created = await browser.post(
+        "/configuration/pools", data={"name": "xDV", "description": "Development line"}
+    )
+    assert created.headers["location"] == "/configuration?tab=pools&notice=pool_created"
+    duplicate = await browser.post("/configuration/pools", data={"name": "xDV"})
+    assert duplicate.headers["location"] == "/configuration?tab=pools&error=pool_exists"
+    assert (await browser.post("/configuration/pools", data={"name": " "})).headers[
+        "location"
+    ] == "/configuration?tab=pools&error=invalid_input"
+
+    saved = await browser.post("/configuration/systems/1/pool", data={"pool_id": "1"})
+    assert saved.headers["location"] == "/configuration/systems/1?notice=pool_saved"
+    pools = (await browser.get("/configuration?tab=pools")).text
+    assert "Development line" in pools and 'href="/configuration/systems/1">DEV</a>' in pools
+
+    landscape = (await browser.get("/landscape")).text
+    assert 'href="/landscape?tab=systems&pool=1"' in landscape
+    in_pool = (await browser.get("/landscape?tab=systems&pool=1")).text
+    assert ">DEV</a>" in in_pool and ">HDV</a>" not in in_pool
+    no_pool = (await browser.get("/landscape?tab=systems&pool=none")).text
+    assert ">HDV</a>" in no_pool and ">DEV</a>" not in no_pool
+    assert "xDV" in (await browser.get("/systems/1")).text
+
+    cleared = await browser.post("/configuration/systems/1/pool", data={"pool_id": ""})
+    assert cleared.headers["location"] == "/configuration/systems/1?notice=pool_saved"
+    unknown = await browser.post("/configuration/systems/1/pool", data={"pool_id": "99"})
+    assert unknown.headers["location"] == "/configuration/systems/1?error=invalid_input"
+
+    await browser.post("/configuration/systems/1/pool", data={"pool_id": "1"})
+    deleted = await browser.post("/configuration/pools/1/delete")
+    assert deleted.headers["location"] == "/configuration?tab=pools&notice=pool_deleted"
+    assert "No pool" in (await browser.get("/systems/1")).text
+
+
+async def test_manage_dependencies(browser):
+    await add_hosts(browser)
+    page = (await browser.get("/configuration/systems/1")).text
+    assert "Dependencies" in page and '<option value="2">HDV</option>' in page
+
+    added = await browser.post("/configuration/systems/1/dependencies", data={"depends_on": "2"})
+    assert added.headers["location"] == "/configuration/systems/1?notice=dependencies_saved"
+    page = (await browser.get("/configuration/systems/1")).text
+    assert 'action="/configuration/systems/1/dependencies/2/delete"' in page
+    assert "No other system can be added." in page
+    assert 'href="/systems/2">HDV</a>' in (await browser.get("/landscape")).text
+
+    hana = (await browser.get("/configuration/systems/2")).text
+    assert 'href="/configuration/systems/1">DEV</a>' in hana
+    assert "Stopping this system does not stop the systems that need it." in hana
+    assert '<option value="1">' not in hana  # DEV would close a cycle
+
+    cycle = await browser.post("/configuration/systems/2/dependencies", data={"depends_on": "1"})
+    assert cycle.headers["location"] == "/configuration/systems/2?error=dependency_cycle"
+    assert "would create a cycle" in (await browser.get(cycle.headers["location"])).text
+    itself = await browser.post("/configuration/systems/1/dependencies", data={"depends_on": "1"})
+    assert itself.headers["location"] == "/configuration/systems/1?error=dependency_self"
+
+    removed = await browser.post("/configuration/systems/1/dependencies/2/delete")
+    assert removed.headers["location"] == "/configuration/systems/1?notice=dependencies_saved"
+
+
+async def test_configuration_texts_in_german(browser):
+    await add_hosts(browser)
+    await browser.get("/language/de")
+    page = (await browser.get("/configuration/systems/1")).text
+    assert "Abhängigkeiten" in page and "Abhängigkeit hinzufügen" in page and "Kein Pool" in page
+
+
+# --- landscape and operations ----------------------------------------------------------
+
+
+async def test_landscape_lists_systems_with_status(browser):
+    await add_hosts(browser)
+    page = (await browser.get("/landscape")).text
+    assert ">DEV</a>" in page and ">HDV</a>" in page
+    assert page.count("badge-gray") == 2  # one status per system
+    assert 'action="/systems/1/start"' in page
+    hosts = (await browser.get("/landscape?tab=hosts")).text
+    assert ">sapapp1</a>" in hosts and ">sapdb1</a>" in hosts
+
+
+async def test_detail_pages_link_to_configuration(browser):
+    await add_hosts(browser)
+    host = (await browser.get("/hosts/2")).text
+    assert 'href="/configuration/hosts/2"' in host
+    assert "SYSTEMDB@HDV" in host and "HDV@HDV" in host
+    system = (await browser.get("/systems/1")).text
+    assert 'href="/configuration/systems/1"' in system
+    assert 'action="/instances/1/stop"' in system
 
 
 async def test_start_instance_from_the_browser(browser, app):
@@ -320,9 +482,10 @@ async def test_start_instance_from_the_browser(browser, app):
     assert "Instance status: GREEN" in finished
     assert "Finished successfully" in finished
 
-    assert "badge-green" in (await browser.get("/")).text
     listing = (await browser.get("/activities")).text
     assert 'href="/activities/1"' in listing and "DEV/01" in listing
+    logs = (await browser.get("/activities?tab=logs")).text
+    assert "Instance status: GREEN" in logs and 'href="/activities/1"' in logs
 
 
 def hold_activities(app) -> asyncio.Event:
@@ -342,17 +505,16 @@ def hold_activities(app) -> asyncio.Event:
 async def test_system_operation_with_dependency_and_conflict(browser, app):
     await add_hosts(browser)
     # System 1 is DEV, system 2 the HANA system HDV; instance 3 is the HANA instance.
-    added = await browser.post("/systems/1/dependencies", data={"depends_on": "2"})
-    assert added.headers["location"] == "/systems/1?notice=dependencies_saved"
+    await browser.post("/configuration/systems/1/dependencies", data={"depends_on": "2"})
     gate = hold_activities(app)
 
     started = await browser.post("/systems/1/start")
     assert started.headers["location"] == "/activities/1"
 
-    overview = (await browser.get("/")).text
-    assert overview.count("Activity running") == 2  # DEV and, through the dependency, HDV
-    assert "disabled" in overview
-    assert '<meta http-equiv="refresh" content="5">' in overview
+    landscape = (await browser.get("/landscape")).text
+    assert landscape.count("Activity running") == 2  # DEV and, through the dependency, HDV
+    assert "disabled" in landscape
+    assert '<meta http-equiv="refresh" content="5">' in landscape
 
     conflict = await browser.post("/instances/3/stop")
     assert conflict.headers["location"] == "/systems/2?error=conflict"
@@ -361,54 +523,20 @@ async def test_system_operation_with_dependency_and_conflict(browser, app):
 
     gate.set()
     await app.state.runner.wait(1)
-    overview = (await browser.get("/")).text
-    assert "Activity running" not in overview
-    assert "http-equiv" not in overview
-    # Three instances and the two HANA databases, whose status follows the operation.
-    assert overview.count("badge-green") == 3
-    assert overview.count("badge-running") == 2
+    landscape = (await browser.get("/landscape")).text
+    assert "Activity running" not in landscape
+    assert "http-equiv" not in landscape
+    assert landscape.count("badge-green") == 2
+    assert "badge-running" in (await browser.get("/hosts/2")).text  # databases follow
     activity = (await browser.get("/activities/1")).text
     assert "Start order including dependencies: HDV, DEV" in activity
 
 
-async def test_manage_dependencies(browser):
-    await add_hosts(browser)
-    page = (await browser.get("/systems/1")).text
-    assert "Dependencies" in page and '<option value="2">HDV</option>' in page
-
-    await browser.post("/systems/1/dependencies", data={"depends_on": "2"})
-    page = (await browser.get("/systems/1")).text
-    assert 'action="/systems/1/dependencies/2/delete"' in page
-    assert "No other system can be added." in page
-    assert "Depends on: <a" in (await browser.get("/")).text
-
-    hana = (await browser.get("/systems/2")).text
-    assert 'href="/systems/1">DEV</a>' in hana
-    assert "Stopping this system does not stop the systems that need it." in hana
-    # DEV is not offered as a dependency of HDV, because that would close a cycle.
-    assert "<option" not in hana
-
-    cycle = await browser.post("/systems/2/dependencies", data={"depends_on": "1"})
-    assert cycle.headers["location"] == "/systems/2?error=dependency_cycle"
-    assert "would create a cycle" in (await browser.get(cycle.headers["location"])).text
-    itself = await browser.post("/systems/1/dependencies", data={"depends_on": "1"})
-    assert itself.headers["location"] == "/systems/1?error=dependency_self"
-
-    removed = await browser.post("/systems/1/dependencies/2/delete")
-    assert removed.headers["location"] == "/systems/1?notice=dependencies_saved"
-    assert "Depends on: <a" not in (await browser.get("/")).text
-
-
-async def test_dependency_texts_in_german(browser):
-    await add_hosts(browser)
-    await browser.get("/language/de")
-    page = (await browser.get("/systems/1")).text
-    assert "Abhängigkeiten" in page and "Abhängigkeit hinzufügen" in page
-
-
 async def test_failed_activity_shows_error_in_german(browser, app):
     await add_hosts(browser)
-    await browser.post("/hosts/1/credentials", data={"username": "devadm", "password": "wrong"})
+    await browser.post(
+        "/configuration/hosts/1/credentials", data={"username": "devadm", "password": "wrong"}
+    )
     await browser.get("/language/de")
     await browser.post("/instances/1/start")
     await app.state.runner.wait(1)
@@ -418,14 +546,22 @@ async def test_failed_activity_shows_error_in_german(browser, app):
     assert "Protokollmeldungen werden auf Englisch aufgezeichnet." in page
 
 
+async def test_administration_shows_settings(browser):
+    page = (await browser.get("/administration")).text
+    assert "0.1.0" in page and "sqlite+aiosqlite" in page and "8 hours" in page
+
+
 @pytest.mark.parametrize(
     ("method", "path", "expected"),
     [
         ("GET", "/hosts/99", 404),
         ("GET", "/systems/99", 404),
         ("GET", "/activities/99", 404),
+        ("GET", "/configuration/hosts/99", 404),
+        ("GET", "/configuration/systems/99", 404),
         ("POST", "/instances/99/start", 404),
         ("POST", "/systems/99/stop", 404),
+        ("POST", "/configuration/pools/99/delete", 404),
         ("POST", "/instances/1/explode", 422),
     ],
 )

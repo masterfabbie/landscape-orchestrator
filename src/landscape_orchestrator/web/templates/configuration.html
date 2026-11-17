@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}{{ t("nav.configuration") }}{% endblock %}
+{% block content %}
+<h1>{{ t("nav.configuration") }}</h1>
+{{ ui.tabs([("hosts", "/configuration?tab=hosts", t("tab.hosts")), ("systems", "/configuration?tab=systems", t("tab.systems")), ("pools", "/configuration?tab=pools", t("tab.pools"))], tab, t("nav.configuration")) }}
+
+{% if tab == "hosts" %}
+<section class="card">
+  {% if hosts %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("field.address") }}</th><th>{{ t("field.hostagent_port") }}</th><th>{{ t("credentials.title") }}</th><th>{{ t("field.reachable") }}</th><th>{{ t("field.last_discovery") }}</th></tr></thead>
+    <tbody>
+    {% for host in hosts %}
+      <tr>
+        <td><a class="strong" href="/configuration/hosts/{{ host.id }}">{{ host.name }}</a></td>
+        <td class="mono">{{ host.address }}</td>
+        <td class="mono">{{ host.hostagent_port or (1129 if host.https else 1128) }}</td>
+        <td>{{ host.username ~ " (" ~ t("credentials.set") ~ ")" if host.has_credentials else t("credentials.missing") }}</td>
+        <td>{{ ui.reach_badge(host, t) }}</td>
+        <td class="muted">{{ host.last_discovery_at | time or t("hosts.never") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>{{ t("hosts.empty") }}</p>
+  {% endif %}
+</section>
+<section class="card">
+  <h2>{{ t("hosts.add") }}</h2>
+  <form method="post" action="/configuration/hosts" class="stack">
+    <div class="fields">
+      <label>{{ t("field.name") }} <input name="name" required maxlength="255"></label>
+      <label>{{ t("field.address") }} <input name="address" maxlength="255" placeholder="{{ t('field.address_hint') }}"></label>
+      <label>{{ t("field.hostagent_port") }} <input name="hostagent_port" type="number" min="1" max="65535" placeholder="1128"></label>
+      <label>{{ t("field.port_offset") }} <input name="sapcontrol_port_offset" type="number" min="0" max="15000" placeholder="{{ t('field.port_offset_hint') }}"></label>
+      <label>{{ t("field.username") }} <input name="username" autocomplete="off" placeholder="sapadm"></label>
+      <label>{{ t("field.password") }} <input name="password" type="password" autocomplete="new-password"></label>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" name="https"> {{ t("field.https") }}</label>
+      <label><input type="checkbox" name="verify_tls" checked> {{ t("field.verify_tls") }}</label>
+    </div>
+    <div><button type="submit">{{ t("hosts.add") }}</button></div>
+  </form>
+</section>
+
+{% elif tab == "systems" %}
+<section class="card">
+  {% if systems %}
+  <p class="muted">{{ t("config.systems_hint") }}</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>{{ t("field.system") }}</th><th>{{ t("field.pool") }}</th><th>{{ t("deps.depends_on") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("credentials.title") }}</th></tr></thead>
+    <tbody>
+    {% for system in systems %}
+      <tr>
+        <td><a class="strong" href="/configuration/systems/{{ system.id }}">{{ system.sid }}</a></td>
+        <td>{{ system.pool.name if system.pool else "" }}</td>
+        <td>{% for dependency in system.depends_on %}<span class="mono">{{ dependency.sid }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</td>
+        <td>{% for instance in system.instances %}<span class="mono">{{ instance.number }}</span> ({{ instance.host.name }}){% if not loop.last %}, {% endif %}{% endfor %}</td>
+        <td>{{ system.username ~ " (" ~ t("credentials.set") ~ ")" if system.has_credentials else t("credentials.host_used") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>{{ t("config.no_systems") }}</p>
+  {% endif %}
+</section>
+
+{% else %}
+<section class="card">
+  <p class="muted">{{ t("pool.explanation") }}</p>
+  {% if pools %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("field.description") }}</th><th>{{ t("tab.systems") }}</th><th>{{ t("field.actions") }}</th></tr></thead>
+    <tbody>
+    {% for pool in pools %}
+      <tr>
+        <td class="strong">{{ pool.name }}</td>
+        <td>{{ pool.description or "" }}</td>
+        <td>{% for system in pool.systems %}<a class="mono" href="/configuration/systems/{{ system.id }}">{{ system.sid }}</a>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">{{ t("deps.none") }}</span>{% endfor %}</td>
+        <td>
+          <form method="post" action="/configuration/pools/{{ pool.id }}/delete" data-confirm="{{ t('pool.delete_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+            <button type="submit" class="danger">{{ t("pool.delete") }}</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>{{ t("pool.empty") }}</p>
+  {% endif %}
+</section>
+<section class="card">
+  <h2>{{ t("pool.add") }}</h2>
+  <form method="post" action="/configuration/pools" class="stack">
+    <div class="fields">
+      <label>{{ t("field.name") }} <input name="name" required maxlength="64"></label>
+      <label>{{ t("field.description") }} <input name="description" maxlength="1000"></label>
+    </div>
+    <div><button type="submit">{{ t("pool.add") }}</button></div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

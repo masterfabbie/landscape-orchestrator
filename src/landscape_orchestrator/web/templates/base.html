@@ -12,15 +12,17 @@
   <a class="brand" href="/">{{ t("app.title") }}</a>
   {% block nav %}
   <nav aria-label="Main">
-    <a href="/" {% if path == "/" or path.startswith("/systems") %}aria-current="page"{% endif %}>{{ t("nav.overview") }}</a>
-    <a href="/hosts" {% if path.startswith("/hosts") %}aria-current="page"{% endif %}>{{ t("nav.hosts") }}</a>
+    <a href="/" {% if path == "/" %}aria-current="page"{% endif %}>{{ t("nav.overview") }}</a>
+    <a href="/landscape" {% if path.startswith(("/landscape", "/systems", "/hosts")) %}aria-current="page"{% endif %}>{{ t("nav.landscape") }}</a>
     <a href="/activities" {% if path.startswith("/activities") %}aria-current="page"{% endif %}>{{ t("nav.activities") }}</a>
+    <a href="/configuration" {% if path.startswith("/configuration") %}aria-current="page"{% endif %}>{{ t("nav.configuration") }}</a>
+    <a href="/administration" {% if path.startswith("/administration") %}aria-current="page"{% endif %}>{{ t("nav.administration") }}</a>
   </nav>
   {% endblock %}
   <div class="topbar-end">
     <span class="languages" aria-label="Language">
       {% for code in languages %}
-        {% if code == language %}<strong>{{ code | upper }}</strong>{% else %}<a href="/language/{{ code }}?next={{ path | urlencode }}">{{ code | upper }}</a>{% endif %}
+        {% if code == language %}<strong>{{ code | upper }}</strong>{% else %}<a href="/language/{{ code }}?next={{ here | urlencode }}">{{ code | upper }}</a>{% endif %}
       {% endfor %}
     </span>
     {% block session %}

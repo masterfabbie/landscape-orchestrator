@@ -9,8 +9,72 @@ DEFAULT_LANGUAGE = "en"
 TEXTS: dict[str, tuple[str, str]] = {
     "app.title": ("Landscape Orchestrator", "Landscape Orchestrator"),
     "nav.overview": ("Overview", "Übersicht"),
-    "nav.hosts": ("Hosts", "Hosts"),
-    "nav.activities": ("Activities", "Aktivitäten"),
+    "nav.landscape": ("Landscape", "Landscape"),
+    "nav.activities": ("Activities", "Activities"),
+    "nav.configuration": ("Configuration", "Configuration"),
+    "nav.administration": ("Administration", "Administration"),
+    "tab.systems": ("Systems", "Systeme"),
+    "tab.hosts": ("Hosts", "Hosts"),
+    "tab.activities": ("Activities", "Aktivitäten"),
+    "tab.logs": ("Logs", "Protokolle"),
+    "tab.pools": ("Pools", "Pools"),
+    "action.configure": ("Configure", "Konfigurieren"),
+    "action.view": ("Show in landscape", "In der Landscape anzeigen"),
+    "action.save": ("Save", "Speichern"),
+    "overview.instances": ("Instances", "Instanzen"),
+    "overview.hosts": ("Hosts", "Hosts"),
+    "overview.activities_24h": ("Activities (24 h)", "Aktivitäten (24 h)"),
+    "overview.none": ("Nothing yet.", "Noch nichts vorhanden."),
+    "reach.GREEN": ("reachable", "erreichbar"),
+    "reach.RED": ("not reachable", "nicht erreichbar"),
+    "reach.UNKNOWN": ("not checked yet", "noch nicht geprüft"),
+    "field.pool": ("Pool", "Pool"),
+    "field.description": ("Description", "Beschreibung"),
+    "pool.all": ("All", "Alle"),
+    "pool.none": ("No pool", "Kein Pool"),
+    "pool.add": ("Add pool", "Pool anlegen"),
+    "pool.delete": ("Delete", "Löschen"),
+    "pool.delete_confirm": (
+        "Delete this pool? Its systems stay and are no longer in a pool.",
+        "Diesen Pool löschen? Seine Systeme bleiben erhalten und gehören dann zu keinem Pool.",
+    ),
+    "pool.empty": ("No pools yet.", "Noch keine Pools."),
+    "pool.none_defined": ("No pools are defined yet.", "Es sind noch keine Pools angelegt."),
+    "pool.explanation": (
+        "A pool groups systems that belong together, for example the development, test and "
+        "production system of one product. A system belongs to at most one pool.",
+        "Ein Pool fasst Systeme zusammen, die zusammengehören, zum Beispiel Entwicklungs-, "
+        "Test- und Produktivsystem eines Produkts. Ein System gehört zu höchstens einem Pool.",
+    ),
+    "config.systems_hint": (
+        "Systems are created by the discovery of their hosts.",
+        "Systeme entstehen durch die Discovery ihrer Hosts.",
+    ),
+    "config.no_systems": (
+        "No systems yet. Add a host and run a discovery.",
+        "Noch keine Systeme. Lege einen Host an und starte eine Discovery.",
+    ),
+    "credentials.host_used": ("those of the host", "die des Hosts"),
+    "logs.hint": (
+        "The latest {limit} log entries of all activities.",
+        "Die letzten {limit} Protokolleinträge aller Aktivitäten.",
+    ),
+    "logs.empty": ("No log entries yet.", "Noch keine Protokolleinträge."),
+    "admin.planned": (
+        "Platform settings will follow. Current configuration:",
+        "Plattform-Einstellungen folgen. Aktuelle Konfiguration:",
+    ),
+    "admin.version": ("Version", "Version"),
+    "admin.database": ("Database", "Datenbank"),
+    "admin.session": ("Sign-in valid for", "Anmeldung gültig für"),
+    "admin.session_hours": ("{hours} hours", "{hours} Stunden"),
+    "notice.pool_created": ("Pool created.", "Pool angelegt."),
+    "notice.pool_deleted": ("Pool deleted.", "Pool gelöscht."),
+    "notice.pool_saved": ("Pool saved.", "Pool gespeichert."),
+    "error.pool_exists": (
+        "A pool with this name already exists.",
+        "Ein Pool mit diesem Namen existiert bereits.",
+    ),
     "nav.logout": ("Sign out", "Abmelden"),
     "login.title": ("Sign in", "Anmelden"),
     "login.token": ("API token", "API-Token"),
@@ -56,10 +120,13 @@ TEXTS: dict[str, tuple[str, str]] = {
         "Gilt für den Host Agent, typischerweise sapadm.",
     ),
     "credentials.system_hint": (
-        "Used for the sapstartsrv of this system, typically <sid>adm. "
-        "Without them the credentials of the host apply.",
-        "Gilt für den sapstartsrv dieses Systems, typischerweise <sid>adm. "
-        "Ohne sie gelten die Zugangsdaten des Hosts.",
+        "Optional. Starts and stops run through the host agent with the credentials of the "
+        "host, and sapstartsrv is only read. Store credentials here, typically <sid>adm, only "
+        "if the sapstartsrv of this system rejects reading with those of the host.",
+        "Optional. Start und Stopp laufen über den Host Agent mit den Zugangsdaten des Hosts, "
+        "den sapstartsrv liest das Tool nur. Hinterlege hier Zugangsdaten, typischerweise "
+        "<sid>adm, nur wenn der sapstartsrv dieses Systems das Lesen mit denen des Hosts "
+        "ablehnt.",
     ),
     "field.name": ("Name", "Name"),
     "field.address": ("Address", "Adresse"),

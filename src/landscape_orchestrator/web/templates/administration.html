@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ t("nav.administration") }}{% endblock %}
+{% block content %}
+<h1>{{ t("nav.administration") }}</h1>
+<section class="card">
+  <p class="muted">{{ t("admin.planned") }}</p>
+  <dl>
+    <dt>{{ t("admin.version") }}</dt><dd class="mono">{{ version }}</dd>
+    <dt>{{ t("admin.database") }}</dt><dd class="mono">{{ database }}</dd>
+    <dt>{{ t("admin.session") }}</dt><dd>{{ t("admin.session_hours", hours=session_hours) }}</dd>
+  </dl>
+</section>
+{% endblock %}

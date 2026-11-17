@@ -51,11 +51,12 @@ Alles liegt unter `src/landscape_orchestrator/`.
 |---|---|
 | `soapxml.py` | SOAP-Envelopes bauen und lesen, gemeinsam für Clients und Mock |
 | `clients/` | asynchrone SOAP-Clients: `HostAgentClient` (SAPHostControl, Port 1128/1129), `SapControlClient` (sapstartsrv, Port 5NN13/5NN14), gemeinsame Fehlerklassen in `base.py` |
-| `models.py`, `db.py` | Datenmodell (SQLAlchemy, asynchron): Host, System, Instance, Database, Activity, ActivityLogEntry |
+| `models.py`, `db.py` | Datenmodell (SQLAlchemy, asynchron): Host, System, Pool, Instance, Database, Activity, ActivityLogEntry |
 | `crypto.py`, `settings.py` | Verschlüsselung gespeicherter Passwörter (Fernet), Konfiguration aus Umgebungsvariablen |
 | `connections.py` | baut Clients für Inventareinträge samt Zugangsdaten |
 | `discovery.py` | liest einen Host aus und aktualisiert das Inventar |
 | `dependencies.py` | Abhängigkeiten zwischen Systemen, Reihenfolge von Start und Stopp |
+| `pools.py` | Zuordnung von Systemen zu Pools |
 | `operations.py` | Start, Stopp, Neustart als Hintergrund-Aktivitäten (`OperationRunner`) |
 | `api/` | REST-API unter `/api`, geschützt durch ein Bearer-Token; `create_app` baut die Anwendung |
 | `web/` | servergerenderte Oberfläche (Jinja2), Sitzungs-Cookie, Übersetzungen |
@@ -81,6 +82,13 @@ Wichtige Entwurfsentscheidungen:
   bestehenden Tabellen nicht.
 - **Discovery löscht nichts**, sie meldet fehlende Einträge nur.
 - **Die Oberfläche lädt keine externen Dateien** und nutzt kein JavaScript-Framework.
+- **Aufbau der Oberfläche:** Übersicht (Kennzahlen), Landscape (beobachten und bedienen:
+  Systeme, Hosts), Activities (Aktivitäten, Protokolle), Configuration (einrichten: Hosts,
+  Systeme, Pools), Administration (Plattform-Einstellungen, noch weitgehend leer). Die
+  Menüpunkte außer „Übersicht“ heißen in beiden Sprachen englisch, wie vom Eigentümer
+  gewünscht.
+- **Pools** gruppieren zusammengehörige Systeme (z. B. Entwicklung, Test, Produktion eines
+  Produkts). Ein System gehört zu höchstens einem Pool (Tabelle `pool_systems`).
 - In `api/app.py` steht bewusst kein `from __future__ import annotations`: FastAPI löst die
   Typangaben der Routen zur Laufzeit auf, und sie verweisen auf lokale Namen.
 
@@ -154,3 +162,5 @@ Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 - Abhängigkeiten zwischen Systemen werden nicht automatisch erkannt
 - Protokollmeldungen der Aktivitäten sind nur englisch
 - kein Verschieben von Instanzen (Adaptive Computing)
+- Übersicht nur mit einfachen Kennzahlen; Diagramme und Diagnosenachrichten fehlen noch
+- Verbindungsdaten eines Hosts lassen sich nach dem Anlegen nicht ändern (nur Zugangsdaten)

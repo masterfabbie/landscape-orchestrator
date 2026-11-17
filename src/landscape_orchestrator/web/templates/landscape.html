@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}{{ t("nav.landscape") }}{% endblock %}
+{% block content %}
+<h1>{{ t("nav.landscape") }}</h1>
+{{ ui.tabs([("systems", "/landscape?tab=systems", t("tab.systems")), ("hosts", "/landscape?tab=hosts", t("tab.hosts"))], tab, t("nav.landscape")) }}
+
+{% if tab == "systems" %}
+  {% if pools %}
+  <nav class="chips" aria-label="{{ t('field.pool') }}">
+    <a href="/landscape?tab=systems" {% if not pool_filter %}aria-current="page"{% endif %}>{{ t("pool.all") }}</a>
+    {% for pool in pools %}<a href="/landscape?tab=systems&pool={{ pool.id }}" {% if pool_filter == pool.id | string %}aria-current="page"{% endif %}>{{ pool.name }}</a>{% endfor %}
+    <a href="/landscape?tab=systems&pool=none" {% if pool_filter == "none" %}aria-current="page"{% endif %}>{{ t("pool.none") }}</a>
+  </nav>
+  {% endif %}
+  <section class="card">
+  {% if systems %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>{{ t("field.system") }}</th><th>{{ t("field.pool") }}</th><th>{{ t("field.status") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("deps.depends_on") }}</th><th>{{ t("field.actions") }}</th></tr></thead>
+    <tbody>
+    {% for system in systems %}
+      <tr>
+        <td><a class="strong" href="/systems/{{ system.id }}">{{ system.sid }}</a></td>
+        <td>{{ system.pool.name if system.pool else "" }}</td>
+        <td>
+          {{ ui.status_badge(system_status(system), t) }}
+          {% if active.get(system.id) %}<a class="badge badge-running" href="/activities/{{ active[system.id].id }}">{{ t("overview.running") }}</a>{% endif %}
+        </td>
+        <td>{% for instance in system.instances %}<span class="mono" title="{{ instance_type(instance.features) }}">{{ instance.number }}</span>{% if not loop.last %} {% endif %}{% endfor %}</td>
+        <td>{% for dependency in system.depends_on %}<a class="mono" href="/systems/{{ dependency.id }}">{{ dependency.sid }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</td>
+        <td>{{ ui.operation_buttons("/systems/" ~ system.id, t, active.get(system.id)) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>{{ t("overview.empty") }} <a href="/configuration?tab=hosts">{{ t("hosts.add") }}</a></p>
+  {% endif %}
+  </section>
+{% else %}
+  <section class="card">
+  {% if hosts %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("field.address") }}</th><th>{{ t("field.os") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("field.reachable") }}</th><th>{{ t("field.last_discovery") }}</th></tr></thead>
+    <tbody>
+    {% for host in hosts %}
+      <tr>
+        <td><a class="strong" href="/hosts/{{ host.id }}">{{ host.name }}</a></td>
+        <td class="mono">{{ host.address }}</td>
+        <td>{{ host.os_name or "" }} {{ host.os_version or "" }}</td>
+        <td>{{ host.instances | length }}</td>
+        <td>{{ ui.reach_badge(host, t) }}</td>
+        <td class="muted">{{ host.last_discovery_at | time or t("hosts.never") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>{{ t("hosts.empty") }} <a href="/configuration?tab=hosts">{{ t("hosts.add") }}</a></p>
+  {% endif %}
+  </section>
+{% endif %}
+{% endblock %}

@@ -24,7 +24,7 @@ from ..crypto import SecretBox
 from ..db import create_engine, create_session_factory, create_tables
 from ..dependencies import DependencyError, set_dependencies
 from ..discovery import DiscoveryError, discover_host
-from ..models import Activity, Host, System
+from ..models import Activity, Host, Pool, System
 from ..operations import (
     DEFAULT_TIMEOUT_SECONDS,
     OperationConflictError,
@@ -32,6 +32,7 @@ from ..operations import (
     OperationRunner,
     TargetNotFoundError,
 )
+from ..pools import UnknownPoolError, assign_pool
 from ..settings import Settings
 from ..web import AppContext, register_web
 from .schemas import (
@@ -43,6 +44,9 @@ from .schemas import (
     HostCreate,
     HostDetail,
     HostOut,
+    PoolAssignment,
+    PoolCreate,
+    PoolOut,
     SystemOut,
 )
 
@@ -55,6 +59,7 @@ def _systems_query():
             selectinload(System.instances),
             selectinload(System.depends_on),
             selectinload(System.required_by),
+            selectinload(System.pool),
         )
     )
 
@@ -232,6 +237,45 @@ def create_app(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     OperationName = Literal["start", "stop", "restart"]
+    @api.get("/pools", response_model=list[PoolOut])
+    async def list_pools(session: Session) -> list[Pool]:
+        query = select(Pool).order_by(Pool.name).options(selectinload(Pool.systems))
+        return list(await session.scalars(query))
+
+    @api.post("/pools", response_model=PoolOut, status_code=status.HTTP_201_CREATED)
+    async def create_pool(body: PoolCreate, session: Session) -> Pool:
+        pool = Pool(name=body.name.strip(), description=body.description, systems=[])
+        session.add(pool)
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, f"Pool '{body.name}' already exists"
+            ) from exc
+        return pool
+
+    @api.delete("/pools/{pool_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_pool(pool_id: int, session: Session) -> Response:
+        pool = await session.get(Pool, pool_id)
+        if pool is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Pool not found")
+        await session.delete(pool)
+        await session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @api.put("/systems/{system_id}/pool", response_model=SystemOut)
+    async def set_system_pool(system_id: int, body: PoolAssignment, session: Session) -> System:
+        """Put a system into a pool; ``null`` takes it out."""
+        if await session.get(System, system_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "System not found")
+        try:
+            await assign_pool(session, system_id, body.pool_id)
+        except UnknownPoolError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        await session.commit()
+        session.expire_all()
+        return await session.scalar(_systems_query().where(System.id == system_id))
+
     Timeout = Annotated[
         int,
         Query(ge=10, le=7200, description="Seconds to wait for the target state"),

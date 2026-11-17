@@ -34,6 +34,14 @@ system_dependencies = Table(
     Column("depends_on_id", ForeignKey("systems.id", ondelete="CASCADE"), primary_key=True),
 )
 
+# A system belongs to at most one pool, hence system_id alone is the key.
+pool_systems = Table(
+    "pool_systems",
+    Base.metadata,
+    Column("system_id", ForeignKey("systems.id", ondelete="CASCADE"), primary_key=True),
+    Column("pool_id", ForeignKey("pools.id", ondelete="CASCADE"), nullable=False, index=True),
+)
+
 activity_systems = Table(
     "activity_systems",
     Base.metadata,
@@ -109,6 +117,9 @@ class System(Base):
         back_populates="required_by",
         order_by="System.sid",
     )
+    pool: Mapped[Pool | None] = relationship(
+        secondary=pool_systems, back_populates="systems", uselist=False
+    )
     required_by: Mapped[list[System]] = relationship(
         secondary=system_dependencies,
         primaryjoin=lambda: System.id == system_dependencies.c.depends_on_id,
@@ -122,12 +133,34 @@ class System(Base):
         return bool(self.username and self.password_encrypted)
 
     @property
+    def pool_id(self) -> int | None:
+        return self.pool.id if self.pool else None
+
+    @property
     def depends_on_ids(self) -> list[int]:
         return [system.id for system in self.depends_on]
 
     @property
     def required_by_ids(self) -> list[int]:
         return [system.id for system in self.required_by]
+
+
+class Pool(Base):
+    """Systems that belong together, e.g. development, test and production of one product."""
+
+    __tablename__ = "pools"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    description: Mapped[str | None] = mapped_column(Text)
+
+    systems: Mapped[list[System]] = relationship(
+        secondary=pool_systems, back_populates="pool", order_by="System.sid"
+    )
+
+    @property
+    def system_ids(self) -> list[int]:
+        return [system.id for system in self.systems]
 
 
 class Instance(Base):

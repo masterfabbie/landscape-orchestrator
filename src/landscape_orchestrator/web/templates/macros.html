@@ -58,3 +58,38 @@
   <div><button type="submit">{{ t("credentials.save") }}</button></div>
 </form>
 {% endmacro %}
+
+{% macro tabs(items, current, label) %}
+<nav class="tabs" aria-label="{{ label }}">
+  {% for key, href, text in items %}
+  <a href="{{ href }}" {% if key == current %}aria-current="page"{% endif %}>{{ text }}</a>
+  {% endfor %}
+</nav>
+{% endmacro %}
+
+{% macro reach_badge(host, t) %}
+{% if host.reachable is none %}<span class="badge badge-unknown">{{ t("unknown") }}</span>
+{% elif host.reachable %}<span class="badge badge-green">{{ t("yes") }}</span>
+{% else %}<span class="badge badge-red">{{ t("no") }}</span>{% endif %}
+{% endmacro %}
+
+{% macro database_table(databases, t, show_host=false) %}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>{{ t("field.database") }}</th><th>{{ t("field.type") }}</th><th>{{ t("field.instance") }}</th>{% if show_host %}<th>{{ t("field.host") }}</th>{% endif %}<th>{{ t("field.release") }}</th><th>{{ t("field.status") }}</th><th>{{ t("field.checked") }}</th></tr></thead>
+  <tbody>
+  {% for database in databases %}
+    <tr>
+      <td>{{ database.name }}</td>
+      <td class="mono">{{ database.type }}</td>
+      <td class="mono">{{ database.instance_name or "" }}</td>
+      {% if show_host %}<td><a href="/hosts/{{ database.host_id }}">{{ database.host.name }}</a></td>{% endif %}
+      <td class="mono">{{ database.release or "" }}</td>
+      <td>{{ status_badge(database.last_status, t) }}</td>
+      <td class="muted">{{ database.status_checked_at | time }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endmacro %}

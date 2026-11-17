@@ -2,60 +2,27 @@
 {% import "macros.html" as ui %}
 {% block title %}{{ system.sid }}{% endblock %}
 {% block content %}
+<p class="crumbs"><a href="/landscape">{{ t("nav.landscape") }}</a> / {{ t("tab.systems") }}</p>
 <div class="card-head">
   <h1>{{ t("field.system") }} {{ system.sid }}</h1>
+  {{ ui.status_badge(system_status(system), t) }}
   {% if active %}
     <a class="badge badge-running" href="/activities/{{ active.id }}">{{ t("overview.running") }}: {{ t("kind." ~ active.kind) }} {{ active.target_label }}</a>
   {% endif %}
   {{ ui.operation_buttons("/systems/" ~ system.id, t, active, system=true) }}
 </div>
 <section class="card">
+  <dl>
+    <dt>{{ t("field.pool") }}</dt><dd>{{ system.pool.name if system.pool else t("pool.none") }}</dd>
+    <dt>{{ t("deps.depends_on") }}</dt>
+    <dd>{% for dependency in system.depends_on %}<a class="mono" href="/systems/{{ dependency.id }}">{{ dependency.sid }}</a>{% if not loop.last %}, {% endif %}{% else %}{{ t("deps.none") }}{% endfor %}</dd>
+    <dt>{{ t("deps.required_by") }}</dt>
+    <dd>{% for other in system.required_by %}<a class="mono" href="/systems/{{ other.id }}">{{ other.sid }}</a>{% if not loop.last %}, {% endif %}{% else %}{{ t("deps.none") }}{% endfor %}</dd>
+  </dl>
+  <p><a href="/configuration/systems/{{ system.id }}">{{ t("action.configure") }}</a></p>
+</section>
+<section class="card">
   <h2>{{ t("field.instances") }}</h2>
   {{ ui.instance_table(system.instances, t, instance_type, disabled=active) }}
-</section>
-<section class="card">
-  <h2>{{ t("deps.title") }}</h2>
-  <p class="muted">{{ t("deps.explanation") }}</p>
-  <dl>
-    <dt>{{ t("deps.depends_on") }}</dt>
-    <dd>
-      {% if system.depends_on %}
-      <ul class="plain">
-        {% for dependency in system.depends_on %}
-        <li>
-          <a class="mono" href="/systems/{{ dependency.id }}">{{ dependency.sid }}</a>
-          <form class="inline" method="post" action="/systems/{{ system.id }}/dependencies/{{ dependency.id }}/delete">
-            <button type="submit" class="link">{{ t("deps.remove") }}</button>
-          </form>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}{{ t("deps.none") }}{% endif %}
-    </dd>
-    <dt>{{ t("deps.required_by") }}</dt>
-    <dd>
-      {% if system.required_by %}
-        {% for other in system.required_by %}<a class="mono" href="/systems/{{ other.id }}">{{ other.sid }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
-        <p class="muted">{{ t("deps.required_note") }}</p>
-      {% else %}{{ t("deps.none") }}{% endif %}
-    </dd>
-  </dl>
-  {% if candidates %}
-  <form method="post" action="/systems/{{ system.id }}/dependencies" class="row">
-    <label class="inline-label">{{ t("deps.add") }}
-      <select name="depends_on">
-        {% for candidate in candidates %}<option value="{{ candidate.id }}">{{ candidate.sid }}</option>{% endfor %}
-      </select>
-    </label>
-    <button type="submit">{{ t("deps.add") }}</button>
-  </form>
-  {% else %}
-  <p class="muted">{{ t("deps.no_candidates") }}</p>
-  {% endif %}
-</section>
-
-<section class="card">
-  <h2>{{ t("credentials.title") }}</h2>
-  {{ ui.credentials_form("/systems/" ~ system.id ~ "/credentials", system, t("credentials.system_hint"), t) }}
 </section>
 {% endblock %}

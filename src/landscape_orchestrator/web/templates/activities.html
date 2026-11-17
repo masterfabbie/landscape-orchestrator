@@ -3,29 +3,53 @@
 {% block title %}{{ t("nav.activities") }}{% endblock %}
 {% block content %}
 <h1>{{ t("nav.activities") }}</h1>
+{{ ui.tabs([("activities", "/activities?tab=activities", t("tab.activities")), ("logs", "/activities?tab=logs", t("tab.logs"))], tab, t("nav.activities")) }}
 <section class="card">
-{% if activities %}
-<div class="table-wrap">
-<table>
-  <thead>
-    <tr><th>#</th><th>{{ t("field.operation") }}</th><th>{{ t("field.target") }}</th><th>{{ t("field.status") }}</th><th>{{ t("field.requested") }}</th><th>{{ t("field.finished") }}</th></tr>
-  </thead>
-  <tbody>
-  {% for activity in activities %}
-    <tr>
-      <td><a href="/activities/{{ activity.id }}">{{ activity.id }}</a></td>
-      <td>{{ t("kind." ~ activity.kind) }}</td>
-      <td>{{ t("target." ~ activity.target_type) }} <span class="mono">{{ activity.target_label }}</span></td>
-      <td>{{ ui.status_badge(activity.status, t, "activity") }}</td>
-      <td class="muted">{{ activity.requested_at | time }}</td>
-      <td class="muted">{{ activity.finished_at | time }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-</div>
+{% if tab == "activities" %}
+  {% if activities %}
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>#</th><th>{{ t("field.operation") }}</th><th>{{ t("field.target") }}</th><th>{{ t("field.status") }}</th><th>{{ t("field.requested") }}</th><th>{{ t("field.finished") }}</th></tr>
+    </thead>
+    <tbody>
+    {% for activity in activities %}
+      <tr>
+        <td><a href="/activities/{{ activity.id }}">{{ activity.id }}</a></td>
+        <td>{{ t("kind." ~ activity.kind) }}</td>
+        <td>{{ t("target." ~ activity.target_type) }} <span class="mono">{{ activity.target_label }}</span></td>
+        <td>{{ ui.status_badge(activity.status, t, "activity") }}</td>
+        <td class="muted">{{ activity.requested_at | time }}</td>
+        <td class="muted">{{ activity.finished_at | time }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>{{ t("activities.empty") }}</p>
+  {% endif %}
 {% else %}
-<p>{{ t("activities.empty") }}</p>
+  {% if entries %}
+  <p class="muted">{{ t("logs.hint", limit=limit) }}</p>
+  <div class="table-wrap">
+  <table class="log">
+    <thead><tr><th>{{ t("field.time") }}</th><th>{{ t("activity.title") }}</th><th>{{ t("field.message") }}</th></tr></thead>
+    <tbody>
+    {% for entry in entries %}
+      <tr class="level-{{ entry.level | lower }}">
+        <td class="muted">{{ entry.timestamp | time }}</td>
+        <td><a href="/activities/{{ entry.activity_id }}">{{ entry.activity_id }}</a> <span class="mono">{{ entry.activity.target_label }}</span></td>
+        <td>{{ entry.message }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if language != "en" %}<p class="muted">{{ t("activity.log_language") }}</p>{% endif %}
+  {% else %}
+  <p>{{ t("logs.empty") }}</p>
+  {% endif %}
 {% endif %}
 </section>
 {% endblock %}
