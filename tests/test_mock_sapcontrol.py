@@ -14,6 +14,12 @@ def client(landscape) -> TestClient:
     return TestClient(create_sapcontrol_app(landscape, "sapapp1", 0))
 
 
+@pytest.fixture
+def system_client(single_sid_landscape) -> TestClient:
+    """sapstartsrv of D00 in a landscape where HANA belongs to DEV as well."""
+    return TestClient(create_sapcontrol_app(single_sid_landscape, "sapapp1", 0))
+
+
 def process_states(client: TestClient) -> list[tuple[str, str, str]]:
     status, result = soap_call(client, NS, "GetProcessList")
     assert status == 200
@@ -69,7 +75,8 @@ def test_malformed_request_returns_fault(client):
     assert b"Invalid SOAP request" in response.content
 
 
-def test_get_system_instance_list_covers_all_hosts(client):
+def test_get_system_instance_list_covers_all_hosts(system_client):
+    client = system_client
     _, result = soap_call(client, NS, "GetSystemInstanceList")
     instances = {
         item.findtext("hostname"): (
@@ -84,7 +91,8 @@ def test_get_system_instance_list_covers_all_hosts(client):
     assert len(result.find("instance")) == 3
 
 
-def test_start_system_and_stop_system(client, clock):
+def test_start_system_and_stop_system(system_client, clock):
+    client = system_client
     params = "<options>SAPControl-ALL-INSTANCES</options><waittimeout>300</waittimeout>"
     status, _ = soap_call(client, NS, "StartSystem", params, auth=AUTH)
     assert status == 200
@@ -107,3 +115,9 @@ def test_unsupported_start_option_returns_fault(client):
     status, fault = soap_call(client, NS, "StartSystem", params, auth=AUTH)
     assert status == 500
     assert "not supported" in fault.findtext("faultstring")
+
+
+def test_system_instance_list_contains_only_own_sid(client):
+    """With HANA under its own SID, the ABAP system lists only its own instances."""
+    _, result = soap_call(client, NS, "GetSystemInstanceList")
+    assert sorted(item.findtext("instanceNr") for item in result.find("instance")) == ["0", "1"]

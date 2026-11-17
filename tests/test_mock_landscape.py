@@ -50,7 +50,8 @@ def test_stop_and_restart(landscape, clock):
     assert instance.started_at(clock()) is None
 
 
-def test_start_system_follows_priority_order(landscape, clock):
+def test_start_system_follows_priority_order(single_sid_landscape, clock):
+    landscape = single_sid_landscape
     landscape.start_system("DEV")
     assert statuses(landscape) == {
         "HDB": Status.STARTING,
@@ -69,7 +70,8 @@ def test_start_system_follows_priority_order(landscape, clock):
     assert set(statuses(landscape).values()) == {Status.RUNNING}
 
 
-def test_stop_system_runs_in_reverse_order(landscape, clock):
+def test_stop_system_runs_in_reverse_order(single_sid_landscape, clock):
+    landscape = single_sid_landscape
     landscape.start_system("DEV")
     clock.advance(9)
 
@@ -87,7 +89,8 @@ def test_stop_system_runs_in_reverse_order(landscape, clock):
     }
 
 
-def test_start_system_can_be_limited_to_kinds(landscape, clock):
+def test_start_system_can_be_limited_to_kinds(single_sid_landscape, clock):
+    landscape = single_sid_landscape
     landscape.start_system("DEV", {"HDB"})
     clock.advance(10)
     assert statuses(landscape) == {

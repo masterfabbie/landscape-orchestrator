@@ -12,6 +12,9 @@
 <section class="card">
   <div class="card-head">
     <h2><a href="/systems/{{ system.id }}">{{ system.sid }}</a></h2>
+    {% if system.depends_on %}
+      <span class="muted">{{ t("deps.depends_on") }}: {% for dependency in system.depends_on %}<a class="mono" href="/systems/{{ dependency.id }}">{{ dependency.sid }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</span>
+    {% endif %}
     {% if active.get(system.id) %}
       <a class="badge badge-running" href="/activities/{{ active[system.id].id }}">{{ t("overview.running") }}: {{ t("kind." ~ active[system.id].kind) }} {{ active[system.id].target_label }}</a>
     {% endif %}

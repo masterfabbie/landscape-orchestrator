@@ -2,8 +2,10 @@
 
 Single instances are controlled through the host agent, which also works while the
 sapstartsrv of the instance is down. Whole systems are controlled through StartSystem and
-StopSystem of sapstartsrv, which already handles the order by start priority. Progress is
-read from sapstartsrv until the target state is reached or the timeout expires.
+StopSystem of sapstartsrv, which already handles the order by start priority within one
+system. Systems the target depends on (see :mod:`dependencies`) are started before it and
+stopped after it. Progress is read from sapstartsrv until the target state is reached or
+the timeout expires.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -23,8 +25,17 @@ from .clients import SoapConnectionError, SoapError
 from .clients.sapcontrol import StateColor, SystemInstance
 from .connections import ClientFactory
 from .crypto import SecretError
+from .dependencies import SystemPlan, load_graph, plan
 from .discovery import instance_status
-from .models import STATUS_UNKNOWN, Activity, ActivityLogEntry, Database, Instance, System
+from .models import (
+    STATUS_UNKNOWN,
+    Activity,
+    ActivityLogEntry,
+    Database,
+    Instance,
+    System,
+    activity_systems,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +129,7 @@ class OperationRunner:
             instance.system_id,
             instance.id,
             timeout_seconds,
+            {instance.system_id},
         )
 
     async def submit_system(
@@ -130,9 +142,23 @@ class OperationRunner:
         system = await session.get(System, system_id)
         if system is None:
             raise TargetNotFoundError("System not found")
+        system_plan = await self._plan(session, system.id)
         return await self._submit(
-            session, kind, TargetType.SYSTEM, system.sid, system.id, None, timeout_seconds
+            session,
+            kind,
+            TargetType.SYSTEM,
+            system.sid,
+            system.id,
+            None,
+            timeout_seconds,
+            system_plan.involved,
         )
+
+    @staticmethod
+    async def _plan(session: AsyncSession, root: int) -> SystemPlan:
+        sids = dict((await session.execute(select(System.id, System.sid))).all())
+        graph = await load_graph(session)
+        return plan(root, graph, key=lambda system_id: sids.get(system_id, ""))
 
     async def _submit(
         self,
@@ -143,14 +169,23 @@ class OperationRunner:
         system_id: int,
         instance_id: int | None,
         timeout_seconds: int,
+        involved: set[int],
     ) -> Activity:
         # One activity per system at a time: operations on a system and on its instances
-        # would otherwise work against each other.
+        # would otherwise work against each other. A system operation also covers the
+        # systems it depends on.
         async with self._submit_lock:
             active = await session.scalar(
-                select(Activity).where(
-                    Activity.system_id == system_id, Activity.status.in_(ACTIVE_STATUSES)
+                select(Activity)
+                .outerjoin(activity_systems)
+                .where(
+                    Activity.status.in_(ACTIVE_STATUSES),
+                    or_(
+                        activity_systems.c.system_id.in_(involved),
+                        Activity.system_id.in_(involved),
+                    ),
                 )
+                .limit(1)
             )
             if active is not None:
                 raise OperationConflictError(
@@ -165,6 +200,9 @@ class OperationRunner:
                 status=ActivityStatus.PENDING,
                 timeout_seconds=timeout_seconds,
                 requested_at=_now(),
+            )
+            activity.systems = list(
+                await session.scalars(select(System).where(System.id.in_(involved)))
             )
             session.add(activity)
             await session.commit()
@@ -242,7 +280,12 @@ class OperationRunner:
         if activity.instance_id is not None:
             query = query.where(Instance.id == activity.instance_id)
         else:
-            query = query.where(Instance.system_id == activity.system_id)
+            involved = select(activity_systems.c.system_id).where(
+                activity_systems.c.activity_id == activity.id
+            )
+            query = query.where(
+                or_(Instance.system_id == activity.system_id, Instance.system_id.in_(involved))
+            )
         hosts = {instance.host.id: instance.host for instance in await session.scalars(query)}
         now = _now()
         for host in hosts.values():
@@ -305,18 +348,58 @@ class OperationRunner:
             for start in phases:
                 await self._instance_phase(session, activity, instance, start)
         else:
-            instances = list(
-                await session.scalars(
-                    select(Instance)
-                    .where(Instance.system_id == activity.system_id)
-                    .options(selectinload(Instance.host), selectinload(Instance.system))
-                )
+            if activity.system_id is None:
+                raise OperationFailedError("The system no longer exists")
+            system_plan = await self._plan(session, activity.system_id)
+            instances_by_system = await self._instances_by_system(session, system_plan.involved)
+            sids = dict(
+                (
+                    await session.execute(
+                        select(System.id, System.sid).where(System.id.in_(system_plan.involved))
+                    )
+                ).all()
             )
-            if not instances:
-                raise OperationFailedError("The system has no instances in the inventory")
-            instances.sort(key=_priority)
             for start in phases:
-                await self._system_phase(session, activity, instances, start)
+                order = system_plan.start if start else system_plan.stop
+                if len(system_plan.involved) > 1:
+                    await self._log(
+                        session,
+                        activity,
+                        f"{'Start' if start else 'Stop'} order including dependencies: "
+                        + ", ".join(sids.get(s, f"#{s}") for s in order),
+                    )
+                if not start:
+                    for kept, needed_by in sorted(system_plan.kept_running.items()):
+                        await self._log(
+                            session,
+                            activity,
+                            f"System {sids.get(kept, kept)} keeps running: also required by "
+                            + ", ".join(sorted(sids.get(s, f"#{s}") for s in needed_by)),
+                        )
+                for system_id in order:
+                    instances = instances_by_system.get(system_id, [])
+                    if not instances:
+                        raise OperationFailedError(
+                            f"System {sids.get(system_id, f'#{system_id}')} has no instances "
+                            "in the inventory"
+                        )
+                    await self._system_phase(session, activity, instances, start)
+
+    @staticmethod
+    async def _instances_by_system(
+        session: AsyncSession, system_ids: set[int]
+    ) -> dict[int, list[Instance]]:
+        rows = await session.scalars(
+            select(Instance)
+            .where(Instance.system_id.in_(system_ids))
+            .options(selectinload(Instance.host), selectinload(Instance.system))
+        )
+        grouped: dict[int, list[Instance]] = {system_id: [] for system_id in system_ids}
+        for instance in rows:
+            grouped[instance.system_id].append(instance)
+        for instances in grouped.values():
+            instances.sort(key=_priority)
+        return grouped
 
     def _deadline_reached(self, deadline: float) -> bool:
         return self._clock() >= deadline
@@ -372,6 +455,7 @@ class OperationRunner:
         verb = "Start" if start else "Stop"
         target = StateColor.GREEN if start else StateColor.GRAY
         timeout = activity.timeout_seconds
+        sid = instances[0].system.sid
 
         for instance in instances:
             try:
@@ -387,12 +471,12 @@ class OperationRunner:
             await self._log(
                 session,
                 activity,
-                f"{verb} of system {activity.target_label} requested via sapstartsrv of "
+                f"{verb} of system {sid} requested via sapstartsrv of "
                 f"instance {instance.number} on {instance.host.name}",
             )
             break
         else:
-            raise OperationFailedError("No sapstartsrv of the system could be reached")
+            raise OperationFailedError(f"No sapstartsrv of system {sid} could be reached")
 
         deadline = self._clock() + timeout
         last: str | None = None
@@ -406,12 +490,12 @@ class OperationRunner:
             if summary != last:
                 last = summary
                 self._store_states(instances, states)
-                await self._log(session, activity, f"System status: {summary}")
+                await self._log(session, activity, f"System {sid} status: {summary}")
             if states and all(state.dispstatus is target for state in states):
                 return
             if self._deadline_reached(deadline):
                 raise OperationFailedError(
-                    f"Timeout after {timeout} s: system is {summary}, "
+                    f"Timeout after {timeout} s: system {sid} is {summary}, "
                     f"expected all {target.name}"
                 )
             await self._sleep(self._poll_interval)

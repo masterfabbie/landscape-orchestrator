@@ -86,17 +86,17 @@ def test_databases_on_database_host(landscape, clock):
     assert len(result.find("result")) == 2
     database = result.find("result")[1]
     properties = {p.findtext("mKey"): p.findtext("mValue") for p in database.find("mDatabase")}
-    assert properties["Database/Name"] == "DEV@DEV"
+    assert properties["Database/Name"] == "HDV@HDV"
     assert properties["Database/Type"] == "hdb"
     assert properties["Database/InstanceName"] == "HDB02"
     assert properties["Database/Host"] == "sapdb1"
     assert database.findtext("mStatus") == "SAPHostControl-DB-STOPPED"
     assert len(database.find("mComponents")) == 3
 
-    hdb = "<aInstance><mSid>DEV</mSid><mSystemNumber>02</mSystemNumber></aInstance>"
+    hdb = "<aInstance><mSid>HDV</mSid><mSystemNumber>02</mSystemNumber></aInstance>"
     soap_call(client, NS, "StartInstance", hdb, auth=AUTH)
     arguments = (
-        "<aArguments><item><mKey>Database/Name</mKey><mValue>DEV@DEV</mValue></item>"
+        "<aArguments><item><mKey>Database/Name</mKey><mValue>HDV@HDV</mValue></item>"
         "</aArguments>"
     )
     _, result = soap_call(client, NS, "GetDatabaseStatus", arguments)

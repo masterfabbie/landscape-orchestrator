@@ -269,8 +269,9 @@ class MockLandscape:
 
 
 def default_landscape_config() -> dict[str, Any]:
-    """Sample landscape: system DEV with ASCS and a dialog instance, plus a HANA host.
+    """Sample landscape: ABAP system DEV on sapapp1, HANA system HDV on sapdb1.
 
+    As in real landscapes, the HANA database has its own SID; DEV uses it as database.
     The HANA instance reports its system database and one tenant, like a real
     multi-tenant system.
     """
@@ -290,10 +291,10 @@ def default_landscape_config() -> dict[str, Any]:
             {
                 "name": "sapdb1",
                 "port_offset": 10000,
-                "instances": [{"sid": "DEV", "nr": 2, "kind": "HDB", "running": True}],
+                "instances": [{"sid": "HDV", "nr": 2, "kind": "HDB", "running": True}],
                 "databases": [
-                    {"name": "SYSTEMDB@DEV", "type": "hdb", "instance_nr": 2},
-                    {"name": "DEV@DEV", "type": "hdb", "instance_nr": 2},
+                    {"name": "SYSTEMDB@HDV", "type": "hdb", "instance_nr": 2},
+                    {"name": "HDV@HDV", "type": "hdb", "instance_nr": 2},
                 ],
             },
         ],

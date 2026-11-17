@@ -15,23 +15,36 @@ Dies ist ein unabhängiges Projekt und kein SAP-Produkt.
 | SOAP-Clients für Host Agent und sapstartsrv | vorhanden; Host-Agent-Teil gegen echte Hosts bestätigt |
 | Inventar (Hosts, Systeme, Instanzen, Datenbanken) mit Discovery und REST-API | vorhanden; Discovery von Hosts ohne Instanzen gegen echte Hosts bestätigt |
 | Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | vorhanden, bisher nur gegen den Mock getestet |
+| Abhängigkeiten zwischen Systemen | vorhanden, bisher nur gegen den Mock getestet |
 | Web-Oberfläche (Deutsch und Englisch) | vorhanden |
 
 ### Teststand gegen echte Hosts
 
-Bestätigt mit zwei echten SAP Host Agents ohne installierte SAP-Instanz:
+Bestätigt mit zwei echten SAP Host Agents ohne SAP-Instanz:
 
 - Verbindung zum Endpunkt `/SAPHostControl.cgi` und Anmeldung mit HTTP Basic Auth
 - `GetComputerSystem`: Betriebssystem, CPUs und Arbeitsspeicher werden gefunden
 - `ListInstances` und `ListDatabases`: leere Listen werden sauber verarbeitet
 
-Noch nicht gegen echte Hosts getestet, weil dafür eine SAP-Instanz nötig ist:
+Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenbank laufen
+(Discovery, nur mit `sapadm` als Zugangsdaten):
 
-- alle Aufrufe am sapstartsrv (`GetProcessList`, `GetSystemInstanceList`, `StartSystem`,
-  `StopSystem`)
+- `ListInstances` findet alle Instanzen mit korrekten Instanznummern
+- **Lesende Aufrufe am sapstartsrv** (`GetProcessList`, `GetSystemInstanceList`) funktionieren
+  mit den Zugangsdaten von `sapadm`; Instanztyp, Startpriorität und Status werden erkannt
+- `ListDatabases`: SystemDB und Tenant erscheinen einzeln; die Properties
+  `Database/InstanceName` und `Database/Release` sind gefüllt
+- Der Datenbankstatus `SAPHostControl-DB-WARNING` kommt in der Praxis vor
+- Die HANA-Datenbank hat in der echten Landschaft eine **eigene SID**. Deshalb gibt es die
+  Abhängigkeiten zwischen Systemen (siehe „Operationen und Aktivitäten“).
+
+Noch nicht gegen echte Hosts getestet:
+
 - Start und Stopp über den Host Agent, einschließlich des Flags `O-INSTANCE`
-- Datenbanken mit ihren Komponenten
+- `StartSystem` und `StopSystem` sowie die Frage, ob dafür `sapadm` reicht oder `<sid>adm`
+  nötig ist
 - ob ein gestopptes System alle Prozesse grau meldet
+- Abhängigkeiten zwischen Systemen
 - HTTPS
 
 Nicht Teil der ersten Version: Verschieben von Instanzen (Adaptive Computing),
@@ -132,7 +145,8 @@ keine Inventardaten.
 | PUT | `/api/hosts/{id}/credentials` | Zugangsdaten des Hosts setzen |
 | DELETE | `/api/hosts/{id}` | Host samt Instanzen und Datenbanken löschen |
 | POST | `/api/hosts/{id}/discover` | Host auslesen und Inventar aktualisieren |
-| GET | `/api/systems` | Systeme mit ihren Instanzen über alle Hosts |
+| GET | `/api/systems` | Systeme mit ihren Instanzen und Abhängigkeiten über alle Hosts |
+| PUT | `/api/systems/{id}/dependencies` | Abhängigkeiten eines Systems setzen (`{"depends_on": [ids]}`) |
 | PUT | `/api/systems/{id}/credentials` | Zugangsdaten für den sapstartsrv eines Systems setzen |
 | POST | `/api/instances/{id}/start`, `/stop`, `/restart` | Operation für eine Instanz anstoßen |
 | POST | `/api/systems/{id}/start`, `/stop`, `/restart` | Operation für ein ganzes System anstoßen |
@@ -171,8 +185,9 @@ Einschränkungen:
 - Die API kennt nur ein gemeinsames Token, keine Benutzer und Rollen.
 - Der Server selbst spricht nur HTTP. Für den Zugriff über ein Netzwerk gehört ein
   Reverse-Proxy mit TLS davor.
-- Das Datenbankschema wird beim Start angelegt. Schemaänderungen an einer bestehenden
-  Datenbank (Migrationen) sind noch nicht vorgesehen.
+- Das Datenbankschema wird beim Start angelegt. Neue Funktionen nutzen bisher nur neue
+  Tabellen, die beim Start einer bestehenden Datenbank hinzugefügt werden. Änderungen an
+  bestehenden Tabellen (Migrationen) sind noch nicht vorgesehen.
 - Jede SID gibt es nur einmal. Zwei Systeme mit gleicher SID lassen sich nicht unterscheiden.
 
 ## Operationen und Aktivitäten
@@ -191,13 +206,25 @@ curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/
 
 - **Reihenfolge im System:** Der sapstartsrv startet nach Startpriorität (Datenbank, zentrale
   Dienste, Anwendungsserver) und stoppt umgekehrt. Angesprochen wird der erste erreichbare
-  sapstartsrv des Systems.
+  sapstartsrv des Systems. Das betrifft nur Instanzen derselben SID.
+- **Abhängigkeiten zwischen Systemen:** Hat die Datenbank eine eigene SID, wie in echten
+  Landschaften üblich, legt man auf der Seite des ABAP-Systems fest, dass es vom
+  Datenbanksystem abhängt (oder per API: `PUT /api/systems/{id}/dependencies` mit
+  `{"depends_on": [<id>]}`).
+  - **Start:** erst die Abhängigkeiten, jeweils bis alle Instanzen grün sind, dann das System.
+  - **Stopp:** erst das System, dann seine Abhängigkeiten. Eine Abhängigkeit, die ein
+    anderes System noch benötigt, bleibt laufen; das Protokoll vermerkt das.
+  - **Stopp eines Datenbanksystems** stoppt die Systeme nicht, die es benötigen. Die sollte
+    man vorher stoppen.
+  - Abhängigkeiten können verkettet sein. Kreise werden abgelehnt.
+  - Eine Aktivität sperrt alle beteiligten Systeme; weitere Operationen darauf werden mit
+    HTTP 409 abgelehnt.
 - **Neustart** ist Stopp und danach Start. Jede der beiden Phasen hat das volle Zeitlimit.
 - **Zeitlimit:** Standard 600 Sekunden, einstellbar mit `?timeout=` (10 bis 7200). Wird der
   Zielzustand nicht erreicht, endet die Aktivität mit `FAILED`. Die Operation auf dem Host
   läuft dabei weiter; abgebrochen wird nur das Warten.
-- **Eine Aktivität pro System:** Solange eine Aktivität für ein System oder eine seiner
-  Instanzen läuft, werden weitere mit HTTP 409 abgelehnt.
+- **Eine Aktivität pro System:** Solange eine Aktivität für ein System, eine seiner
+  Instanzen oder ein System läuft, das davon abhängt, werden weitere mit HTTP 409 abgelehnt.
 - **Status der Aktivität:** `PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`. Das Protokoll hält
   jede Statusänderung fest, und der Status im Inventar wird dabei aktualisiert.
 - **Datenbanken:** Am Ende jeder Aktivität wird der Status der Datenbanken auf den
@@ -209,7 +236,7 @@ curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/
 Einschränkungen:
 
 - Laufende Aktivitäten lassen sich noch nicht abbrechen.
-- Abhängigkeiten zwischen verschiedenen Systemen werden nicht berücksichtigt.
+- Abhängigkeiten werden nicht automatisch erkannt, sondern von Hand gepflegt.
 - Operationen für Datenbanken ohne SAP-Instanz (`StartDatabase` / `StopDatabase`) fehlen noch.
   Eine HANA-Datenbank wird über ihre Instanz gestartet und gestoppt.
 
@@ -268,7 +295,8 @@ sapstartsrv-Endpunkt.
 .venv/bin/lo-mock
 ```
 
-Die Standardlandschaft enthält das System `DEV`:
+Die Standardlandschaft enthält das ABAP-System `DEV` und, wie in echten Landschaften, ein
+eigenes HANA-System `HDV`:
 
 | Host | Endpunkt | Port |
 |---|---|---|
@@ -276,10 +304,10 @@ Die Standardlandschaft enthält das System `DEV`:
 | `sapapp1` | ASCS01 | 50113 |
 | `sapapp1` | Dialoginstanz D00 | 50013 |
 | `sapdb1` | Host Agent | 11128 |
-| `sapdb1` | HANA-Instanz 02 | 60213 |
+| `sapdb1` | HANA-Instanz 02 (System `HDV`) | 60213 |
 
-Die HANA-Instanz meldet wie ein echtes Multi-Tenant-System zwei Datenbanken: `SYSTEMDB@DEV`
-und `DEV@DEV`.
+Die HANA-Instanz meldet wie ein echtes Multi-Tenant-System zwei Datenbanken: `SYSTEMDB@HDV`
+und `HDV@HDV`. Eine Abhängigkeit von `DEV` auf `HDV` ist nicht voreingestellt.
 
 Alle Endpunkte lauschen auf `127.0.0.1`. Weil die Mock-Hosts auf demselben Rechner laufen,
 verschiebt `port_offset` die Ports des zweiten Hosts um 10000. Benutzer für geschützte
@@ -331,7 +359,7 @@ Verhalten:
   eines sapstartsrv abgeglichen.
 - Inhalte, die die WSDLs offenlassen, orientieren sich an echten `saphostctrl`-Ausgaben: die
   CIM-Klassen von `GetComputerSystem` und die Datenbank-Komponenten. Annahmen bleiben die
-  genaue Verschachtelung der CIM-Klassen sowie die Property-Schlüssel für Vendor und Release.
+  genaue Verschachtelung der CIM-Klassen sowie der Property-Schlüssel für den Vendor.
 - Die rohen Antworten echter Hosts sind noch nicht mit denen des Mocks verglichen. Der Client
   findet die Betriebssystemdaten echter Hosts; er sucht die Klassen aber in jeder
   Verschachtelungstiefe, die Struktur selbst ist damit nicht belegt.

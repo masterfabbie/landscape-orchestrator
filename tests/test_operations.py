@@ -73,13 +73,26 @@ async def api(app, settings):
 
 
 async def instance_id(api: httpx.AsyncClient, number: str) -> int:
-    (system,) = (await api.get("/api/systems")).json()
-    return next(i["id"] for i in system["instances"] if i["number"] == number)
+    systems = (await api.get("/api/systems")).json()
+    return next(i["id"] for s in systems for i in s["instances"] if i["number"] == number)
+
+
+async def system_id(api: httpx.AsyncClient, sid: str) -> int:
+    return next(s["id"] for s in (await api.get("/api/systems")).json() if s["sid"] == sid)
 
 
 async def statuses(api: httpx.AsyncClient) -> dict[str, str]:
-    (system,) = (await api.get("/api/systems")).json()
-    return {i["number"]: i["last_status"] for i in system["instances"]}
+    """Instance number -> stored status; 00 and 01 belong to DEV, 02 to HDV."""
+    systems = (await api.get("/api/systems")).json()
+    return {i["number"]: i["last_status"] for s in systems for i in s["instances"]}
+
+
+async def depend(api: httpx.AsyncClient, sid: str, *on: str) -> None:
+    ids = [await system_id(api, other) for other in on]
+    response = await api.put(
+        f"/api/systems/{await system_id(api, sid)}/dependencies", json={"depends_on": ids}
+    )
+    assert response.status_code == 200, response.text
 
 
 async def run(app, api: httpx.AsyncClient, path: str) -> dict:
@@ -138,37 +151,120 @@ async def test_stop_and_restart_instance(app, api, landscape, clock):
     assert (await statuses(api))["00"] == "GRAY"
 
 
-async def test_start_and_stop_system(app, api):
-    (system,) = (await api.get("/api/systems")).json()
+async def test_start_and_stop_system_without_dependencies(app, api):
+    dev = await system_id(api, "DEV")
 
-    start = await run(app, api, f"/api/systems/{system['id']}/start")
+    start = await run(app, api, f"/api/systems/{dev}/start")
     assert start["status"] == "SUCCEEDED"
     assert start["target_label"] == "DEV"
-    log = messages(start)
-    assert log[0] == (
-        "Start of system DEV requested via sapstartsrv of instance 02 on sapdb1"
-    )
-    # HANA first, then central services, then the dialog instance.
-    assert "System status: 00:GRAY 01:GRAY 02:YELLOW" in log
-    assert "System status: 00:GRAY 01:YELLOW 02:GREEN" in log
-    assert log[-2:] == ["System status: 00:GREEN 01:GREEN 02:GREEN", "Finished successfully"]
+    # Central services first, then the dialog instance. The HANA system is not touched.
+    assert messages(start) == [
+        "Start of system DEV requested via sapstartsrv of instance 01 on sapapp1",
+        "System DEV status: 00:GRAY 01:YELLOW",
+        "System DEV status: 00:YELLOW 01:GREEN",
+        "System DEV status: 00:GREEN 01:GREEN",
+        "Finished successfully",
+    ]
+    assert await statuses(api) == {"00": "GREEN", "01": "GREEN", "02": "GRAY"}
+
+    stop = await run(app, api, f"/api/systems/{dev}/stop")
+    assert stop["status"] == "SUCCEEDED"
+    assert await statuses(api) == {"00": "GRAY", "01": "GRAY", "02": "GRAY"}
+
+
+async def test_start_system_starts_dependencies_first(app, api):
+    await depend(api, "DEV", "HDV")
+
+    start = await run(app, api, f"/api/systems/{await system_id(api, 'DEV')}/start")
+
+    assert start["status"] == "SUCCEEDED"
+    assert messages(start) == [
+        "Start order including dependencies: HDV, DEV",
+        "Start of system HDV requested via sapstartsrv of instance 02 on sapdb1",
+        "System HDV status: 02:YELLOW",
+        "System HDV status: 02:GREEN",
+        "Start of system DEV requested via sapstartsrv of instance 01 on sapapp1",
+        "System DEV status: 00:GRAY 01:YELLOW",
+        "System DEV status: 00:YELLOW 01:GREEN",
+        "System DEV status: 00:GREEN 01:GREEN",
+        "Finished successfully",
+    ]
     assert set((await statuses(api)).values()) == {"GREEN"}
 
-    stop = await run(app, api, f"/api/systems/{system['id']}/stop")
+
+async def test_stop_system_stops_dependencies_afterwards(app, api):
+    await depend(api, "DEV", "HDV")
+    dev = await system_id(api, "DEV")
+    await run(app, api, f"/api/systems/{dev}/start")
+
+    stop = await run(app, api, f"/api/systems/{dev}/stop")
+
     assert stop["status"] == "SUCCEEDED"
+    log = messages(stop)
+    assert log[0] == "Stop order including dependencies: DEV, HDV"
+    stop_dev = log.index("Stop of system DEV requested via sapstartsrv of instance 01 on sapapp1")
+    stop_hdv = log.index("Stop of system HDV requested via sapstartsrv of instance 02 on sapdb1")
+    assert stop_dev < log.index("System DEV status: 00:GRAY 01:GRAY") < stop_hdv
     assert set((await statuses(api)).values()) == {"GRAY"}
 
 
-async def test_restart_system(app, api):
-    (system,) = (await api.get("/api/systems")).json()
-    await run(app, api, f"/api/systems/{system['id']}/start")
+async def test_restart_system_with_dependency(app, api):
+    await depend(api, "DEV", "HDV")
+    dev = await system_id(api, "DEV")
+    await run(app, api, f"/api/systems/{dev}/start")
 
-    restart = await run(app, api, f"/api/systems/{system['id']}/restart")
+    restart = await run(app, api, f"/api/systems/{dev}/restart")
 
     assert restart["status"] == "SUCCEEDED"
-    log = messages(restart)
-    assert "System status: 00:GRAY 01:GRAY 02:GRAY" in log
-    assert log[-2] == "System status: 00:GREEN 01:GREEN 02:GREEN"
+    orders = [m for m in messages(restart) if " order including " in m]
+    assert orders == [
+        "Stop order including dependencies: DEV, HDV",
+        "Start order including dependencies: HDV, DEV",
+    ]
+    requests = [m.split(" requested")[0] for m in messages(restart) if " requested " in m]
+    assert requests == [
+        "Stop of system DEV",
+        "Stop of system HDV",
+        "Start of system HDV",
+        "Start of system DEV",
+    ]
+    assert set((await statuses(api)).values()) == {"GREEN"}
+
+
+async def test_stopping_a_dependency_leaves_dependent_systems_alone(app, api):
+    await depend(api, "DEV", "HDV")
+    await run(app, api, f"/api/systems/{await system_id(api, 'DEV')}/start")
+
+    stop = await run(app, api, f"/api/systems/{await system_id(api, 'HDV')}/stop")
+
+    assert stop["status"] == "SUCCEEDED"
+    assert await statuses(api) == {"00": "GREEN", "01": "GREEN", "02": "GRAY"}
+
+
+async def test_dependency_without_instances_fails(app, api):
+    await depend(api, "DEV", "HDV")
+    assert (await api.delete("/api/hosts/2")).status_code == 204  # HDV loses its instance
+
+    activity = await run(app, api, f"/api/systems/{await system_id(api, 'DEV')}/start")
+
+    assert activity["status"] == "FAILED"
+    assert activity["error"] == "System HDV has no instances in the inventory"
+    assert (await statuses(api))["00"] == "GRAY"
+
+
+async def test_dependency_blocks_concurrent_activities(app, api):
+    await depend(api, "DEV", "HDV")
+    first = await api.post(f"/api/systems/{await system_id(api, 'DEV')}/start")
+    assert first.status_code == 202
+
+    # The HANA instance belongs to HDV, which the running DEV start covers as well.
+    second = await api.post(f"/api/instances/{await instance_id(api, '02')}/stop")
+    assert second.status_code == 409
+    assert "START DEV" in second.json()["detail"]
+
+    await app.state.runner.wait(first.json()["id"])
+    activity = (await api.get(f"/api/activities/{first.json()['id']}")).json()
+    assert activity["status"] == "SUCCEEDED"
 
 
 async def test_timeout_fails_the_activity(app, api, landscape):
@@ -205,40 +301,42 @@ async def test_unreachable_sapstartsrv_during_instance_start(app, api, transport
 
 
 async def test_system_operation_uses_another_sapstartsrv_if_one_is_down(app, api, transport):
-    transport.remove_port(60213)  # sapstartsrv of the HANA instance
-    (system,) = (await api.get("/api/systems")).json()
+    transport.remove_port(50113)  # sapstartsrv of the central services instance
 
-    activity = await run(app, api, f"/api/systems/{system['id']}/start")
+    activity = await run(app, api, f"/api/systems/{await system_id(api, 'DEV')}/start")
 
     assert activity["status"] == "SUCCEEDED"
-    assert "via sapstartsrv of instance 01 on sapapp1" in messages(activity)[0]
+    assert "via sapstartsrv of instance 00 on sapapp1" in messages(activity)[0]
 
 
 async def test_system_without_reachable_sapstartsrv_fails(app, api, transport):
-    for port in (50013, 50113, 60213):
+    for port in (50013, 50113):
         transport.remove_port(port)
-    (system,) = (await api.get("/api/systems")).json()
 
-    activity = await run(app, api, f"/api/systems/{system['id']}/start")
+    activity = await run(app, api, f"/api/systems/{await system_id(api, 'DEV')}/start")
 
     assert activity["status"] == "FAILED"
-    assert activity["error"] == "No sapstartsrv of the system could be reached"
+    assert activity["error"] == "No sapstartsrv of system DEV could be reached"
 
 
 async def test_only_one_activity_per_system(app, api):
     dialog = await instance_id(api, "00")
-    (system,) = (await api.get("/api/systems")).json()
+    dev = await system_id(api, "DEV")
 
     first = await api.post(f"/api/instances/{dialog}/start")
     assert first.status_code == 202
-    second = await api.post(f"/api/systems/{system['id']}/stop")
+    second = await api.post(f"/api/systems/{dev}/stop")
     assert second.status_code == 409
     assert "START DEV/00" in second.json()["detail"]
+    # Another system is not blocked.
+    other = await api.post(f"/api/systems/{await system_id(api, 'HDV')}/start")
+    assert other.status_code == 202
 
     await app.state.runner.wait(first.json()["id"])
-    third = await api.post(f"/api/systems/{system['id']}/stop")
+    third = await api.post(f"/api/systems/{dev}/stop")
     assert third.status_code == 202
     await app.state.runner.wait(third.json()["id"])
+    await app.state.runner.wait(other.json()["id"])
 
 
 async def test_activity_list_is_newest_first(app, api):
@@ -304,10 +402,9 @@ async def test_database_status_follows_operations(app, api):
         host = (await api.get("/api/hosts/2")).json()
         return {database["last_status"] for database in host["databases"]}
 
-    (system,) = (await api.get("/api/systems")).json()
     assert await database_statuses() == {"STOPPED"}
 
-    await run(app, api, f"/api/systems/{system['id']}/start")
+    await run(app, api, f"/api/systems/{await system_id(api, 'HDV')}/start")
     assert await database_statuses() == {"RUNNING"}
 
     hana = await instance_id(api, "02")

@@ -111,18 +111,20 @@ async def test_discover_fills_inventory(api):
     assert detail["databases"] == []
 
 
-async def test_systems_span_hosts(api):
+async def test_systems_from_two_hosts(api):
     for body in (APP_HOST, DB_HOST):
         host = await create_host(api, body)
         assert (await api.post(f"/api/hosts/{host['id']}/discover")).status_code == 200
 
-    (system,) = (await api.get("/api/systems")).json()
-    assert system["sid"] == "DEV"
-    assert system["has_credentials"] is False
-    assert [i["number"] for i in system["instances"]] == ["00", "01", "02"]
+    dev, hdv = (await api.get("/api/systems")).json()
+    assert (dev["sid"], hdv["sid"]) == ("DEV", "HDV")
+    assert dev["has_credentials"] is False
+    assert [i["number"] for i in dev["instances"]] == ["00", "01"]
+    assert [i["number"] for i in hdv["instances"]] == ["02"]
+    assert dev["depends_on_ids"] == [] and hdv["required_by_ids"] == []
 
     db_detail = (await api.get("/api/hosts/2")).json()
-    assert [d["name"] for d in db_detail["databases"]] == ["DEV@DEV", "SYSTEMDB@DEV"]
+    assert [d["name"] for d in db_detail["databases"]] == ["HDV@HDV", "SYSTEMDB@HDV"]
 
 
 async def test_discover_unreachable_host_returns_502(api):
@@ -176,3 +178,46 @@ async def test_unknown_host_returns_404(api, method, path):
 async def test_unknown_system_returns_404(api):
     body = {"username": "u", "password": "p"}
     assert (await api.put("/api/systems/99/credentials", json=body)).status_code == 404
+
+
+async def discover_both(api) -> tuple[int, int]:
+    for body in (APP_HOST, DB_HOST):
+        host = await create_host(api, body)
+        await api.post(f"/api/hosts/{host['id']}/discover")
+    systems = {s["sid"]: s["id"] for s in (await api.get("/api/systems")).json()}
+    return systems["DEV"], systems["HDV"]
+
+
+async def test_set_dependencies(api):
+    dev, hdv = await discover_both(api)
+
+    response = await api.put(f"/api/systems/{dev}/dependencies", json={"depends_on": [hdv]})
+    assert response.status_code == 200
+    assert response.json()["depends_on_ids"] == [hdv]
+
+    systems = {s["sid"]: s for s in (await api.get("/api/systems")).json()}
+    assert systems["HDV"]["required_by_ids"] == [dev]
+
+    cleared = await api.put(f"/api/systems/{dev}/dependencies", json={"depends_on": []})
+    assert cleared.json()["depends_on_ids"] == []
+
+
+@pytest.mark.parametrize(
+    ("depends_on", "message"),
+    [("self", "itself"), ("unknown", "Unknown systems"), ("cycle", "cycle")],
+)
+async def test_invalid_dependencies(api, depends_on, message):
+    dev, hdv = await discover_both(api)
+    if depends_on == "cycle":
+        await api.put(f"/api/systems/{hdv}/dependencies", json={"depends_on": [dev]})
+    target = {"self": [dev], "unknown": [999], "cycle": [hdv]}[depends_on]
+
+    response = await api.put(f"/api/systems/{dev}/dependencies", json={"depends_on": target})
+
+    assert response.status_code == 422
+    assert message in response.json()["detail"]
+
+
+async def test_dependencies_of_unknown_system(api):
+    response = await api.put("/api/systems/99/dependencies", json={"depends_on": []})
+    assert response.status_code == 404

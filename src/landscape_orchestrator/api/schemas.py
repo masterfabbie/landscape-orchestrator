@@ -85,6 +85,8 @@ class SystemOut(BaseModel):
     sid: str
     username: str | None
     has_credentials: bool
+    depends_on_ids: list[int]
+    required_by_ids: list[int]
     instances: list[InstanceOut]
 
 
@@ -127,3 +129,7 @@ class ActivityOut(BaseModel):
 
 class ActivityDetail(ActivityOut):
     entries: list[ActivityLogEntryOut]
+
+
+class DependenciesIn(BaseModel):
+    depends_on: list[int] = Field(max_length=100)

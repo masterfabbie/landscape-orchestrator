@@ -121,17 +121,18 @@ async def test_discovery_of_database_host(session, secret_box, clients):
     await session.flush()
 
     result = await discover_host(session, host, clients)
-    assert result.databases_added == ["SYSTEMDB@DEV", "DEV@DEV"]
+    assert result.instances_added == ["HDV/02"]
+    assert result.databases_added == ["SYSTEMDB@HDV", "HDV@HDV"]
 
     databases = list(await session.scalars(select(Database).order_by(Database.name)))
     assert [(d.name, d.type, d.instance_name, d.last_status) for d in databases] == [
-        ("DEV@DEV", "hdb", "HDB02", "STOPPED"),
-        ("SYSTEMDB@DEV", "hdb", "HDB02", "STOPPED"),
+        ("HDV@HDV", "hdb", "HDB02", "STOPPED"),
+        ("SYSTEMDB@HDV", "hdb", "HDB02", "STOPPED"),
     ]
     assert (await instances_of(session, host))["02"].features == "HDB|HDB_WORKER"
 
 
-async def test_two_hosts_share_one_system(session, secret_box, clients):
+async def test_database_has_its_own_system(session, secret_box, clients):
     app_host = make_host(secret_box, "sapapp1")
     db_host = make_host(secret_box, "sapdb1", offset=10000)
     session.add_all([app_host, db_host])
@@ -139,8 +140,13 @@ async def test_two_hosts_share_one_system(session, secret_box, clients):
     await discover_host(session, app_host, clients)
     await discover_host(session, db_host, clients)
 
-    (system,) = await session.scalars(select(System).options(selectinload(System.instances)))
-    assert sorted(instance.number for instance in system.instances) == ["00", "01", "02"]
+    systems = await session.scalars(
+        select(System).order_by(System.sid).options(selectinload(System.instances))
+    )
+    assert {s.sid: sorted(i.number for i in s.instances) for s in systems} == {
+        "DEV": ["00", "01"],
+        "HDV": ["02"],
+    }
 
 
 async def test_unreachable_sapstartsrv_gives_warning(session, secret_box, clients, transport):

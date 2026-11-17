@@ -22,6 +22,7 @@ from .. import __version__
 from ..connections import ClientFactory
 from ..crypto import SecretBox
 from ..db import create_engine, create_session_factory, create_tables
+from ..dependencies import DependencyError, set_dependencies
 from ..discovery import DiscoveryError, discover_host
 from ..models import Activity, Host, System
 from ..operations import (
@@ -37,12 +38,25 @@ from .schemas import (
     ActivityDetail,
     ActivityOut,
     Credentials,
+    DependenciesIn,
     DiscoveryOut,
     HostCreate,
     HostDetail,
     HostOut,
     SystemOut,
 )
+
+
+def _systems_query():
+    return (
+        select(System)
+        .order_by(System.sid)
+        .options(
+            selectinload(System.instances),
+            selectinload(System.depends_on),
+            selectinload(System.required_by),
+        )
+    )
 
 
 def create_app(
@@ -188,8 +202,22 @@ def create_app(
 
     @api.get("/systems", response_model=list[SystemOut])
     async def list_systems(session: Session) -> list[System]:
-        query = select(System).order_by(System.sid).options(selectinload(System.instances))
-        return list(await session.scalars(query))
+        return list(await session.scalars(_systems_query()))
+
+    @api.put("/systems/{system_id}/dependencies", response_model=SystemOut)
+    async def set_system_dependencies(
+        system_id: int, body: DependenciesIn, session: Session
+    ) -> System:
+        """Replace the systems this system depends on, e.g. its database system."""
+        if await session.get(System, system_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "System not found")
+        try:
+            await set_dependencies(session, system_id, set(body.depends_on))
+        except DependencyError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        await session.commit()
+        session.expire_all()
+        return await session.scalar(_systems_query().where(System.id == system_id))
 
     @api.put("/systems/{system_id}/credentials", status_code=status.HTTP_204_NO_CONTENT)
     async def set_system_credentials(

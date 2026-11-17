@@ -229,9 +229,9 @@ async def test_add_host_and_discover(browser):
 async def test_overview_shows_systems_and_databases(browser):
     await add_hosts(browser)
     page = (await browser.get("/")).text
-    assert ">DEV</a>" in page
+    assert ">DEV</a>" in page and ">HDV</a>" in page
     assert "SAP HANA" in page
-    assert "SYSTEMDB@DEV" in page and "DEV@DEV" in page
+    assert "SYSTEMDB@HDV" in page and "HDV@HDV" in page
     assert page.count("badge-gray") == 3
     assert 'action="/systems/1/start"' in page
     assert 'action="/instances/1/stop"' in page
@@ -325,21 +325,41 @@ async def test_start_instance_from_the_browser(browser, app):
     assert 'href="/activities/1"' in listing and "DEV/01" in listing
 
 
-async def test_system_operation_and_conflict(browser, app):
+def hold_activities(app) -> asyncio.Event:
+    """Keep running activities at their first status poll until the event is set."""
+    runner = app.state.runner
+    gate = asyncio.Event()
+    original = runner._sleep
+
+    async def gated(seconds: float) -> None:
+        await gate.wait()
+        await original(seconds)
+
+    runner._sleep = gated
+    return gate
+
+
+async def test_system_operation_with_dependency_and_conflict(browser, app):
     await add_hosts(browser)
+    # System 1 is DEV, system 2 the HANA system HDV; instance 3 is the HANA instance.
+    added = await browser.post("/systems/1/dependencies", data={"depends_on": "2"})
+    assert added.headers["location"] == "/systems/1?notice=dependencies_saved"
+    gate = hold_activities(app)
+
     started = await browser.post("/systems/1/start")
     assert started.headers["location"] == "/activities/1"
 
     overview = (await browser.get("/")).text
-    assert "Activity running" in overview
+    assert overview.count("Activity running") == 2  # DEV and, through the dependency, HDV
     assert "disabled" in overview
     assert '<meta http-equiv="refresh" content="5">' in overview
 
-    conflict = await browser.post("/instances/1/stop")
-    assert conflict.headers["location"] == "/systems/1?error=conflict"
+    conflict = await browser.post("/instances/3/stop")
+    assert conflict.headers["location"] == "/systems/2?error=conflict"
     page = await browser.get(conflict.headers["location"])
     assert "Another activity is still running" in page.text
 
+    gate.set()
     await app.state.runner.wait(1)
     overview = (await browser.get("/")).text
     assert "Activity running" not in overview
@@ -347,6 +367,43 @@ async def test_system_operation_and_conflict(browser, app):
     # Three instances and the two HANA databases, whose status follows the operation.
     assert overview.count("badge-green") == 3
     assert overview.count("badge-running") == 2
+    activity = (await browser.get("/activities/1")).text
+    assert "Start order including dependencies: HDV, DEV" in activity
+
+
+async def test_manage_dependencies(browser):
+    await add_hosts(browser)
+    page = (await browser.get("/systems/1")).text
+    assert "Dependencies" in page and '<option value="2">HDV</option>' in page
+
+    await browser.post("/systems/1/dependencies", data={"depends_on": "2"})
+    page = (await browser.get("/systems/1")).text
+    assert 'action="/systems/1/dependencies/2/delete"' in page
+    assert "No other system can be added." in page
+    assert "Depends on: <a" in (await browser.get("/")).text
+
+    hana = (await browser.get("/systems/2")).text
+    assert 'href="/systems/1">DEV</a>' in hana
+    assert "Stopping this system does not stop the systems that need it." in hana
+    # DEV is not offered as a dependency of HDV, because that would close a cycle.
+    assert "<option" not in hana
+
+    cycle = await browser.post("/systems/2/dependencies", data={"depends_on": "1"})
+    assert cycle.headers["location"] == "/systems/2?error=dependency_cycle"
+    assert "would create a cycle" in (await browser.get(cycle.headers["location"])).text
+    itself = await browser.post("/systems/1/dependencies", data={"depends_on": "1"})
+    assert itself.headers["location"] == "/systems/1?error=dependency_self"
+
+    removed = await browser.post("/systems/1/dependencies/2/delete")
+    assert removed.headers["location"] == "/systems/1?notice=dependencies_saved"
+    assert "Depends on: <a" not in (await browser.get("/")).text
+
+
+async def test_dependency_texts_in_german(browser):
+    await add_hosts(browser)
+    await browser.get("/language/de")
+    page = (await browser.get("/systems/1")).text
+    assert "Abhängigkeiten" in page and "Abhängigkeit hinzufügen" in page
 
 
 async def test_failed_activity_shows_error_in_german(browser, app):

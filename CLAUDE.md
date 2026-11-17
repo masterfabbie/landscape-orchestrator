@@ -55,6 +55,7 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `crypto.py`, `settings.py` | Verschlüsselung gespeicherter Passwörter (Fernet), Konfiguration aus Umgebungsvariablen |
 | `connections.py` | baut Clients für Inventareinträge samt Zugangsdaten |
 | `discovery.py` | liest einen Host aus und aktualisiert das Inventar |
+| `dependencies.py` | Abhängigkeiten zwischen Systemen, Reihenfolge von Start und Stopp |
 | `operations.py` | Start, Stopp, Neustart als Hintergrund-Aktivitäten (`OperationRunner`) |
 | `api/` | REST-API unter `/api`, geschützt durch ein Bearer-Token; `create_app` baut die Anwendung |
 | `web/` | servergerenderte Oberfläche (Jinja2), Sitzungs-Cookie, Übersetzungen |
@@ -66,7 +67,15 @@ Wichtige Entwurfsentscheidungen:
   `StopInstance`), **ganze Systeme** über `StartSystem` und `StopSystem` des sapstartsrv.
 - **Zugangsdaten** gibt es auf zwei Ebenen: Die des Hosts gelten für den Host Agent, die des
   Systems für den sapstartsrv. Fehlen die des Systems, gelten die des Hosts.
-- **Nur eine aktive Aktivität pro System.** Weitere werden abgelehnt.
+- **Datenbanken haben in echten Landschaften eine eigene SID.** Ein ABAP-System hängt dann vom
+  Datenbanksystem ab. Abhängigkeiten werden von Hand gepflegt; Start geht erst über die
+  Abhängigkeiten, Stopp umgekehrt, und eine Abhängigkeit, die ein anderes System noch braucht,
+  bleibt laufen.
+- **Nur eine aktive Aktivität pro System.** Eine Aktivität sperrt alle beteiligten Systeme
+  (Tabelle `activity_systems`); weitere werden abgelehnt.
+- **Schema nur durch neue Tabellen erweitern**, solange es keine Migrationen gibt. Neue
+  Tabellen legt `create_all` beim Start auch in bestehenden Datenbanken an; neue Spalten in
+  bestehenden Tabellen nicht.
 - **Discovery löscht nichts**, sie meldet fehlende Einträge nur.
 - **Die Oberfläche lädt keine externen Dateien** und nutzt kein JavaScript-Framework.
 - In `api/app.py` steht bewusst kein `from __future__ import annotations`: FastAPI löst die
@@ -76,6 +85,9 @@ Wichtige Entwurfsentscheidungen:
 
 - Die Tests laufen gegen die simulierte Landschaft in `mock/`. `MockLandscapeTransport`
   leitet Anfragen ohne Netzwerk nach Port an die Mock-Dienste weiter.
+- Die Standardlandschaft hat zwei Systeme: `DEV` (ABAP) und `HDV` (HANA, eigene SID). Die
+  Fixture `single_sid_landscape` legt HANA in `DEV`; damit wird die Startreihenfolge innerhalb
+  eines Systems getestet.
 - Zeit wird über eine falsche Uhr gesteuert (`FakeClock` in `tests/conftest.py`). Tests, die
   Operationen ausführen, übergeben `sleep` und `clock` an `create_app`.
 - Neue Funktionen brauchen Tests, auch für Fehlerfälle. Verhalten, das der Mock simulieren
@@ -93,9 +105,14 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
 
 ## Teststand gegen echte Hosts
 
-Bestätigt mit zwei echten Host Agents ohne installierte SAP-Instanz: Verbindung und Anmeldung
-mit Basic Auth, `GetComputerSystem` (Betriebssystemdaten werden gefunden), `ListInstances` und
-`ListDatabases` mit leeren Listen.
+- Zwei Host Agents ohne SAP-Instanz: Verbindung und Anmeldung mit Basic Auth,
+  `GetComputerSystem` (Betriebssystemdaten werden gefunden), `ListInstances` und
+  `ListDatabases` mit leeren Listen.
+- Ein Host mit ABAP-System und HANA-Datenbank, Discovery nur mit `sapadm`: alle Instanzen
+  erkannt; `GetProcessList` und `GetSystemInstanceList` am sapstartsrv funktionieren mit
+  `sapadm`; `Database/InstanceName` und `Database/Release` sind gefüllt; SystemDB und Tenant
+  erscheinen einzeln; `SAPHostControl-DB-WARNING` kommt vor; HANA hat eine eigene SID.
+- Start, Stopp und Abhängigkeiten sind noch nicht gegen echte Systeme getestet.
 
 ## Offene Annahmen, die ein Test mit einer echten Instanz klären muss
 
@@ -105,14 +122,16 @@ mit Basic Auth, `GetComputerSystem` (Betriebssystemdaten werden gefunden), `List
    die zurückgegebene Operation-ID nicht aus. `GetOperationResults` ist nicht umgesetzt.
 3. **Zielzustand:** Eine Operation gilt als fertig, wenn alle Prozesse grün (Start) bzw. grau
    (Stopp) sind. Ob echte Instanzen das so melden, ist offen.
-4. **Geschützte Methoden am sapstartsrv:** Ab Kernel 738 sind fast alle Methoden geschützt.
-   Der Mock schützt nur die zustandsändernden. Lesende Aufrufe ohne passende Zugangsdaten
-   können an echten Systemen fehlschlagen.
-5. **Datenbanken:** Die Schlüssel `Database/Vendor` und `Database/Release` sind angenommen.
-   Die Schlüssel der Komponenten stammen aus der WSDL.
+4. **Geschützte Methoden am sapstartsrv:** Lesende Aufrufe funktionieren mit `sapadm`.
+   Offen ist, ob `StartSystem` und `StopSystem` mit `sapadm` erlaubt sind oder `<sid>adm`
+   brauchen.
+5. **Datenbanken:** Der Schlüssel `Database/Vendor` ist angenommen.
 6. **Verschachtelung bei `GetComputerSystem`:** Der Client sucht Klassen in jeder Tiefe. Die
    echte Struktur ist nicht mit der des Mocks verglichen.
 7. **HTTPS** zu den verwalteten Hosts ist vorbereitet, aber ungetestet.
+8. **`GetSystemInstanceList` bei getrennter Datenbank-SID:** Dass die Liste eines
+   ABAP-Systems die HANA-Instanz nicht enthält, ist aus den getrennten SIDs abgeleitet, aber
+   nicht direkt beobachtet.
 
 Wenn ein Test eine Annahme bestätigt oder widerlegt: Mock, Client und Tests anpassen und den
 Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
@@ -124,5 +143,6 @@ Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 - Aktivitäten lassen sich nicht abbrechen
 - keine eigenen Datenbank-Operationen (`StartDatabase`, `StopDatabase`)
 - jede SID nur einmal
+- Abhängigkeiten zwischen Systemen werden nicht automatisch erkannt
 - Protokollmeldungen der Aktivitäten sind nur englisch
 - kein Verschieben von Instanzen (Adaptive Computing)

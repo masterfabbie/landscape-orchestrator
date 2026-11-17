@@ -262,8 +262,8 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
         return {"aInstances": result}
 
     def _database_properties(db: MockDatabase) -> list[dict[str, Any]]:
-        # Name, Type, InstanceName and Host are documented in the WSDL. Vendor and Release
-        # appear in saphostctrl output; their property keys are assumptions.
+        # Name, Type, InstanceName and Host are documented in the WSDL. Release is confirmed
+        # against a real host agent; the key for the vendor is an assumption.
         values = {"Database/Name": db.name, "Database/Type": db.type}
         instance = host.instance(db.instance_nr) if db.instance_nr is not None else None
         if instance is not None:

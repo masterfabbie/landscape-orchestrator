@@ -171,6 +171,39 @@ TEXTS: dict[str, tuple[str, str]] = {
         "Für dieses System läuft bereits eine Aktivität.",
     ),
     "warning.discovery": ("Warnings", "Warnungen"),
+    "deps.title": ("Dependencies", "Abhängigkeiten"),
+    "deps.depends_on": ("Depends on", "Hängt ab von"),
+    "deps.required_by": ("Required by", "Wird benötigt von"),
+    "deps.none": ("none", "keine"),
+    "deps.add": ("Add dependency", "Abhängigkeit hinzufügen"),
+    "deps.remove": ("Remove", "Entfernen"),
+    "deps.no_candidates": (
+        "No other system can be added.",
+        "Es kann kein weiteres System hinzugefügt werden.",
+    ),
+    "deps.explanation": (
+        "Starting this system starts the systems it depends on first, for example its "
+        "database system. Stopping it stops this system first and then its dependencies, "
+        "unless another system still needs them.",
+        "Beim Starten dieses Systems werden zuerst die Systeme gestartet, von denen es "
+        "abhängt, zum Beispiel sein Datenbanksystem. Beim Stoppen wird erst dieses System "
+        "gestoppt, dann seine Abhängigkeiten, sofern kein anderes System sie noch benötigt.",
+    ),
+    "deps.required_note": (
+        "Stopping this system does not stop the systems that need it. Stop those first.",
+        "Das Stoppen dieses Systems stoppt nicht die Systeme, die es benötigen. "
+        "Stoppe diese zuerst.",
+    ),
+    "notice.dependencies_saved": ("Dependencies saved.", "Abhängigkeiten gespeichert."),
+    "error.dependency_self": (
+        "A system cannot depend on itself.",
+        "Ein System kann nicht von sich selbst abhängen.",
+    ),
+    "error.dependency_unknown": ("Unknown system.", "Unbekanntes System."),
+    "error.dependency_cycle": (
+        "This dependency would create a cycle.",
+        "Diese Abhängigkeit würde einen Kreis bilden.",
+    ),
 }
 
 

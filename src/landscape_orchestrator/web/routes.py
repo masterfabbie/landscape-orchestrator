@@ -7,7 +7,7 @@ without internet access. State is changed only by POST forms.
 from __future__ import annotations
 
 import secrets
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +25,7 @@ from sqlalchemy.orm import selectinload
 
 from ..connections import ClientFactory
 from ..crypto import SecretBox
+from ..dependencies import DependencyError, load_graph, set_dependencies, would_create_cycle
 from ..discovery import DiscoveryError, discover_host
 from ..models import Activity, Database, Host, Instance, System
 from ..operations import (
@@ -211,8 +212,18 @@ async def set_language(code: str, next: str = "/") -> Response:
 
 
 async def _active_by_system(session: AsyncSession) -> dict[int, Activity]:
-    rows = await session.scalars(select(Activity).where(Activity.status.in_(ACTIVE_STATUSES)))
-    return {activity.system_id: activity for activity in rows if activity.system_id}
+    """Running activity per system, including systems touched through dependencies."""
+    rows = await session.scalars(
+        select(Activity)
+        .where(Activity.status.in_(ACTIVE_STATUSES))
+        .options(selectinload(Activity.systems))
+    )
+    active: dict[int, Activity] = {}
+    for activity in rows:
+        for system_id in {activity.system_id, *(s.id for s in activity.systems)}:
+            if system_id:
+                active[system_id] = activity
+    return active
 
 
 @pages.get("/")
@@ -221,7 +232,10 @@ async def overview(request: Request, session: DbSession) -> HTMLResponse:
         await session.scalars(
             select(System)
             .order_by(System.sid)
-            .options(selectinload(System.instances).selectinload(Instance.host))
+            .options(
+                selectinload(System.instances).selectinload(Instance.host),
+                selectinload(System.depends_on),
+            )
         )
     )
     databases = list(
@@ -369,7 +383,11 @@ async def _load_system(session: AsyncSession, system_id: int) -> System:
     system = await session.scalar(
         select(System)
         .where(System.id == system_id)
-        .options(selectinload(System.instances).selectinload(Instance.host))
+        .options(
+            selectinload(System.instances).selectinload(Instance.host),
+            selectinload(System.depends_on),
+            selectinload(System.required_by),
+        )
     )
     if system is None:
         raise HTTPException(404, "System not found")
@@ -381,7 +399,48 @@ async def system_detail(request: Request, system_id: int, session: DbSession) ->
     system = await _load_system(session, system_id)
     active = (await _active_by_system(session)).get(system.id)
     refresh = OVERVIEW_REFRESH_SECONDS if active else None
-    return render(request, "system.html", system=system, active=active, refresh=refresh)
+    graph = await load_graph(session)
+    linked = {s.id for s in system.depends_on}
+    candidates = [
+        other
+        for other in await session.scalars(select(System).order_by(System.sid))
+        if other.id != system.id
+        and other.id not in linked
+        and not would_create_cycle(system.id, other.id, graph)
+    ]
+    return render(
+        request,
+        "system.html",
+        system=system,
+        active=active,
+        refresh=refresh,
+        candidates=candidates,
+    )
+
+
+async def _change_dependencies(
+    session: AsyncSession, system_id: int, change: Callable[[set[int]], set[int]]
+) -> Response:
+    system = await _load_system(session, system_id)
+    current = {s.id for s in system.depends_on}
+    try:
+        await set_dependencies(session, system_id, change(current))
+    except DependencyError as exc:
+        return redirect(f"/systems/{system_id}", error=f"dependency_{exc.code}")
+    await session.commit()
+    return redirect(f"/systems/{system_id}", notice="dependencies_saved")
+
+
+@pages.post("/systems/{system_id}/dependencies")
+async def add_dependency(
+    system_id: int, session: DbSession, depends_on: Annotated[int, Form()]
+) -> Response:
+    return await _change_dependencies(session, system_id, lambda current: current | {depends_on})
+
+
+@pages.post("/systems/{system_id}/dependencies/{depends_on}/delete")
+async def remove_dependency(system_id: int, depends_on: int, session: DbSession) -> Response:
+    return await _change_dependencies(session, system_id, lambda current: current - {depends_on})
 
 
 @pages.post("/systems/{system_id}/credentials")

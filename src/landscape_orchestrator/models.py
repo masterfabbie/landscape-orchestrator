@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 STATUS_UNKNOWN = "UNKNOWN"
@@ -12,6 +22,24 @@ STATUS_UNKNOWN = "UNKNOWN"
 
 class Base(DeclarativeBase):
     pass
+
+
+# Added after the first release. Only new tables are used for new features, so existing
+# databases get them from create_all at startup without a migration.
+
+system_dependencies = Table(
+    "system_dependencies",
+    Base.metadata,
+    Column("system_id", ForeignKey("systems.id", ondelete="CASCADE"), primary_key=True),
+    Column("depends_on_id", ForeignKey("systems.id", ondelete="CASCADE"), primary_key=True),
+)
+
+activity_systems = Table(
+    "activity_systems",
+    Base.metadata,
+    Column("activity_id", ForeignKey("activities.id", ondelete="CASCADE"), primary_key=True),
+    Column("system_id", ForeignKey("systems.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class Host(Base):
@@ -73,10 +101,33 @@ class System(Base):
     instances: Mapped[list[Instance]] = relationship(
         back_populates="system", passive_deletes=True, order_by="Instance.number"
     )
+    # Systems that must run for this one, e.g. the database system of an ABAP system.
+    depends_on: Mapped[list[System]] = relationship(
+        secondary=system_dependencies,
+        primaryjoin=lambda: System.id == system_dependencies.c.system_id,
+        secondaryjoin=lambda: System.id == system_dependencies.c.depends_on_id,
+        back_populates="required_by",
+        order_by="System.sid",
+    )
+    required_by: Mapped[list[System]] = relationship(
+        secondary=system_dependencies,
+        primaryjoin=lambda: System.id == system_dependencies.c.depends_on_id,
+        secondaryjoin=lambda: System.id == system_dependencies.c.system_id,
+        back_populates="depends_on",
+        order_by="System.sid",
+    )
 
     @property
     def has_credentials(self) -> bool:
         return bool(self.username and self.password_encrypted)
+
+    @property
+    def depends_on_ids(self) -> list[int]:
+        return [system.id for system in self.depends_on]
+
+    @property
+    def required_by_ids(self) -> list[int]:
+        return [system.id for system in self.required_by]
 
 
 class Instance(Base):
@@ -138,6 +189,8 @@ class Activity(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # All systems the activity may touch; used to keep activities from overlapping.
+    systems: Mapped[list[System]] = relationship(secondary=activity_systems)
     entries: Mapped[list[ActivityLogEntry]] = relationship(
         back_populates="activity",
         cascade="all, delete-orphan",

@@ -14,6 +14,47 @@
   {{ ui.instance_table(system.instances, t, instance_type, disabled=active) }}
 </section>
 <section class="card">
+  <h2>{{ t("deps.title") }}</h2>
+  <p class="muted">{{ t("deps.explanation") }}</p>
+  <dl>
+    <dt>{{ t("deps.depends_on") }}</dt>
+    <dd>
+      {% if system.depends_on %}
+      <ul class="plain">
+        {% for dependency in system.depends_on %}
+        <li>
+          <a class="mono" href="/systems/{{ dependency.id }}">{{ dependency.sid }}</a>
+          <form class="inline" method="post" action="/systems/{{ system.id }}/dependencies/{{ dependency.id }}/delete">
+            <button type="submit" class="link">{{ t("deps.remove") }}</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}{{ t("deps.none") }}{% endif %}
+    </dd>
+    <dt>{{ t("deps.required_by") }}</dt>
+    <dd>
+      {% if system.required_by %}
+        {% for other in system.required_by %}<a class="mono" href="/systems/{{ other.id }}">{{ other.sid }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+        <p class="muted">{{ t("deps.required_note") }}</p>
+      {% else %}{{ t("deps.none") }}{% endif %}
+    </dd>
+  </dl>
+  {% if candidates %}
+  <form method="post" action="/systems/{{ system.id }}/dependencies" class="row">
+    <label class="inline-label">{{ t("deps.add") }}
+      <select name="depends_on">
+        {% for candidate in candidates %}<option value="{{ candidate.id }}">{{ candidate.sid }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">{{ t("deps.add") }}</button>
+  </form>
+  {% else %}
+  <p class="muted">{{ t("deps.no_candidates") }}</p>
+  {% endif %}
+</section>
+
+<section class="card">
   <h2>{{ t("credentials.title") }}</h2>
   {{ ui.credentials_form("/systems/" ~ system.id ~ "/credentials", system, t("credentials.system_hint"), t) }}
 </section>

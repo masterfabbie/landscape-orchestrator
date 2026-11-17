@@ -72,7 +72,8 @@ async def test_stop_and_restart(landscape, clock):
         assert (await client.get_process_list())[0].dispstatus is StateColor.GRAY
 
 
-async def test_system_instance_list(landscape):
+async def test_system_instance_list(single_sid_landscape):
+    landscape = single_sid_landscape
     async with make_client(landscape) as client:
         instances = {i.hostname: i for i in await client.get_system_instance_list()}
     hdb = instances["sapdb1"]
@@ -83,7 +84,8 @@ async def test_system_instance_list(landscape):
     assert hdb.dispstatus is StateColor.GRAY
 
 
-async def test_start_and_stop_system(landscape, clock):
+async def test_start_and_stop_system(single_sid_landscape, clock):
+    landscape = single_sid_landscape
     async def colors(client: SapControlClient) -> dict[int, StateColor]:
         return {i.instance_nr: i.dispstatus for i in await client.get_system_instance_list()}
 

@@ -31,13 +31,32 @@ def clock() -> FakeClock:
     return FakeClock()
 
 
-@pytest.fixture
-def landscape(clock: FakeClock) -> MockLandscape:
-    """Sample landscape with all instances stopped, start 3s, stop 2s."""
+def stopped_config() -> dict:
+    """Sample landscape with all instances stopped: DEV on sapapp1, HANA system HDV on sapdb1."""
     config = default_landscape_config()
     for host in config["hosts"]:
         for instance in host["instances"]:
             instance["running"] = False
+    return config
+
+
+@pytest.fixture
+def landscape(clock: FakeClock) -> MockLandscape:
+    """Sample landscape with all instances stopped, start 3s, stop 2s."""
+    return MockLandscape.from_dict(stopped_config(), clock=clock)
+
+
+@pytest.fixture
+def single_sid_landscape(clock: FakeClock) -> MockLandscape:
+    """Variant where the HANA instance belongs to DEV as well.
+
+    sapstartsrv then orders StartSystem by start priority across HANA, ASCS and the
+    application server; these tests cover that behaviour.
+    """
+    config = stopped_config()
+    for host in config["hosts"]:
+        for instance in host["instances"]:
+            instance["sid"] = "DEV"
     return MockLandscape.from_dict(config, clock=clock)
 
 
