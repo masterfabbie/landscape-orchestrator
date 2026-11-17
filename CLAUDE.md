@@ -63,8 +63,11 @@ Alles liegt unter `src/landscape_orchestrator/`.
 
 Wichtige Entwurfsentscheidungen:
 
-- **Instanzen** werden über den Host Agent gestartet und gestoppt (`StartInstance`,
-  `StopInstance`), **ganze Systeme** über `StartSystem` und `StopSystem` des sapstartsrv.
+- **Alle Starts und Stopps laufen über den Host Agent** (`StartInstance`, `StopInstance`) und
+  brauchen nur `sapadm`. Ganze Systeme orchestriert das Tool selbst: Instanzen gruppenweise
+  nach Startpriorität, Stopp umgekehrt. `StartSystem` und `StopSystem` des sapstartsrv werden
+  nicht genutzt, weil echte Systeme sie für `sapadm` ablehnen. Den sapstartsrv liest das Tool
+  nur (`GetProcessList`, `GetSystemInstanceList`).
 - **Zugangsdaten** gibt es auf zwei Ebenen: Die des Hosts gelten für den Host Agent, die des
   Systems für den sapstartsrv. Fehlen die des Systems, gelten die des Hosts.
 - **Datenbanken haben in echten Landschaften eine eigene SID.** Ein ABAP-System hängt dann vom
@@ -112,22 +115,24 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
   erkannt; `GetProcessList` und `GetSystemInstanceList` am sapstartsrv funktionieren mit
   `sapadm`; `Database/InstanceName` und `Database/Release` sind gefüllt; SystemDB und Tenant
   erscheinen einzeln; `SAPHostControl-DB-WARNING` kommt vor; HANA hat eine eigene SID.
-- `StopSystem` am sapstartsrv mit `sapadm` wird mit „Permission denied“ abgelehnt. Für
-  Systemoperationen braucht das System Zugangsdaten von `<sid>adm`. Der Mock bildet das mit
-  `strict_sapstartsrv_auth` nach.
-- Start und Stopp einzelner Instanzen über den Host Agent sowie Abhängigkeiten sind noch nicht
-  gegen echte Systeme getestet.
+- `StopSystem` am sapstartsrv mit `sapadm` wird mit „Permission denied“ abgelehnt. Der Mock
+  bildet das mit `strict_sapstartsrv_auth` nach. Deshalb laufen Systemoperationen über den
+  Host Agent.
+- Stopp und Start einer Dialoginstanz über den Host Agent mit `sapadm` funktionieren; das Flag
+  `O-INSTANCE` wird akzeptiert, und die Instanz meldet danach alle Prozesse grau bzw. grün.
+- Noch nicht gegen echte Systeme getestet: ganze Systeme über den Host Agent, zentrale Dienste
+  und HANA-Instanzen über den Host Agent, Abhängigkeiten.
 
 ## Offene Annahmen, die ein Test mit einer echten Instanz klären muss
 
-1. **Flag `O-INSTANCE`:** `start_instance` und `stop_instance` senden es standardmäßig. Die
-   WSDL nennt das Flag, sagt aber nicht, ob es nötig ist.
+1. **Flag `O-INSTANCE`:** Geklärt, ein echter Host Agent akzeptiert es.
 2. **Operation-ID:** Der Client ruft Start und Stopp mit Timeout 0 (asynchron) auf und wertet
    die zurückgegebene Operation-ID nicht aus. `GetOperationResults` ist nicht umgesetzt.
-3. **Zielzustand:** Eine Operation gilt als fertig, wenn alle Prozesse grün (Start) bzw. grau
-   (Stopp) sind. Ob echte Instanzen das so melden, ist offen.
+3. **Zielzustand:** Für eine Dialoginstanz geklärt (alle Prozesse grün bzw. grau). Offen für
+   zentrale Dienste und HANA-Instanzen.
 4. **Geschützte Methoden am sapstartsrv:** Geklärt: Lesen geht mit `sapadm`, `StopSystem`
-   nicht. Offen ist nur noch, ob `<sid>adm` für `StartSystem` und `StopSystem` reicht.
+   nicht. Ob `<sid>adm` für `StartSystem` reicht, ist ohne Belang, weil das Tool es nicht
+   mehr nutzt.
 5. **Datenbanken:** Der Schlüssel `Database/Vendor` ist angenommen.
 6. **Verschachtelung bei `GetComputerSystem`:** Der Client sucht Klassen in jeder Tiefe. Die
    echte Struktur ist nicht mit der des Mocks verglichen.

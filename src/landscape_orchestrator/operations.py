@@ -1,11 +1,12 @@
 """Start, stop and restart of instances and systems, run in the background as activities.
 
-Single instances are controlled through the host agent, which also works while the
-sapstartsrv of the instance is down. Whole systems are controlled through StartSystem and
-StopSystem of sapstartsrv, which already handles the order by start priority within one
-system. Systems the target depends on (see :mod:`dependencies`) are started before it and
-stopped after it. Progress is read from sapstartsrv until the target state is reached or
-the timeout expires.
+All starts and stops go through the host agent (StartInstance, StopInstance), which needs
+only the host credentials (sapadm). sapstartsrv rejects StartSystem and StopSystem for
+sapadm on real systems, so whole systems are orchestrated here: their instances are started
+in ascending start priority and stopped in descending order, one priority group at a time.
+Systems the target depends on (see :mod:`dependencies`) are started before it and stopped
+after it. Progress is read from sapstartsrv (GetProcessList, allowed for sapadm) until the
+target state is reached or the timeout expires.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from .clients import (
     SoapError,
     SoapFaultError,
 )
-from .clients.sapcontrol import StateColor, SystemInstance
+from .clients.sapcontrol import StateColor
 from .connections import ClientFactory
 from .crypto import SecretError
 from .dependencies import SystemPlan, load_graph, plan
@@ -465,19 +466,8 @@ class OperationRunner:
     async def _instance_phase(
         self, session: AsyncSession, activity: Activity, instance: Instance, start: bool
     ) -> None:
-        host, system = instance.host, instance.system
-        verb = "Start" if start else "Stop"
         target = StateColor.GREEN.name if start else StateColor.GRAY.name
-        call = "StartInstance" if start else "StopInstance"
-        try:
-            async with self._clients.hostagent(host) as agent:
-                operation = agent.start_instance if start else agent.stop_instance
-                await operation(system.sid, instance.number)
-        except SoapFaultError as exc:
-            raise explain_fault(exc, call, host) from exc
-        await self._log(
-            session, activity, f"{verb} of {activity.target_label} requested via host agent"
-        )
+        await self._request_via_hostagent(session, activity, instance, start)
 
         deadline = self._clock() + activity.timeout_seconds
         last: str | None = None
@@ -514,85 +504,85 @@ class OperationRunner:
     async def _system_phase(
         self, session: AsyncSession, activity: Activity, instances: list[Instance], start: bool
     ) -> None:
-        verb = "Start" if start else "Stop"
-        target = StateColor.GREEN if start else StateColor.GRAY
+        """Start or stop all instances of one system through their host agents.
+
+        Instances are handled in groups of equal start priority: ascending for a start,
+        descending for a stop. Each group must reach the target state before the next one
+        begins. This needs only the host credentials (sapadm); sapstartsrv is only read.
+        """
+        target = StateColor.GREEN.name if start else StateColor.GRAY.name
         timeout = activity.timeout_seconds
         sid = instances[0].system.sid
-
-        for instance in instances:
-            try:
-                async with self._clients.sapcontrol(
-                    instance.host, int(instance.number), instance.system
-                ) as sapcontrol:
-                    if start:
-                        await sapcontrol.start_system(waittimeout=timeout)
-                    else:
-                        await sapcontrol.stop_system(waittimeout=timeout)
-            except SoapConnectionError:
-                continue
-            except SoapFaultError as exc:
-                call = "StartSystem" if start else "StopSystem"
-                raise explain_fault(exc, call, instance.host, instance) from exc
-            await self._log(
-                session,
-                activity,
-                f"{verb} of system {sid} requested via sapstartsrv of "
-                f"instance {instance.number} on {instance.host.name}",
-            )
-            break
-        else:
-            raise OperationFailedError(f"No sapstartsrv of system {sid} could be reached")
-
         deadline = self._clock() + timeout
-        last: str | None = None
-        while True:
-            states = await self._read_system_states(instances)
-            summary = (
-                " ".join(f"{s.instance_nr:02d}:{s.dispstatus.name}" for s in states)
-                if states
-                else STATUS_UNKNOWN
-            )
-            if summary != last:
-                last = summary
-                self._store_states(instances, states)
-                await self._log(session, activity, f"System {sid} status: {summary}")
-            if states and all(state.dispstatus is target for state in states):
-                return
-            if self._deadline_reached(deadline):
-                raise OperationFailedError(
-                    f"Timeout after {timeout} s: system {sid} is {summary}, "
-                    f"expected all {target.name}"
-                )
-            await self._sleep(self._poll_interval)
 
-    async def _read_system_states(self, instances: list[Instance]) -> list[SystemInstance]:
-        """Instance list of the system from the first sapstartsrv that answers."""
+        levels: dict[float, list[Instance]] = {}
         for instance in instances:
-            try:
-                async with self._clients.sapcontrol(
-                    instance.host, int(instance.number), instance.system
-                ) as sapcontrol:
-                    states = await sapcontrol.get_system_instance_list()
-            except SoapConnectionError:
-                continue
-            except SoapFaultError as exc:
-                raise explain_fault(
-                    exc, "GetSystemInstanceList", instance.host, instance
-                ) from exc
-            return sorted(states, key=lambda state: state.instance_nr)
-        return []
+            levels.setdefault(_priority(instance), []).append(instance)
+        order = sorted(levels, reverse=not start)
+
+        statuses = await self._read_statuses(instances)
+        last = self._summary(instances, statuses)
+        self._store_statuses(instances, statuses)
+        await self._log(session, activity, f"System {sid} status: {last}")
+        if all(statuses[i.id] == target for i in instances):
+            state = "running" if start else "stopped"
+            await self._log(session, activity, f"System {sid} is already {state}")
+            return
+
+        for priority in order:
+            group = levels[priority]
+            for instance in group:
+                if statuses[instance.id] != target:
+                    await self._request_via_hostagent(session, activity, instance, start)
+            while True:
+                if all(statuses[i.id] == target for i in group):
+                    break
+                if self._deadline_reached(deadline):
+                    raise OperationFailedError(
+                        f"Timeout after {timeout} s: system {sid} is {last}, "
+                        f"expected all {target}"
+                    )
+                await self._sleep(self._poll_interval)
+                statuses = await self._read_statuses(instances)
+                summary = self._summary(instances, statuses)
+                if summary != last:
+                    last = summary
+                    self._store_statuses(instances, statuses)
+                    await self._log(session, activity, f"System {sid} status: {summary}")
+
+    async def _request_via_hostagent(
+        self, session: AsyncSession, activity: Activity, instance: Instance, start: bool
+    ) -> None:
+        verb, call = ("Start", "StartInstance") if start else ("Stop", "StopInstance")
+        label = f"{instance.system.sid}/{instance.number}"
+        try:
+            async with self._clients.hostagent(instance.host) as agent:
+                operation = agent.start_instance if start else agent.stop_instance
+                await operation(instance.system.sid, instance.number)
+        except SoapFaultError as exc:
+            raise explain_fault(exc, call, instance.host) from exc
+        except SoapConnectionError as exc:
+            raise OperationFailedError(
+                f"{call} for {label}: the host agent of {instance.host.name} "
+                f"could not be reached ({exc})"
+            ) from exc
+        await self._log(
+            session,
+            activity,
+            f"{verb} of {label} requested via host agent of {instance.host.name}",
+        )
+
+    async def _read_statuses(self, instances: list[Instance]) -> dict[int, str]:
+        return {instance.id: await self._read_instance_status(instance) for instance in instances}
 
     @staticmethod
-    def _store_states(instances: list[Instance], states: list[SystemInstance]) -> None:
+    def _summary(instances: list[Instance], statuses: dict[int, str]) -> str:
+        ordered = sorted(instances, key=lambda instance: instance.number)
+        return " ".join(f"{i.number}:{statuses[i.id]}" for i in ordered)
+
+    @staticmethod
+    def _store_statuses(instances: list[Instance], statuses: dict[int, str]) -> None:
         now = _now()
-        by_number: dict[int, list[SystemInstance]] = {}
-        for state in states:
-            by_number.setdefault(state.instance_nr, []).append(state)
         for instance in instances:
-            candidates = by_number.get(int(instance.number), [])
-            match = next((c for c in candidates if c.hostname == instance.hostname), None)
-            if match is None and len(candidates) == 1:
-                match = candidates[0]
-            if match is not None:
-                instance.last_status = match.dispstatus.name
-                instance.status_checked_at = now
+            instance.last_status = statuses[instance.id]
+            instance.status_checked_at = now

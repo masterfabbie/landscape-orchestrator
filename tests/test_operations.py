@@ -120,7 +120,7 @@ async def test_start_instance(app, api, landscape, clock):
     assert activity["error"] is None
     assert activity["started_at"] and activity["finished_at"]
     assert messages(activity) == [
-        "Start of DEV/00 requested via host agent",
+        "Start of DEV/00 requested via host agent of sapapp1",
         "Instance status: YELLOW",
         "Instance status: GREEN",
         "Finished successfully",
@@ -136,10 +136,10 @@ async def test_stop_and_restart_instance(app, api, landscape, clock):
     restart = await run(app, api, f"/api/instances/{dialog}/restart")
     assert restart["status"] == "SUCCEEDED"
     assert messages(restart) == [
-        "Stop of DEV/00 requested via host agent",
+        "Stop of DEV/00 requested via host agent of sapapp1",
         "Instance status: YELLOW",
         "Instance status: GRAY",
-        "Start of DEV/00 requested via host agent",
+        "Start of DEV/00 requested via host agent of sapapp1",
         "Instance status: YELLOW",
         "Instance status: GREEN",
         "Finished successfully",
@@ -157,10 +157,14 @@ async def test_start_and_stop_system_without_dependencies(app, api):
     start = await run(app, api, f"/api/systems/{dev}/start")
     assert start["status"] == "SUCCEEDED"
     assert start["target_label"] == "DEV"
-    # Central services first, then the dialog instance. The HANA system is not touched.
+    # Central services (priority 1) first, then the dialog instance (priority 3).
+    # The HANA system is not touched.
     assert messages(start) == [
-        "Start of system DEV requested via sapstartsrv of instance 01 on sapapp1",
+        "System DEV status: 00:GRAY 01:GRAY",
+        "Start of DEV/01 requested via host agent of sapapp1",
         "System DEV status: 00:GRAY 01:YELLOW",
+        "System DEV status: 00:GRAY 01:GREEN",
+        "Start of DEV/00 requested via host agent of sapapp1",
         "System DEV status: 00:YELLOW 01:GREEN",
         "System DEV status: 00:GREEN 01:GREEN",
         "Finished successfully",
@@ -169,7 +173,26 @@ async def test_start_and_stop_system_without_dependencies(app, api):
 
     stop = await run(app, api, f"/api/systems/{dev}/stop")
     assert stop["status"] == "SUCCEEDED"
+    requests = [m for m in messages(stop) if " requested " in m]
+    assert requests == [
+        "Stop of DEV/00 requested via host agent of sapapp1",
+        "Stop of DEV/01 requested via host agent of sapapp1",
+    ]
     assert await statuses(api) == {"00": "GRAY", "01": "GRAY", "02": "GRAY"}
+
+
+async def test_system_already_in_target_state(app, api):
+    dev = await system_id(api, "DEV")
+    await run(app, api, f"/api/systems/{dev}/start")
+
+    again = await run(app, api, f"/api/systems/{dev}/start")
+
+    assert again["status"] == "SUCCEEDED"
+    assert messages(again) == [
+        "System DEV status: 00:GREEN 01:GREEN",
+        "System DEV is already running",
+        "Finished successfully",
+    ]
 
 
 async def test_start_system_starts_dependencies_first(app, api):
@@ -180,11 +203,15 @@ async def test_start_system_starts_dependencies_first(app, api):
     assert start["status"] == "SUCCEEDED"
     assert messages(start) == [
         "Start order including dependencies: HDV, DEV",
-        "Start of system HDV requested via sapstartsrv of instance 02 on sapdb1",
+        "System HDV status: 02:GRAY",
+        "Start of HDV/02 requested via host agent of sapdb1",
         "System HDV status: 02:YELLOW",
         "System HDV status: 02:GREEN",
-        "Start of system DEV requested via sapstartsrv of instance 01 on sapapp1",
+        "System DEV status: 00:GRAY 01:GRAY",
+        "Start of DEV/01 requested via host agent of sapapp1",
         "System DEV status: 00:GRAY 01:YELLOW",
+        "System DEV status: 00:GRAY 01:GREEN",
+        "Start of DEV/00 requested via host agent of sapapp1",
         "System DEV status: 00:YELLOW 01:GREEN",
         "System DEV status: 00:GREEN 01:GREEN",
         "Finished successfully",
@@ -202,9 +229,14 @@ async def test_stop_system_stops_dependencies_afterwards(app, api):
     assert stop["status"] == "SUCCEEDED"
     log = messages(stop)
     assert log[0] == "Stop order including dependencies: DEV, HDV"
-    stop_dev = log.index("Stop of system DEV requested via sapstartsrv of instance 01 on sapapp1")
-    stop_hdv = log.index("Stop of system HDV requested via sapstartsrv of instance 02 on sapdb1")
-    assert stop_dev < log.index("System DEV status: 00:GRAY 01:GRAY") < stop_hdv
+    assert [m for m in log if " requested " in m] == [
+        "Stop of DEV/00 requested via host agent of sapapp1",
+        "Stop of DEV/01 requested via host agent of sapapp1",
+        "Stop of HDV/02 requested via host agent of sapdb1",
+    ]
+    assert log.index("System DEV status: 00:GRAY 01:GRAY") < log.index(
+        "Stop of HDV/02 requested via host agent of sapdb1"
+    )
     assert set((await statuses(api)).values()) == {"GRAY"}
 
 
@@ -223,10 +255,12 @@ async def test_restart_system_with_dependency(app, api):
     ]
     requests = [m.split(" requested")[0] for m in messages(restart) if " requested " in m]
     assert requests == [
-        "Stop of system DEV",
-        "Stop of system HDV",
-        "Start of system HDV",
-        "Start of system DEV",
+        "Stop of DEV/00",
+        "Stop of DEV/01",
+        "Stop of HDV/02",
+        "Start of HDV/02",
+        "Start of DEV/01",
+        "Start of DEV/00",
     ]
     assert set((await statuses(api)).values()) == {"GREEN"}
 
@@ -295,43 +329,40 @@ async def test_wrong_credentials_fail_the_activity(app, api):
     assert (await statuses(api))["00"] == "GRAY"
 
 
-async def test_system_operation_without_admin_credentials_explains_what_to_do(
-    app, api, landscape
-):
-    """Like a real system: sapstartsrv lets sapadm read, but not stop the system."""
+async def test_system_operation_needs_only_host_credentials(app, api, landscape):
+    """sapstartsrv rejects administration for sapadm; system operations do not need it."""
     landscape.strict_sapstartsrv_auth = True
     await api.put("/api/hosts/1/credentials", json={"username": "sapadm", "password": "mock"})
     dev = await system_id(api, "DEV")
 
-    activity = await run(app, api, f"/api/systems/{dev}/stop")
+    assert (await run(app, api, f"/api/systems/{dev}/start"))["status"] == "SUCCEEDED"
+    assert (await run(app, api, f"/api/systems/{dev}/stop"))["status"] == "SUCCEEDED"
+    assert (await statuses(api))["00"] == "GRAY"
+
+
+async def test_rejected_status_read_is_explained(app, api, transport):
+    """A sapstartsrv that refuses to report the process list names the credentials used."""
+
+    async def refuse(request: httpx.Request) -> httpx.Response:
+        body = (
+            '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">'
+            "<SOAP-ENV:Body><SOAP-ENV:Fault><faultcode>SOAP-ENV:Server</faultcode>"
+            "<faultstring>Permission denied</faultstring></SOAP-ENV:Fault>"
+            "</SOAP-ENV:Body></SOAP-ENV:Envelope>"
+        )
+        return httpx.Response(500, content=body.encode())
+
+    transport._transports[50013].handle_async_request = refuse
+
+    activity = await run(app, api, f"/api/instances/{await instance_id(api, '00')}/start")
 
     assert activity["status"] == "FAILED"
     assert activity["error"] == (
-        "StopSystem at the sapstartsrv of instance DEV/01 on sapapp1 was rejected "
+        "GetProcessList at the sapstartsrv of instance DEV/00 on sapapp1 was rejected "
         "(Permission denied): the user is not authorized. The request used no credentials "
-        "of system DEV, so those of host sapapp1 (sapadm). Administrative calls at "
+        "of system DEV, so those of host sapapp1 (devadm). Administrative calls at "
         "sapstartsrv need a user such as devadm: store its credentials on the page of "
         "system DEV."
-    )
-
-    await api.put(
-        f"/api/systems/{dev}/credentials", json={"username": "devadm", "password": "mock"}
-    )
-    assert (await run(app, api, f"/api/systems/{dev}/stop"))["status"] == "SUCCEEDED"
-
-
-async def test_wrong_system_credentials_are_named(app, api, landscape):
-    landscape.strict_sapstartsrv_auth = True
-    dev = await system_id(api, "DEV")
-    await api.put(
-        f"/api/systems/{dev}/credentials", json={"username": "sapadm", "password": "mock"}
-    )
-
-    activity = await run(app, api, f"/api/systems/{dev}/start")
-
-    assert activity["error"].endswith(
-        "The request used the credentials of system DEV (sapadm). Administrative calls at "
-        "sapstartsrv need a user such as devadm."
     )
 
 
@@ -345,23 +376,26 @@ async def test_unreachable_sapstartsrv_during_instance_start(app, api, transport
     assert "instance is UNKNOWN" in activity["error"]
 
 
-async def test_system_operation_uses_another_sapstartsrv_if_one_is_down(app, api, transport):
+async def test_unreadable_status_ends_in_timeout(app, api, transport):
     transport.remove_port(50113)  # sapstartsrv of the central services instance
 
-    activity = await run(app, api, f"/api/systems/{await system_id(api, 'DEV')}/start")
+    activity = await run(app, api, f"/api/systems/{await system_id(api, 'DEV')}/start?timeout=10")
 
-    assert activity["status"] == "SUCCEEDED"
-    assert "via sapstartsrv of instance 00 on sapapp1" in messages(activity)[0]
+    assert activity["status"] == "FAILED"
+    assert activity["error"] == (
+        "Timeout after 10 s: system DEV is 00:GRAY 01:UNKNOWN, expected all GREEN"
+    )
 
 
-async def test_system_without_reachable_sapstartsrv_fails(app, api, transport):
-    for port in (50013, 50113):
-        transport.remove_port(port)
+async def test_unreachable_host_agent_fails_the_system_operation(app, api, transport):
+    transport.remove_port(1128)  # host agent of sapapp1
 
     activity = await run(app, api, f"/api/systems/{await system_id(api, 'DEV')}/start")
 
     assert activity["status"] == "FAILED"
-    assert activity["error"] == "No sapstartsrv of system DEV could be reached"
+    assert activity["error"].startswith(
+        "StartInstance for DEV/01: the host agent of sapapp1 could not be reached"
+    )
 
 
 async def test_only_one_activity_per_system(app, api):

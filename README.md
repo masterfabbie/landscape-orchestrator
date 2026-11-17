@@ -37,15 +37,18 @@ Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenban
 - Der Datenbankstatus `SAPHostControl-DB-WARNING` kommt in der Praxis vor
 - Die HANA-Datenbank hat in der echten Landschaft eine **eigene SID**. Deshalb gibt es die
   Abhängigkeiten zwischen Systemen (siehe „Operationen und Aktivitäten“).
-- **`StopSystem` mit `sapadm` wird abgelehnt** („Permission denied“). Lesen darf `sapadm` am
-  sapstartsrv, administrieren nicht. Für Systemoperationen braucht das System eigene
-  Zugangsdaten, typischerweise `<sid>adm`.
+- **`StopSystem` am sapstartsrv mit `sapadm` wird abgelehnt** („Permission denied“). Lesen
+  darf `sapadm` am sapstartsrv, administrieren nicht. Deshalb laufen Systemoperationen jetzt
+  über den Host Agent (siehe „Operationen und Aktivitäten“).
+- **Stopp und Start einer Instanz über den Host Agent mit `sapadm`** funktionieren, das Flag
+  `O-INSTANCE` wird akzeptiert. Die Dialoginstanz meldete danach alle Prozesse grau bzw. grün;
+  der Stopp dauerte rund 35 Sekunden, der Start rund 15 Sekunden.
 
 Noch nicht gegen echte Hosts getestet:
 
-- Start und Stopp über den Host Agent, einschließlich des Flags `O-INSTANCE`
-- `StartSystem` und `StopSystem` mit den Zugangsdaten von `<sid>adm`
-- ob ein gestopptes System alle Prozesse grau meldet
+- Start und Stopp eines ganzen Systems über den Host Agent, in der Reihenfolge der
+  Startpriorität
+- Start und Stopp von zentralen Diensten und HANA-Instanzen über den Host Agent
 - Abhängigkeiten zwischen Systemen
 - HTTPS
 
@@ -171,9 +174,10 @@ Verhalten:
 
 - **Zugangsdaten:** Passwörter werden verschlüsselt gespeichert und von der API nie
   zurückgegeben. Die Zugangsdaten des Hosts gelten für den Host Agent. Für den sapstartsrv
-  gelten die Zugangsdaten des Systems, falls gesetzt, sonst die des Hosts. Lesende Aufrufe am
-  sapstartsrv funktionieren mit `sapadm`; Start und Stopp eines ganzen Systems brauchen
-  Zugangsdaten von `<sid>adm` am System.
+  gelten die Zugangsdaten des Systems, falls gesetzt, sonst die des Hosts. Für den Betrieb
+  reicht `sapadm` am Host: Start und Stopp laufen über den Host Agent, und den sapstartsrv
+  liest das Tool nur. Zugangsdaten am System braucht man nur, wenn ein sapstartsrv auch das
+  Lesen mit `sapadm` ablehnt.
 - **Discovery löscht nichts.** Instanzen und Datenbanken, die der Host nicht mehr meldet,
   bleiben im Inventar und werden im Ergebnis als fehlend aufgeführt.
 - **Nicht erreichbarer Host Agent:** Die Discovery antwortet mit HTTP 502, der Host wird als
@@ -206,11 +210,15 @@ curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/
 | Ziel | Weg | Fertig, wenn |
 |---|---|---|
 | Instanz | Host Agent (`StartInstance` / `StopInstance`) | alle Prozesse grün (Start) bzw. grau (Stopp) |
-| System | sapstartsrv (`StartSystem` / `StopSystem`) | alle Instanzen grün bzw. grau |
+| System | Host Agent, Instanz für Instanz | alle Instanzen grün bzw. grau |
 
-- **Reihenfolge im System:** Der sapstartsrv startet nach Startpriorität (Datenbank, zentrale
-  Dienste, Anwendungsserver) und stoppt umgekehrt. Angesprochen wird der erste erreichbare
-  sapstartsrv des Systems. Das betrifft nur Instanzen derselben SID.
+- **Warum alles über den Host Agent:** `StartSystem` und `StopSystem` des sapstartsrv lehnen
+  echte Systeme für `sapadm` ab. Über den Host Agent reicht `sapadm`.
+- **Reihenfolge im System:** Das Tool startet die Instanzen gruppenweise nach Startpriorität
+  (Datenbank, zentrale Dienste, Anwendungsserver) und stoppt in umgekehrter Reihenfolge. Jede
+  Gruppe muss den Zielzustand erreichen, bevor die nächste beginnt. Instanzen, die schon im
+  Zielzustand sind, werden übersprungen; ist das ganze System schon dort, endet die Aktivität
+  sofort. Die Startpriorität stammt aus der Discovery.
 - **Abhängigkeiten zwischen Systemen:** Hat die Datenbank eine eigene SID, wie in echten
   Landschaften üblich, legt man auf der Seite des ABAP-Systems fest, dass es vom
   Datenbanksystem abhängt (oder per API: `PUT /api/systems/{id}/dependencies` mit
@@ -288,9 +296,10 @@ Fehler sind Unterklassen von `SoapError`:
 | `SoapFaultError` | sonstiger Fehler des Dienstes, mit `faultstring` |
 | `SoapProtocolError` | Antwort ist kein gültiges SOAP oder enthält unbekannte Werte |
 
-Noch offen: `start_instance` und `stop_instance` senden standardmäßig das Flag `O-INSTANCE`.
-Ob der Host Agent das so erwartet, muss ein Test mit einer echten Instanz zeigen. Der
-übrige Teststand steht oben unter „Teststand gegen echte Hosts“.
+`start_instance` und `stop_instance` senden standardmäßig das Flag `O-INSTANCE`; ein echter
+Host Agent akzeptiert das. `SapControlClient` kann weiterhin `StartSystem` und `StopSystem`
+aufrufen, die Operationen nutzen das aber nicht mehr. Der übrige Teststand steht oben unter
+„Teststand gegen echte Hosts“.
 
 ## Mock-Umgebung
 
