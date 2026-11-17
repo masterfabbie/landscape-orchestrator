@@ -173,8 +173,8 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
 - **Virtuelle Hostnamen:** `StartInstance` nur mit SID und Nummer schlug für eine Instanz mit
   virtuellem Hostnamen mit „SAP Instance not found!“ fehl. Der Host Agent erkennt eine
   Instanz an SID, Nummer und SAPLOCALHOST; das Tool sendet deshalb `mHostname` (Hostname aus
-  `ListInstances`), und der Mock verlangt ihn wie der echte Host Agent. Der Erfolg mit
-  `mHostname` ist am echten System noch zu bestätigen.
+  `ListInstances`), und der Mock verlangt ihn wie der echte Host Agent. Mit `mHostname`
+  funktioniert der Start am echten System.
 - Noch nicht gegen echte Systeme getestet: verteilte Systeme mit Instanzen auf mehreren
   Hosts.
 

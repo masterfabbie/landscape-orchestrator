@@ -62,7 +62,7 @@ Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenban
 - **Virtuelle Hostnamen:** Ohne Hostnamen meldete der Host Agent bei `StartInstance` für eine
   Instanz mit virtuellem Hostnamen „SAP Instance not found!“. Er erkennt eine Instanz an SID,
   Instanznummer und SAPLOCALHOST. Das Tool sendet deshalb bei Start und Stopp den Hostnamen
-  der Instanz aus der Discovery mit; dass das am echten System hilft, ist noch zu bestätigen.
+  der Instanz aus der Discovery mit; damit funktioniert der Start am echten System.
 - **Diagnostics Agents** melden das Feature `SMDAGENT`.
 - Zentrale Dienste und Anwendungsserver eines Systems können auf verschiedenen Hosts dieselbe
   Instanznummer haben.
