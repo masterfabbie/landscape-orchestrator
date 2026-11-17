@@ -12,11 +12,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .clients import SoapError
-from .clients.hostagent import CimObject
+from .clients.hostagent import CimObject, HostAgentClient, HostAgentVersion
 from .clients.hostagent import Database as AgentDatabase
 from .clients.sapcontrol import OSProcess, StateColor, SystemInstance
 from .connections import ClientFactory
-from .models import STATUS_UNKNOWN, Database, Host, Instance, Sid
+from .models import STATUS_UNKNOWN, Database, Host, HostAgentInfo, Instance, Sid
 
 
 class DiscoveryError(Exception):
@@ -90,6 +90,20 @@ async def _read_instance_details(
     return None
 
 
+async def _read_version(agent: HostAgentClient) -> tuple[HostAgentVersion | None, str | None]:
+    """Version of the host agent and a warning if it could not be read.
+
+    A failure does not fail the discovery; the last known version is kept.
+    """
+    try:
+        version = await agent.get_version()
+    except SoapError as exc:
+        return None, f"Host agent version could not be read ({exc})"
+    if version is None:
+        return None, "Host agent version could not be read (output not recognized)"
+    return version, None
+
+
 async def discover_host(
     session: AsyncSession, host: Host, clients: ClientFactory
 ) -> DiscoveryResult:
@@ -105,6 +119,7 @@ async def discover_host(
             computer = await agent.get_computer_system()
             agent_instances = await agent.list_instances()
             agent_databases = await agent.list_databases()
+            version, version_warning = await _read_version(agent)
     except SoapError as exc:
         host.reachable = False
         host.last_error = str(exc)
@@ -114,6 +129,17 @@ async def discover_host(
     host.last_error = None
     _apply_computer_system(host, computer)
     result = DiscoveryResult()
+    if version_warning:
+        result.warnings.append(version_warning)
+    if version is not None:
+        info = await session.get(HostAgentInfo, host.id)
+        if info is None:
+            info = HostAgentInfo(host_id=host.id)
+            session.add(info)
+        info.release = version.release
+        info.patch = version.patch or None
+        info.details = version.details[:255] or None
+        info.checked_at = now
 
     rows = await session.execute(
         select(Instance, Sid).join(Sid, Instance.sid_id == Sid.id).where(
@@ -151,6 +177,7 @@ async def discover_host(
 
     await _store_databases(session, host, agent_databases, now, result)
     await session.flush()
+    await session.refresh(host, ["agent_info"])
     return result
 
 

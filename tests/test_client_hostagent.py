@@ -9,7 +9,12 @@ from landscape_orchestrator.clients import (
     HostAgentClient,
     SoapFaultError,
 )
-from landscape_orchestrator.clients.hostagent import DatabaseStatus, InstanceStatus
+from landscape_orchestrator.clients.hostagent import (
+    DatabaseStatus,
+    InstanceStatus,
+    OperationResult,
+    parse_version_info,
+)
 from landscape_orchestrator.mock.apps import create_hostagent_app
 
 pytestmark = pytest.mark.anyio
@@ -119,3 +124,40 @@ async def test_computer_system(landscape):
     assert operating_system.properties["CPU Count"].type == "uint16"
     assert len(system.find("ITSAMFileSystem")) == 1
     assert system.find("ITSAMComputerSystem") == [system]
+
+
+async def test_version_info(landscape):
+    async with make_client(landscape) as client:
+        result = await client.execute_operation("versioninfo")
+        version = await client.get_version()
+    assert result.operation_id == "MOCKOPERATION"
+    assert len(result.entries) > 5
+    assert (version.release, version.patch) == ("722", "72")
+    assert version.display == "7.22 PL72"
+    assert version.details.startswith("722 (EXT), patch 1611")
+
+
+async def test_unknown_operation_and_missing_credentials(landscape):
+    async with make_client(landscape) as client:
+        with pytest.raises(SoapFaultError, match="not found"):
+            await client.execute_operation("nosuchoperation")
+    async with make_client(landscape, auth=None) as client:
+        with pytest.raises(AuthenticationRequiredError):
+            await client.get_version()
+
+
+def test_parse_version_info_from_log_lines():
+    """Lines as a real host agent printed them; keys are not relied upon."""
+    lines = [
+        "Retrieve version info: /usr/sap/hostctrl/exe/saphostexec: 722 (EXT), patch 1611, "
+        "changelist 2315890, linuxx86_64, opt (EXT) (Oct 13 2026, 09:26:37)",
+        "Retrieve version info: /usr/sap/hostctrl/exe/sapstartsrv: 722 (EXT), patch 1611",
+        "Retrieve version info: kernel release                722",
+        "Retrieve version info: patch number                  72",
+    ]
+    for key in ("Info", "", "message"):
+        result = OperationResult("", {}, [(key, line) for line in lines])
+        version = parse_version_info(result)
+        assert (version.release, version.patch) == ("722", "72")
+        assert version.details.endswith("(Oct 13 2026, 09:26:37)")
+    assert parse_version_info(OperationResult("", {}, [("Info", "something else")])) is None

@@ -88,12 +88,25 @@ TEXTS: dict[str, tuple[str, str]] = {
     "system.general": ("General", "Allgemein"),
     "system.no_instances": ("No instances.", "Keine Instanzen."),
     "system.depends_hint": (
-        "“Depends on” shows other SIDs of this system whose instances start earlier. It "
-        "follows from the start priorities and cannot be edited.",
-        "„Hängt ab von“ zeigt andere SIDs dieses Systems, deren Instanzen früher starten. Es "
-        "ergibt sich aus den Startprioritäten und lässt sich nicht bearbeiten.",
+        "Database and central services start first and in parallel, application servers "
+        "after both; stops run the other way round. “Depends on” shows the other SIDs an "
+        "application server needs. It follows from the instance types and cannot be edited.",
+        "Datenbank und zentrale Dienste starten zuerst und parallel, Anwendungsserver nach "
+        "beiden; gestoppt wird umgekehrt. „Hängt ab von“ zeigt die anderen SIDs, die ein "
+        "Anwendungsserver braucht. Es ergibt sich aus den Instanztypen und lässt sich nicht "
+        "bearbeiten.",
     ),
     "field.sid": ("SID", "SID"),
+    "field.hostagent": ("Host agent", "Host Agent"),
+    "agents.group": ("Diagnostics agents", "Diagnostics-Agents"),
+    "agents.short": ("agents", "Agents"),
+    "agents.hint": (
+        "Diagnostics agents belong to the system but are not started or stopped with it. "
+        "They can be operated one by one.",
+        "Diagnostics-Agents gehören zum System, werden aber nicht mit ihm gestartet oder "
+        "gestoppt. Sie lassen sich einzeln bedienen.",
+    ),
+    "itype.agent": ("Diagnostics agent", "Diagnostics-Agent"),
     "sid.credentials_title": ("Credentials per SID", "Zugangsdaten je SID"),
     "notice.system_created": ("System {name} created.", "System {name} angelegt."),
     "notice.system_saved": ("System saved.", "System gespeichert."),
@@ -370,6 +383,8 @@ def pick_language(cookie: str | None, accept_language: str | None) -> str:
 def instance_type_key(features: str | None) -> str | None:
     """Translation key of the instance type for a sapstartsrv feature list."""
     names = set((features or "").split("|"))
+    if "SMDAGENT" in names:
+        return "itype.agent"
     if "HDB" in names:
         return "itype.hana"
     if "MESSAGESERVER" in names or "ENQUE" in names:

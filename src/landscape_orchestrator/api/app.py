@@ -186,6 +186,7 @@ def create_app(
             username=body.username,
             password_encrypted=secret_box.encrypt(body.password) if body.password else None,
         )
+        host.agent_info = None  # nothing read yet; avoids a lazy load
         session.add(host)
         try:
             await session.commit()

@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from landscape_orchestrator.clients import HostAgentClient, SoapFaultError
 from landscape_orchestrator.clients.sapcontrol import OSProcess, StateColor
 from landscape_orchestrator.connections import ClientFactory
 from landscape_orchestrator.crypto import SecretBox, generate_secret_key
@@ -208,3 +209,36 @@ async def test_sid_credentials_take_precedence(session, secret_box, transport):
     async with factory.sapcontrol(host, 0) as sapcontrol:
         with pytest.raises(Exception, match="Invalid Credentials"):
             await sapcontrol.stop()
+
+
+async def test_discovery_stores_host_agent_version(session, secret_box, clients):
+    host = make_host(secret_box, "sapapp1")
+    session.add(host)
+    await session.flush()
+
+    result = await discover_host(session, host, clients)
+
+    assert result.warnings == []
+    assert host.agent_info.release == "722"
+    assert host.agent_info.patch == "72"
+    assert host.hostagent_version == "7.22 PL72"
+    assert host.agent_info.details.startswith("722 (EXT), patch 1611")
+
+
+async def test_unreadable_version_gives_warning_and_keeps_old(
+    session, secret_box, clients, monkeypatch
+):
+    host = make_host(secret_box, "sapapp1")
+    session.add(host)
+    await session.flush()
+    await discover_host(session, host, clients)
+
+    async def refuse(self):
+        raise SoapFaultError("Permission denied")
+
+    monkeypatch.setattr(HostAgentClient, "get_version", refuse)
+    result = await discover_host(session, host, clients)
+
+    assert result.warnings == ["Host agent version could not be read (Permission denied)"]
+    assert host.hostagent_version == "7.22 PL72"
+    assert result.instances_updated == ["DEV/01", "DEV/00"]

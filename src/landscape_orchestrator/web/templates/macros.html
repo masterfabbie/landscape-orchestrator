@@ -14,6 +14,21 @@
 </span>
 {% endmacro %}
 
+{# Instances of a system in the landscape: main instances, then the diagnostics agents in a
+   collapsed group. They keep their own operation buttons. #}
+{% macro system_instances(instances, t, instance_type, disabled=false, depends=none) %}
+{% set main = instances | rejectattr("is_agent") | sort(attribute="priority") | list %}
+{% set agents = instances | selectattr("is_agent") | sort(attribute="label") | list %}
+{% if main %}{{ instance_table(main, t, instance_type, disabled=disabled, depends=depends) }}{% endif %}
+{% if agents %}
+<details class="agent-group">
+  <summary>{{ t("agents.group") }} ({{ agents | length }})</summary>
+  <p class="muted">{{ t("agents.hint") }}</p>
+  {{ instance_table(agents, t, instance_type, disabled=disabled, depends=depends) }}
+</details>
+{% endif %}
+{% endmacro %}
+
 {% macro instance_table(instances, t, instance_type, show_system=false, show_host=true, disabled=false, depends=none) %}
 <div class="table-wrap">
 <table>
@@ -94,4 +109,56 @@
   </tbody>
 </table>
 </div>
+{% endmacro %}
+
+{# Rows of the instances of a system in the configuration; depends: instance id -> SIDs. #}
+{% macro config_instance_head(t, show_priority=false, show_pool=false) %}
+<thead><tr><th>{{ t("field.instance") }}</th><th>{{ t("field.sid") }}</th><th>{{ t("field.type") }}</th><th>{{ t("field.host") }}</th>{% if show_priority %}<th>{{ t("field.priority") }}</th>{% endif %}<th>{{ t("deps.depends_on") }}</th>{% if show_pool %}<th>{{ t("field.pool") }}</th>{% endif %}<th>{{ t("field.actions") }}</th></tr></thead>
+{% endmacro %}
+
+{% macro config_instance_rows(instances, system, depends, t, instance_type, back="", show_priority=false, show_pool=false) %}
+{% for instance in instances %}
+  <tr>
+    <td class="mono">{{ instance.label }}</td>
+    <td class="mono">{{ instance.sid.name }}</td>
+    <td>{{ instance_type(instance.features) }}</td>
+    <td>{{ instance.host.name }}</td>
+    {% if show_priority %}<td class="mono">{{ instance.start_priority or "" }}</td>{% endif %}
+    <td class="mono">{{ depends.get(instance.id, []) | join(", ") }}</td>
+    {% if show_pool %}<td>{{ system.pool.name if system.pool else "" }}</td>{% endif %}
+    <td>
+      <form method="post" action="/configuration/systems/{{ system.id }}/instances/{{ instance.id }}/remove" data-confirm="{{ t('system.remove_instance_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+        {% if back %}<input type="hidden" name="back" value="{{ back }}">{% endif %}
+        <button type="submit" class="link">{{ t("system.remove_instance") }}</button>
+      </form>
+    </td>
+  </tr>
+{% endfor %}
+{% endmacro %}
+
+{# Instances of a system for the configuration: main instances, then the diagnostics agents
+   in a group that is collapsed by default. #}
+{% macro config_instances(system, depends, t, instance_type, back="", show_priority=false, show_pool=false) %}
+{% set main = system.instances | rejectattr("is_agent") | sort(attribute="priority") | list %}
+{% set agents = system.instances | selectattr("is_agent") | sort(attribute="label") | list %}
+{% if main %}
+<div class="table-wrap">
+<table>
+  {{ config_instance_head(t, show_priority, show_pool) }}
+  <tbody>{{ config_instance_rows(main, system, depends, t, instance_type, back, show_priority, show_pool) }}</tbody>
+</table>
+</div>
+{% endif %}
+{% if agents %}
+<details class="agent-group">
+  <summary>{{ t("agents.group") }} ({{ agents | length }})</summary>
+  <p class="muted">{{ t("agents.hint") }}</p>
+  <div class="table-wrap">
+  <table>
+    {{ config_instance_head(t, show_priority, show_pool) }}
+    <tbody>{{ config_instance_rows(agents, system, depends, t, instance_type, back, show_priority, show_pool) }}</tbody>
+  </table>
+  </div>
+</details>
+{% endif %}
 {% endmacro %}

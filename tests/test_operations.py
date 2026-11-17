@@ -287,7 +287,10 @@ async def test_dependency_without_instances_fails(app, api):
     activity = await run(app, api, f"/api/systems/{await system_id(api, 'DEV')}/start")
 
     assert activity["status"] == "FAILED"
-    assert activity["error"] == "System HDV has no instances in the inventory"
+    assert activity["error"] == (
+        "System HDV has no instances in the inventory that are started or stopped with "
+        "the system"
+    )
     assert (await statuses(api))["00"] == "GRAY"
 
 
@@ -563,3 +566,109 @@ async def test_database_refresh_failure_does_not_fail_the_activity(app, api, tra
     transport._transports[11128].handle_async_request = flaky
     activity = await run(app, api, f"/api/instances/{hana}/start")
     assert activity["status"] == "SUCCEEDED"
+
+
+# --- roles: parallel start, diagnostics agents, duplicate instance numbers ---------------
+
+APP2_HOST = APP_HOST | {"name": "sapapp2", "hostagent_port": 6128, "sapcontrol_port_offset": 5000}
+
+
+@pytest.fixture
+async def extended_api(settings, extended_landscape, clock):
+    """One system with all instances of the extended landscape: HDV/02, DEV/01, DEV/00 on
+    sapapp1 and sapapp2, and the diagnostics agent DAA/98."""
+
+    async def fake_sleep(seconds: float) -> None:
+        clock.advance(seconds)
+        await asyncio.sleep(0)
+
+    application = create_app(
+        settings,
+        transport=MockLandscapeTransport(extended_landscape),
+        poll_interval=1.0,
+        sleep=fake_sleep,
+        clock=clock,
+    )
+    async with application.router.lifespan_context(application):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application),
+            base_url="http://test",
+            headers={"Authorization": f"Bearer {settings.api_token}"},
+        ) as client:
+            for body in (APP_HOST, DB_HOST, APP2_HOST):
+                host = (await client.post("/api/hosts", json=body)).json()
+                response = await client.post(f"/api/hosts/{host['id']}/discover")
+                assert response.status_code == 200, response.text
+            ids = [i["id"] for i in (await client.get("/api/instances")).json()]
+            body = {"name": "DEV", "instance_ids": ids}
+            assert (await client.post("/api/systems", json=body)).status_code == 201
+            yield application, client
+
+
+async def test_labels_and_roles(extended_api):
+    _, api = extended_api
+    instances = {i["label"]: i["role"] for i in (await api.get("/api/instances")).json()}
+    assert instances == {
+        "DEV/01": "central",
+        "DEV/00 (sapapp1)": "application",
+        "DAA/98": "agent",
+        "HDV/02": "database",
+        "DEV/00 (sapapp2)": "application",
+    }
+
+
+async def test_system_start_runs_database_and_central_services_in_parallel(
+    extended_api, extended_landscape, clock
+):
+    app, api = extended_api
+    dev = await system_id(api, "DEV")
+
+    start = await run(app, api, f"/api/systems/{dev}/start")
+
+    assert start["status"] == "SUCCEEDED", start["error"]
+    log = messages(start)
+    requested = [
+        m.split(" requested")[0].removeprefix("Start of ") for m in log if " requested" in m
+    ]
+    assert requested == ["HDV/02", "DEV/01", "DEV/00 (sapapp1)", "DEV/00 (sapapp2)"]
+    # Both were requested before either was running.
+    first_green = next(i for i, m in enumerate(log) if "GREEN" in m)
+    assert log.index("Start of DEV/01 requested via host agent of sapapp1") < first_green
+    # Application servers only after database and central services run.
+    app_request = log.index("Start of DEV/00 (sapapp1) requested via host agent of sapapp1")
+    assert any("DEV/01:GREEN" in m and "HDV/02:GREEN" in m for m in log[:app_request])
+    # The diagnostics agent is not part of the system operation.
+    assert not any("DAA" in m for m in log)
+
+
+async def test_system_stop_leaves_diagnostics_agent_running(
+    extended_api, extended_landscape, clock
+):
+    app, api = extended_api
+    dev = await system_id(api, "DEV")
+    await run(app, api, f"/api/systems/{dev}/start")
+
+    stop = await run(app, api, f"/api/systems/{dev}/stop")
+
+    assert stop["status"] == "SUCCEEDED", stop["error"]
+    requested = [m.split(" requested")[0] for m in messages(stop) if " requested" in m]
+    assert requested == [
+        "Stop of DEV/00 (sapapp1)",
+        "Stop of DEV/00 (sapapp2)",
+        "Stop of DEV/01",
+        "Stop of HDV/02",
+    ]
+    agent = extended_landscape.host("sapapp1").instance(98)
+    assert agent.status(clock()) is Status.RUNNING
+
+    # The agent can still be operated on its own.
+    daa = next(i["id"] for i in (await api.get("/api/instances")).json() if i["sid"] == "DAA")
+    single = await run(app, api, f"/api/instances/{daa}/stop")
+    assert single["status"] == "SUCCEEDED"
+    assert agent.status(clock()) is Status.STOPPED
+
+
+async def test_host_agent_version_is_stored(extended_api):
+    _, api = extended_api
+    hosts = (await api.get("/api/hosts")).json()
+    assert {h["hostagent_version"] for h in hosts} == {"7.22 PL72"}

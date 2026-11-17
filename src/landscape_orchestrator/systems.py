@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from .models import Activity, Instance, Sid, System, activity_systems
 from .operations import ACTIVE_STATUSES
 from .pools import assign_pool
+from .roles import Role
 
 NAME_MAX_LENGTH = 64
 
@@ -28,33 +29,34 @@ class SystemChangeError(ValueError):
         self.code = code
 
 
-def is_database_instance(instance: Instance) -> bool:
-    """Whether the features mark the instance as a database instance (HANA)."""
-    return "HDB" in (instance.features or "").split("|")
-
-
 def suggest_name(instances: Iterable[Instance]) -> str:
-    """Name proposal: the SID of the application instances, else the first SID."""
-    ordered = sorted(instances, key=lambda instance: (instance.sid.name, instance.number))
-    application = [instance for instance in ordered if not is_database_instance(instance)]
-    chosen = application or ordered
-    return chosen[0].sid.name if chosen else ""
+    """Name proposal: the SID of the ABAP or Java instances, else of the central services,
+    else the first SID. Database instances and diagnostics agents come last."""
+    preference = {Role.APPLICATION: 0, Role.CENTRAL: 1, Role.DATABASE: 2, Role.AGENT: 3}
+    ordered = sorted(
+        instances, key=lambda i: (preference[i.role], i.sid.name, i.number)
+    )
+    return ordered[0].sid.name if ordered else ""
 
 
 def depends_on_sids(system: System) -> dict[int, list[str]]:
-    """instance id -> other SIDs of the same system whose instances start earlier.
+    """instance id -> other SIDs of the same system the instance needs, for display only.
 
-    Shown as information only, e.g. the HANA SID for the instances of an ABAP system.
-    Derived from the start priorities, which also define the order of operations.
+    Application servers need the database and the central services; central services,
+    databases and diagnostics agents need nothing within the system. This follows the
+    order of system operations (see :mod:`roles`).
     """
+    needed = {
+        instance.sid.name
+        for instance in system.instances
+        if instance.role in (Role.DATABASE, Role.CENTRAL)
+    }
     result: dict[int, list[str]] = {}
     for instance in system.instances:
-        earlier = {
-            other.sid.name
-            for other in system.instances
-            if other.sid_id != instance.sid_id and other.priority < instance.priority
-        }
-        result[instance.id] = sorted(earlier)
+        if instance.role is Role.APPLICATION:
+            result[instance.id] = sorted(needed - {instance.sid.name})
+        else:
+            result[instance.id] = []
     return result
 
 

@@ -27,7 +27,8 @@
           {{ ui.status_badge(system_status(system), t) }}
           {% if active.get(system.id) %}<a class="badge badge-running" href="/activities/{{ active[system.id].id }}">{{ t("overview.running") }}</a>{% endif %}
         </td>
-        <td>{% for instance in system.instances | sort(attribute="priority") %}<span class="mono" title="{{ instance_type(instance.features) }}">{{ instance.label }}</span>{% if not loop.last %} {% endif %}{% endfor %}</td>
+        <td>{% for instance in system.instances | rejectattr("is_agent") | sort(attribute="priority") %}<span class="mono" title="{{ instance_type(instance.features) }}">{{ instance.label }}</span>{% if not loop.last %} {% endif %}{% endfor %}
+          {% set agents = system.instances | selectattr("is_agent") | list %}{% if agents %}<span class="muted">+ {{ agents | length }} {{ t("agents.short") }}</span>{% endif %}</td>
         <td>{% for dependency in system.depends_on %}<a href="/systems/{{ dependency.id }}">{{ dependency.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</td>
         <td>{{ ui.operation_buttons("/systems/" ~ system.id, t, active.get(system.id)) }}</td>
       </tr>
@@ -44,13 +45,14 @@
   {% if hosts %}
   <div class="table-wrap">
   <table>
-    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("field.address") }}</th><th>{{ t("field.os") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("field.reachable") }}</th><th>{{ t("field.last_discovery") }}</th></tr></thead>
+    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("field.address") }}</th><th>{{ t("field.os") }}</th><th>{{ t("field.hostagent") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("field.reachable") }}</th><th>{{ t("field.last_discovery") }}</th></tr></thead>
     <tbody>
     {% for host in hosts %}
       <tr>
         <td><a class="strong" href="/hosts/{{ host.id }}">{{ host.name }}</a></td>
         <td class="mono">{{ host.address }}</td>
         <td>{{ host.os_name or "" }} {{ host.os_version or "" }}</td>
+        <td class="mono" {% if host.agent_info and host.agent_info.details %}title="saphostexec {{ host.agent_info.details }}"{% endif %}>{{ host.hostagent_version or "" }}</td>
         <td>{{ host.instances | length }}</td>
         <td>{{ ui.reach_badge(host, t) }}</td>
         <td class="muted">{{ host.last_discovery_at | time or t("hosts.never") }}</td>

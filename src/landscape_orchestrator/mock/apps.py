@@ -227,7 +227,22 @@ def create_sapcontrol_app(landscape: MockLandscape, host_name: str, nr: int) -> 
 
 # --- SAPHostControl (host agent) ----------------------------------------------------------
 
-HOSTCONTROL_PROTECTED = frozenset({"StartInstance", "StopInstance"})
+HOSTCONTROL_PROTECTED = frozenset({"StartInstance", "StopInstance", "ExecuteOperation"})
+
+# Output of the operation "versioninfo" of a real host agent 7.22, shortened. The real host
+# agent returned these lines as log messages; the message key used per line is an assumption.
+HOSTAGENT_VERSION_LINES = (
+    "Retrieve version info: *************************** Component ********************",
+    "Retrieve version info: /usr/sap/hostctrl/exe/saphostexec: 722 (EXT), patch 1611, "
+    "changelist 2315890, linuxx86_64, opt (EXT) (Oct 13 2026, 09:26:37)",
+    "Retrieve version info: --------------------",
+    "Retrieve version info: SAPHOSTAGENT information",
+    "Retrieve version info: --------------------",
+    "Retrieve version info: kernel release                722",
+    "Retrieve version info: kernel make variant           722_EXT_REL",
+    "Retrieve version info: patch number                  72",
+    "Retrieve version info: latest change number          2315890",
+)
 
 _DB_STATUS = {
     Status.RUNNING: "SAPHostControl-DB-RUNNING",
@@ -391,6 +406,20 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
             }
         }
 
+    def execute_operation(params: dict[str, Any]) -> dict[str, Any]:
+        name = params.get("aOperation")
+        if name != "versioninfo":
+            raise SoapFault(f"Operation '{name}' not found")
+        lines = ["saphostcontrol: Executing 'Retrieve version info'", *HOSTAGENT_VERSION_LINES]
+        return {
+            "result": {
+                "mOperationID": "MOCKOPERATION",
+                "mOperationResults": [
+                    {"mMessageKey": "Info", "mMessageValue": line} for line in lines
+                ],
+            }
+        }
+
     def start_instance(params: dict[str, Any]) -> dict[str, Any]:
         inst = _find_instance(params)
         landscape.start_instance(inst)
@@ -411,6 +440,7 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
             "GetComputerSystem": get_computer_system,
             "StartInstance": start_instance,
             "StopInstance": stop_instance,
+            "ExecuteOperation": execute_operation,
         },
         protected=HOSTCONTROL_PROTECTED,
     )

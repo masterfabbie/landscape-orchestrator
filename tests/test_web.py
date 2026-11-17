@@ -722,3 +722,66 @@ async def test_old_database_is_refused(tmp_path):
     await create_tables(fresh)
     await create_tables(fresh)  # an existing database of the current schema is accepted
     await fresh.dispose()
+
+
+# --- diagnostics agents, duplicate instance numbers, host agent version -----------------
+
+APP2_HOST = APP_HOST | {
+    "name": "sapapp2",
+    "hostagent_port": "6128",
+    "sapcontrol_port_offset": "5000",
+}
+
+
+@pytest.fixture
+async def extended_browser(settings, extended_landscape, clock):
+    """Signed in, hosts sapapp1, sapdb1, sapapp2 discovered, one system DEV with all six
+    instances (including the diagnostics agent DAA/98 and DEV/00 on two hosts)."""
+
+    async def fake_sleep(seconds: float) -> None:
+        clock.advance(seconds)
+        await asyncio.sleep(0)
+
+    application = create_app(
+        settings,
+        transport=MockLandscapeTransport(extended_landscape),
+        poll_interval=1.0,
+        sleep=fake_sleep,
+        clock=clock,
+    )
+    async with application.router.lifespan_context(application):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://test"
+        ) as client:
+            await client.post("/login", data={"token": settings.api_token})
+            for number, body in enumerate((APP_HOST, DB_HOST, APP2_HOST), start=1):
+                await client.post("/configuration/hosts", data=body)
+                await client.post(f"/configuration/hosts/{number}/discover")
+            data = {"name": "DEV", "instance_id": [str(i) for i in range(1, 6)]}
+            response = await client.post("/configuration/systems", data=data)
+            assert "system_created" in response.headers["location"]
+            yield client
+
+
+async def test_diagnostics_agents_are_grouped(extended_browser):
+    page = (await extended_browser.get("/configuration?tab=systems")).text
+    assert 'class="agent-group"' in page and "Diagnostics agents (1)" in page
+    assert "Diagnostics agent</td>" in page
+    # Central services need nothing, application servers need database and central services.
+    assert re.search(r"DEV/01</td>.*?<td class=\"mono\"></td>", page, re.S)
+    assert re.search(r"DEV/00 \(sapapp1\)</td>.*?<td class=\"mono\">HDV</td>", page, re.S)
+
+    system = (await extended_browser.get("/systems/1")).text
+    assert "Diagnostics agents (1)" in system
+    assert 'action="/instances/3/start"' in system  # the agent keeps its own operations
+    landscape = (await extended_browser.get("/landscape")).text
+    assert "+ 1 agents" in landscape and "DAA/98" not in landscape
+    assert "DEV/00 (sapapp1)" in landscape and "DEV/00 (sapapp2)" in landscape
+
+
+async def test_host_agent_version_is_shown(extended_browser):
+    hosts = (await extended_browser.get("/landscape?tab=hosts")).text
+    assert "Host agent" in hosts and hosts.count(">7.22 PL72</td>") == 3
+    assert "saphostexec 722 (EXT), patch 1611" in hosts
+    assert "7.22 PL72" in (await extended_browser.get("/hosts/1")).text
+    assert "7.22 PL72" in (await extended_browser.get("/configuration/hosts/1")).text

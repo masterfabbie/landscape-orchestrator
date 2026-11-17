@@ -33,6 +33,10 @@ class InstanceOut(BaseModel):
     # None while the instance is not assigned to a system.
     system_id: int | None
     number: str
+    # SID/number, with the instance hostname if SID/number exist on several hosts.
+    label: str
+    # database, central, application or agent; agents are left out of system operations.
+    role: str
     hostname: str
     sap_version_info: str | None
     features: str | None
@@ -79,6 +83,8 @@ class HostOut(BaseModel):
     reachable: bool | None
     last_error: str | None
     last_discovery_at: datetime | None
+    # E.g. "7.22 PL72", read at the last discovery.
+    hostagent_version: str | None
 
 
 class HostDetail(HostOut):

@@ -80,6 +80,9 @@ INSTANCE_KINDS: dict[str, InstanceKind] = {
     "J2EE": InstanceKind(
         "J2EE|IGS", "3", (("jstart", "J2EE Server"), ("igswd_mt", "IGS Watchdog"))
     ),
+    # Diagnostics agent of SAP Solution Manager. The feature SMDAGENT is confirmed by a real
+    # system; its start priority and process names are assumptions.
+    "SMDAGENT": InstanceKind("SMDAGENT", "3", (("jstart", "SMD Agent"),)),
 }
 
 

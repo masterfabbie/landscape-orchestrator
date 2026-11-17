@@ -56,6 +56,7 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `connections.py` | baut Clients für Inventareinträge samt Zugangsdaten |
 | `discovery.py` | liest einen Host aus und aktualisiert das Inventar |
 | `dependencies.py` | Abhängigkeiten zwischen Systemen, Reihenfolge von Start und Stopp |
+| `roles.py` | Rolle einer Instanz aus ihren Features: Datenbank, zentrale Dienste, Anwendungsserver, Diagnostics Agent |
 | `systems.py` | Systeme als Gruppen von Instanzen: anlegen, zuordnen, entfernen, löschen, Namens- und Zuordnungsvorschläge, abgeleitete „Hängt ab von“-SIDs |
 | `pools.py` | Zuordnung von Systemen zu Pools |
 | `operations.py` | Start, Stopp, Neustart als Hintergrund-Aktivitäten (`OperationRunner`) |
@@ -66,9 +67,13 @@ Alles liegt unter `src/landscape_orchestrator/`.
 Wichtige Entwurfsentscheidungen:
 
 - **Alle Starts und Stopps laufen über den Host Agent** (`StartInstance`, `StopInstance`) und
-  brauchen nur `sapadm`. Ganze Systeme orchestriert das Tool selbst: Instanzen gruppenweise
-  nach Startpriorität, Stopp umgekehrt. `StartSystem` und `StopSystem` des sapstartsrv werden
-  nicht genutzt, weil echte Systeme sie für `sapadm` ablehnen. Den sapstartsrv liest das Tool
+  brauchen nur `sapadm`. Ganze Systeme orchestriert das Tool selbst nach Rollen
+  (`roles.py`): Datenbank und zentrale Dienste starten parallel, Anwendungsserver erst danach;
+  Stopp umgekehrt. Innerhalb einer Rolle ordnet die Startpriorität. Diagnostics Agents
+  (`SMDAGENT`) gehören zum System, sind aber nicht Teil von Systemoperationen und zählen nicht
+  zum Systemstatus; einzeln bleiben sie bedienbar. Wunsch des Eigentümers, angelehnt an LaMa.
+  `StartSystem` und `StopSystem` des sapstartsrv werden nicht genutzt, weil echte Systeme sie
+  für `sapadm` ablehnen. Den sapstartsrv liest das Tool
   nur (`GetProcessList`, `GetSystemInstanceList`).
 - **Systeme sind selbst angelegte Gruppen von Instanzen** mit frei wählbarem Namen; die
   Instanzen dürfen verschiedene SIDs haben (z. B. ABAP-System samt HANA-Instanz mit eigener
@@ -76,14 +81,19 @@ Wichtige Entwurfsentscheidungen:
   (`instances.system_id` ist dann NULL), nie Systeme. Nur Instanzen eines Systems lassen sich
   bedienen und erscheinen in der Landscape. Vorschläge (Name aus der SID der
   Anwendungsinstanzen, Zuordnung zu dem einen System, das die SID schon enthält) werden nie
-  automatisch übernommen. „Hängt ab von“ je Instanz wird aus den Startprioritäten abgeleitet
-  und nur angezeigt.
+  automatisch übernommen. „Hängt ab von“ je Instanz wird aus den Rollen abgeleitet (nur
+  Anwendungsserver hängen ab, von Datenbank und zentralen Diensten) und nur angezeigt.
+- **Bezeichnung einer Instanz** ist `SID/NR`; gibt es SID/NR auf mehreren Hosts, kommt der
+  Instanz-Hostname dazu (`Instance.label`, Zählung per `column_property`).
+- **Version des Host Agents** kommt aus `ExecuteOperation` `versioninfo` (synchron,
+  Timeout -1) und steht in der eigenen Tabelle `host_agent_info`. Geparst werden nur die
+  Texte der Meldungen, nicht ihre Schlüssel.
 - **Zugangsdaten** gibt es auf zwei Ebenen: Die des Hosts gelten für den Host Agent, die der
   SID für den sapstartsrv. Fehlen die der SID, gelten die des Hosts.
 - **Abhängigkeiten zwischen Systemen** werden von Hand gepflegt, z. B. wenn ein
   Datenbanksystem von mehreren Systemen genutzt wird. Start geht erst über die
   Abhängigkeiten, Stopp umgekehrt, und eine Abhängigkeit, die ein anderes System noch braucht,
-  bleibt laufen. Innerhalb eines Systems ordnen die Startprioritäten über alle SIDs.
+  bleibt laufen. Innerhalb eines Systems ordnen Rollen und Startprioritäten über alle SIDs.
 - **Nur eine aktive Aktivität pro System.** Eine Aktivität sperrt alle beteiligten Systeme
   (Tabelle `activity_systems`); weitere werden abgelehnt. Solange sie läuft, lässt sich das
   System auch nicht ändern (Instanzen zuordnen oder entfernen, löschen).
@@ -109,6 +119,9 @@ Wichtige Entwurfsentscheidungen:
 
 - Die Tests laufen gegen die simulierte Landschaft in `mock/`. `MockLandscapeTransport`
   leitet Anfragen ohne Netzwerk nach Port an die Mock-Dienste weiter.
+- Die Fixture `extended_landscape` ergänzt einen Diagnostics Agent `DAA/98` auf `sapapp1` und
+  einen Host `sapapp2` mit einer zweiten Instanz `DEV/00`; damit werden Rollen,
+  Parallelstart und doppelte Instanznummern getestet.
 - Die Standardlandschaft hat zwei SIDs: `DEV` (ABAP) und `HDV` (HANA, eigene SID). Nach der
   Discovery sind alle Instanzen nicht zugeordnet; die Tests der Operationen, der API und der
   Oberfläche legen daraus die Systeme `DEV` und `HDV` an. Ein Test fasst alle drei Instanzen
@@ -150,8 +163,13 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
 - Das Systemmodell (Schema 2) funktioniert: Ein System aus zentralen Diensten, Dialoginstanz
   und HANA-Instanz mit eigener SID ließ sich als Ganzes stoppen und starten, einzelne
   Instanzen darin ließen sich neu starten und starten.
+- `ExecuteOperation` `versioninfo` funktioniert mit `sapadm` (per `saphostctrl` geprüft); die
+  Antwort sind Protokollzeilen mit `kernel release` und `patch number`. Diagnostics Agents
+  melden `SMDAGENT`. Zentrale Dienste und Anwendungsserver können auf verschiedenen Hosts
+  dieselbe Instanznummer haben.
 - Noch nicht gegen echte Systeme getestet: verteilte Systeme mit Instanzen auf mehreren
-  Hosts.
+  Hosts, die parallele Startreihenfolge, `ExecuteOperation` über SOAP aus dem Tool (die
+  Schlüssel der Meldungen sind unbekannt; der Parser ignoriert sie).
 
 ## Offene Annahmen, die ein Test mit einer echten Instanz klären muss
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -114,6 +115,47 @@ class CimObject:
 class OperationResult:
     operation_id: str
     messages: dict[str, str]
+    # All messages in order; keys may repeat, e.g. for log lines.
+    entries: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class HostAgentVersion:
+    release: str
+    patch: str
+    # Version line of saphostexec, e.g. "722 (EXT), patch 1611, changelist ...".
+    details: str
+
+    @property
+    def display(self) -> str:
+        """E.g. "7.22 PL72", the way the host agent version is usually named."""
+        release = self.release
+        if len(release) == 3 and release.isdigit():
+            release = f"{release[0]}.{release[1:]}"
+        return f"{release} PL{self.patch}" if self.patch else release
+
+
+_VERSION_FIELD = re.compile(r"(kernel release|patch number)\s{2,}(\S+)\s*$")
+_SAPHOSTEXEC_LINE = re.compile(r"/saphostexec:\s*(.+?)\s*$")
+
+
+def parse_version_info(result: OperationResult) -> HostAgentVersion | None:
+    """Host agent version from the messages of the operation "versioninfo".
+
+    Recognized are the lines "kernel release", "patch number" and the component line of
+    saphostexec. Only the text of the messages is used, not their keys.
+    """
+    fields: dict[str, str] = {}
+    details = ""
+    for key, value in result.entries:
+        for text in (value, f"{key}: {value}"):
+            if match := _VERSION_FIELD.search(text):
+                fields.setdefault(match.group(1), match.group(2))
+            if not details and (match := _SAPHOSTEXEC_LINE.search(text)):
+                details = match.group(1)
+    if "kernel release" not in fields:
+        return None
+    return HostAgentVersion(fields["kernel release"], fields.get("patch number", ""), details)
 
 
 def _property_dict(value: Any) -> dict[str, str]:
@@ -162,12 +204,14 @@ def _cim_object(value: Any) -> CimObject:
 
 def _operation_result(value: Any) -> OperationResult:
     data = as_dict(value)
+    entries = [
+        (item.get("mMessageKey", "") or "", item.get("mMessageValue", "") or "")
+        for item in map(as_dict, items(data.get("mOperationResults")))
+    ]
     return OperationResult(
         operation_id=data.get("mOperationID", "") or "",
-        messages={
-            item.get("mMessageKey", ""): item.get("mMessageValue", "")
-            for item in map(as_dict, items(data.get("mOperationResults")))
-        },
+        messages=dict(entries),
+        entries=entries,
     )
 
 
@@ -263,6 +307,28 @@ class HostAgentClient(SoapClient):
         """Host information: computer system, operating system, file systems, processes."""
         result = await self.call("GetComputerSystem", {"aArguments": []})
         return _cim_object(result.get("result"))
+
+    async def execute_operation(
+        self, name: str, arguments: dict[str, str] | None = None, *, timeout: int = -1
+    ) -> OperationResult:
+        """Run a named operation, e.g. "versioninfo". ``timeout`` -1 waits until it is done.
+
+        Confirmed with a real host agent for "versioninfo" and sapadm; the messages are its
+        log lines.
+        """
+        result = await self.call(
+            "ExecuteOperation",
+            {
+                "aOperation": name,
+                "aArguments": _property_list(arguments or {}),
+                "aOptions": {"mTimeout": timeout, "mOptions": [], "mSoftTimeout": 0},
+            },
+        )
+        return _operation_result(result.get("result"))
+
+    async def get_version(self) -> HostAgentVersion | None:
+        """Version of the host agent; None if the output is not recognized."""
+        return parse_version_info(await self.execute_operation("versioninfo"))
 
     async def start_instance(
         self,

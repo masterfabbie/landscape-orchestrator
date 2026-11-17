@@ -10,6 +10,7 @@
 </div>
 <section class="card">
   <dl>
+    <dt>{{ t("field.hostagent") }}</dt><dd>{% if host.agent_info %}<span class="mono">{{ host.hostagent_version }}</span>{% if host.agent_info.details %} <span class="muted">(saphostexec {{ host.agent_info.details }})</span>{% endif %}{% else %}{{ t("unknown") }}{% endif %}</dd>
     <dt>{{ t("field.os") }}</dt><dd>{{ host.os_name or "" }} {{ host.os_version or "" }}</dd>
     <dt>{{ t("field.cpus") }}</dt><dd>{{ host.cpu_count or "" }}</dd>
     <dt>{{ t("field.memory") }}</dt><dd>{{ host.memory_kb | memory }}</dd>

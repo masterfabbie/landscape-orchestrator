@@ -24,6 +24,6 @@
 </section>
 <section class="card">
   <h2>{{ t("field.instances") }}</h2>
-  {{ ui.instance_table(system.instances | sort(attribute="priority"), t, instance_type, disabled=active, depends=depends) }}
+  {{ ui.system_instances(system.instances, t, instance_type, disabled=active, depends=depends) }}
 </section>
 {% endblock %}

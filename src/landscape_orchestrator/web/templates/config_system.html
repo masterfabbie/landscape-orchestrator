@@ -22,29 +22,7 @@
 <section class="card">
   <h2>{{ t("field.instances") }}</h2>
   {% if system.instances %}
-  <div class="table-wrap">
-  <table>
-    <thead><tr><th>{{ t("field.instance") }}</th><th>{{ t("field.sid") }}</th><th>{{ t("field.type") }}</th><th>{{ t("field.host") }}</th><th>{{ t("field.priority") }}</th><th>{{ t("deps.depends_on") }}</th><th>{{ t("field.actions") }}</th></tr></thead>
-    <tbody>
-    {% for instance in system.instances | sort(attribute="priority") %}
-      <tr>
-        <td class="mono">{{ instance.label }}</td>
-        <td class="mono">{{ instance.sid.name }}</td>
-        <td>{{ instance_type(instance.features) }}</td>
-        <td>{{ instance.host.name }}</td>
-        <td class="mono">{{ instance.start_priority or "" }}</td>
-        <td class="mono">{{ depends[instance.id] | join(", ") }}</td>
-        <td>
-          <form method="post" action="/configuration/systems/{{ system.id }}/instances/{{ instance.id }}/remove" data-confirm="{{ t('system.remove_instance_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
-            <input type="hidden" name="back" value="system">
-            <button type="submit" class="link">{{ t("system.remove_instance") }}</button>
-          </form>
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  </div>
+  {{ ui.config_instances(system, depends, t, instance_type, back="system", show_priority=true) }}
   <p class="muted">{{ t("system.depends_hint") }}</p>
   {% else %}
   <p class="muted">{{ t("system.no_instances") }}</p>

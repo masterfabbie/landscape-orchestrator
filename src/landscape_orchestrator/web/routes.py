@@ -256,8 +256,12 @@ async def _active_by_system(session: AsyncSession) -> dict[int, Activity]:
 
 
 def system_status(system: System) -> str:
-    """Overall status of a system from the stored status of its instances."""
-    statuses = {instance.last_status for instance in system.instances}
+    """Overall status of a system from the stored status of its instances.
+
+    Diagnostics agents are left out, as in system operations.
+    """
+    instances = [i for i in system.instances if not i.is_agent] or system.instances
+    statuses = {instance.last_status for instance in instances}
     if not statuses:
         return STATUS_UNKNOWN
     if statuses == {"GREEN"}:
@@ -573,6 +577,7 @@ async def create_host(
         username=username or None,
         password_encrypted=context.secret_box.encrypt(password) if password else None,
     )
+    host.agent_info = None  # nothing read yet; avoids a lazy load
     session.add(host)
     try:
         await session.commit()

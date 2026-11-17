@@ -2,9 +2,10 @@
 
 All starts and stops go through the host agent (StartInstance, StopInstance), which needs
 only the host credentials (sapadm). sapstartsrv rejects StartSystem and StopSystem for
-sapadm on real systems, so whole systems are orchestrated here: their instances, which may
-belong to several SIDs, are started in ascending start priority and stopped in descending
-order, one priority group at a time.
+sapadm on real systems, so whole systems are orchestrated here. Their instances may belong
+to several SIDs; database and central services start in parallel, application servers
+after them, and stops run the other way round (see :mod:`roles`). Diagnostics agents are
+left out.
 Systems the target depends on (see :mod:`dependencies`) are started before it and stopped
 after it. Progress is read from sapstartsrv (GetProcessList, allowed for sapadm) until the
 target state is reached or the timeout expires.
@@ -46,6 +47,7 @@ from .models import (
     System,
     activity_systems,
 )
+from .roles import Role
 
 logger = logging.getLogger(__name__)
 
@@ -450,7 +452,7 @@ class OperationRunner:
                     if not instances:
                         raise OperationFailedError(
                             f"System {names.get(system_id, f'#{system_id}')} has no instances "
-                            "in the inventory"
+                            "in the inventory that are started or stopped with the system"
                         )
                     name = names.get(system_id, f"#{system_id}")
                     await self._system_phase(session, activity, name, instances, start)
@@ -470,7 +472,8 @@ class OperationRunner:
         )
         grouped: dict[int, list[Instance]] = {system_id: [] for system_id in system_ids}
         for instance in rows:
-            if instance.system_id is not None:
+            # Diagnostics agents belong to the system but are not started or stopped with it.
+            if instance.system_id is not None and not instance.is_agent:
                 grouped[instance.system_id].append(instance)
         for instances in grouped.values():
             instances.sort(key=lambda instance: instance.priority)
@@ -519,6 +522,32 @@ class OperationRunner:
 
     # --- whole system -------------------------------------------------------------------
 
+    @staticmethod
+    def _phases(instances: list[Instance], start: bool) -> list[list[list[list[Instance]]]]:
+        """Phases of a system operation; each phase is a list of tracks run in parallel.
+
+        A track is a list of priority groups handled one after another. Database and central
+        services form one phase with two parallel tracks, application servers another:
+
+        - start: database and central services, then application servers,
+        - stop: application servers, then central services and database.
+
+        Within a track the start priority orders the groups (ascending for a start).
+        """
+
+        def track(role: Role) -> list[list[Instance]]:
+            levels: dict[float, list[Instance]] = {}
+            for instance in instances:
+                if instance.role is role:
+                    levels.setdefault(instance.priority, []).append(instance)
+            return [levels[p] for p in sorted(levels, reverse=not start)]
+
+        if start:
+            phases = [[track(Role.DATABASE), track(Role.CENTRAL)], [track(Role.APPLICATION)]]
+        else:
+            phases = [[track(Role.APPLICATION)], [track(Role.CENTRAL), track(Role.DATABASE)]]
+        return [[t for t in phase if t] for phase in phases if any(phase)]
+
     async def _system_phase(
         self,
         session: AsyncSession,
@@ -529,18 +558,15 @@ class OperationRunner:
     ) -> None:
         """Start or stop all instances of one system through their host agents.
 
-        Instances are handled in groups of equal start priority: ascending for a start,
-        descending for a stop. Each group must reach the target state before the next one
-        begins. This needs only the host credentials (sapadm); sapstartsrv is only read.
+        The order follows the roles of the instances (see :meth:`_phases`). Each priority
+        group must reach the target state before the next group of its track begins, and
+        each phase must be complete before the next phase begins. Instances already in the
+        target state are skipped. This needs only the host credentials (sapadm);
+        sapstartsrv is only read. Diagnostics agents are not passed in.
         """
         target = StateColor.GREEN.name if start else StateColor.GRAY.name
         timeout = activity.timeout_seconds
         deadline = self._clock() + timeout
-
-        levels: dict[float, list[Instance]] = {}
-        for instance in instances:
-            levels.setdefault(instance.priority, []).append(instance)
-        order = sorted(levels, reverse=not start)
 
         statuses = await self._read_statuses(instances)
         last = self._summary(instances, statuses)
@@ -551,13 +577,25 @@ class OperationRunner:
             await self._log(session, activity, f"System {name} is already {state}")
             return
 
-        for priority in order:
-            group = levels[priority]
-            for instance in group:
-                if statuses[instance.id] != target:
-                    await self._request_via_hostagent(session, activity, instance, start)
+        for tracks in self._phases(instances, start):
+            positions = [0] * len(tracks)
+            requested = [False] * len(tracks)
             while True:
-                if all(statuses[i.id] == target for i in group):
+                for index, track in enumerate(tracks):
+                    while positions[index] < len(track):
+                        group = track[positions[index]]
+                        if not requested[index]:
+                            for instance in group:
+                                if statuses[instance.id] != target:
+                                    await self._request_via_hostagent(
+                                        session, activity, instance, start
+                                    )
+                            requested[index] = True
+                        if not all(statuses[i.id] == target for i in group):
+                            break
+                        positions[index] += 1
+                        requested[index] = False
+                if all(positions[i] == len(track) for i, track in enumerate(tracks)):
                     break
                 if self._deadline_reached(deadline):
                     raise OperationFailedError(

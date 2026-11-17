@@ -52,6 +52,14 @@ Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenban
 - **Systeme aus Instanzen mehrerer SIDs:** Ein System aus zentralen Diensten, Dialoginstanz
   und der HANA-Instanz mit eigener SID ließ sich als Ganzes stoppen (rund 56 Sekunden) und
   starten; Neustart und Start einzelner Instanzen dieses Systems funktionieren ebenfalls.
+- **Version des Host Agents:** `ExecuteOperation` mit der Operation `versioninfo` funktioniert
+  mit `sapadm`. Die Antwort sind Protokollzeilen; das Tool liest daraus `kernel release` und
+  `patch number` (angezeigt z. B. als „7.22 PL72“) sowie die Versionszeile von
+  `saphostexec`. Achtung: Die Komponentenzeilen nennen einen anderen Patch (Kernel-Patch,
+  z. B. 1611) als der Abschnitt „SAPHOSTAGENT information“ (z. B. 72).
+- **Diagnostics Agents** melden das Feature `SMDAGENT`.
+- Zentrale Dienste und Anwendungsserver eines Systems können auf verschiedenen Hosts dieselbe
+  Instanznummer haben.
 
 Noch nicht gegen echte Hosts getestet:
 
@@ -118,7 +126,7 @@ Die Oberfläche hat fünf Bereiche. **Landscape** dient zum Beobachten und Bedie
 | Bereich | Inhalt |
 |---|---|
 | Übersicht | Kennzahlen zu Systemen, Instanzen, Hosts und Aktivitäten der letzten 24 Stunden |
-| Landscape | Tab „Systeme“ mit Status, Pool, Abhängigkeiten und Knöpfen für Start, Stopp, Neustart, filterbar nach Pool; Tab „Hosts“. Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
+| Landscape | Tab „Systeme“ mit Status, Pool, Abhängigkeiten und Knöpfen für Start, Stopp, Neustart, filterbar nach Pool; Tab „Hosts“ mit Version des Host Agents. Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
 | Activities | Tab „Aktivitäten“ mit allen Operationen und Detailseite mit Protokoll; Tab „Protokolle“ mit den letzten 200 Protokolleinträgen |
 | Configuration | Tab „Hosts“: anlegen, Discovery, Zugangsdaten, löschen. Tab „Systeme“: nicht zugeordnete Instanzen, Systeme anlegen und zuordnen, Systeme aufklappbar mit ihren Instanzen; Seite eines Systems mit Name, Instanzen, Pool, Abhängigkeiten, Zugangsdaten je SID, Löschen. Tab „Pools“: anlegen und löschen |
 | Administration | Versionsstand und aktuelle Einstellungen; Plattform-Einstellungen folgen |
@@ -146,9 +154,18 @@ haben. Die Discovery legt keine Systeme an; neue Instanzen sind zunächst nicht 
 Gehören Instanzen einer SID bereits zu genau einem System, schlägt die Liste für neu
 gefundene Instanzen derselben SID dieses System vor. Zugeordnet wird erst per Klick.
 
-Die Spalte „Hängt ab von“ in den aufgeklappten Systemen zeigt andere SIDs desselben Systems,
-deren Instanzen früher starten. Sie ergibt sich aus den Startprioritäten und ist nicht
-bearbeitbar. Abhängigkeiten **zwischen** Systemen pflegt man weiterhin auf der Seite eines
+Die Spalte „Hängt ab von“ in den aufgeklappten Systemen zeigt bei Anwendungsservern die
+anderen SIDs von Datenbank und zentralen Diensten desselben Systems. Zentrale Dienste und
+Datenbank hängen von nichts ab. Die Spalte ergibt sich aus den Instanztypen und ist nicht
+bearbeitbar.
+
+**Diagnostics Agents** (Feature `SMDAGENT`) gehören zum System, stehen aber in einer eigenen,
+zugeklappten Gruppe. Start, Stopp und Neustart des Systems lassen sie aus, und sie zählen
+nicht zum Status des Systems. Einzeln lassen sie sich weiter bedienen.
+
+Gibt es dieselbe Kombination aus SID und Instanznummer auf mehreren Hosts, z. B. zentrale
+Dienste und Anwendungsserver mit gleicher Nummer, nennt die Bezeichnung zusätzlich den
+Hostnamen der Instanz, z. B. `DEV/00 (sapapp2)`. Abhängigkeiten **zwischen** Systemen pflegt man weiterhin auf der Seite eines
 Systems.
 
 Wird eine Instanz aus einem System entfernt oder ein System gelöscht, bleiben die Instanzen
@@ -272,13 +289,21 @@ curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/
 
 - **Warum alles über den Host Agent:** `StartSystem` und `StopSystem` des sapstartsrv lehnen
   echte Systeme für `sapadm` ab. Über den Host Agent reicht `sapadm`.
-- **Reihenfolge im System:** Das Tool startet die Instanzen gruppenweise nach Startpriorität
-  (Datenbank, zentrale Dienste, Anwendungsserver) und stoppt in umgekehrter Reihenfolge. Das
-  gilt über alle SIDs des Systems: Enthält ein System die HANA-Instanz seiner Datenbank,
-  startet sie zuerst und stoppt zuletzt. Jede
-  Gruppe muss den Zielzustand erreichen, bevor die nächste beginnt. Instanzen, die schon im
+- **Reihenfolge im System:** Sie richtet sich nach der Rolle der Instanz, die das Tool aus
+  den Features der Discovery ableitet, und gilt über alle SIDs des Systems.
+
+  | Rolle | erkannt an | Start | Stopp |
+  |---|---|---|---|
+  | Datenbank | `HDB` | Phase 1 | Phase 2 |
+  | Zentrale Dienste | `MESSAGESERVER`, `ENQUE`, `ENQREP` | Phase 1, parallel zur Datenbank | Phase 2, parallel zur Datenbank |
+  | Anwendungsserver | `ABAP`, `J2EE`, unbekannte Features | Phase 2 | Phase 1 |
+  | Diagnostics Agent | `SMDAGENT` | nicht dabei | nicht dabei |
+
+  Innerhalb einer Rolle ordnet die Startpriorität die Instanzen in Gruppen, z. B. ERS vor
+  ASCS. Jede Gruppe muss den Zielzustand erreichen, bevor die nächste ihrer Rolle beginnt,
+  und jede Phase muss abgeschlossen sein, bevor die nächste beginnt. Instanzen, die schon im
   Zielzustand sind, werden übersprungen; ist das ganze System schon dort, endet die Aktivität
-  sofort. Die Startpriorität stammt aus der Discovery.
+  sofort.
 - **Abhängigkeiten zwischen Systemen:** Ist die Datenbank ein eigenes System, z. B. weil
   mehrere Systeme sie nutzen, legt man auf der Seite des ABAP-Systems fest, dass es vom
   Datenbanksystem abhängt (oder per API: `PUT /api/systems/{id}/dependencies` mit
@@ -335,7 +360,7 @@ async with SapControlClient("sapapp1", 0, auth=("devadm", "...")) as sap:
 
 | Client | Methoden |
 |---|---|
-| `HostAgentClient` | `list_instances`, `list_databases`, `get_database_status`, `get_computer_system`, `start_instance`, `stop_instance` |
+| `HostAgentClient` | `list_instances`, `list_databases`, `get_database_status`, `get_computer_system`, `execute_operation`, `get_version`, `start_instance`, `stop_instance` |
 | `SapControlClient` | `get_process_list`, `get_system_instance_list`, `start`, `stop`, `restart_instance`, `start_system`, `stop_system`, `restart_system` |
 
 - Ports: Host Agent 1128 (HTTP) bzw. 1129 (HTTPS), sapstartsrv 5NN13 bzw. 5NN14. Mit `https=True`
@@ -413,14 +438,15 @@ Eine eigene Landschaft lässt sich als JSON-Datei übergeben:
 }
 ```
 
-Mögliche Instanztypen (`kind`): `HDB`, `ERS`, `ASCS`, `SCS`, `ABAP`, `J2EE`.
+Mögliche Instanztypen (`kind`): `HDB`, `ERS`, `ASCS`, `SCS`, `ABAP`, `J2EE`, `SMDAGENT`
+(Diagnostics Agent; Startpriorität und Prozessnamen sind angenommen).
 
 ### Simulierte Webmethoden
 
 | Dienst | Methoden |
 |---|---|
 | SAPControl | GetProcessList, GetSystemInstanceList, Start, Stop, RestartInstance, StartSystem, StopSystem, RestartSystem |
-| SAPHostControl | ListInstances, ListDatabases, GetDatabaseStatus, GetComputerSystem, StartInstance, StopInstance |
+| SAPHostControl | ListInstances, ListDatabases, GetDatabaseStatus, GetComputerSystem, StartInstance, StopInstance, ExecuteOperation (nur `versioninfo`) |
 
 Verhalten:
 

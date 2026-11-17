@@ -60,6 +60,28 @@ def single_sid_landscape(clock: FakeClock) -> MockLandscape:
     return MockLandscape.from_dict(config, clock=clock)
 
 
+def extended_config() -> dict:
+    """Stopped sample landscape plus a diagnostics agent DAA/98 on sapapp1 and a second
+    dialog instance DEV/00 on host sapapp2, so DEV/00 exists twice."""
+    config = stopped_config()
+    config["hosts"][0]["instances"].append(
+        {"sid": "DAA", "nr": 98, "kind": "SMDAGENT", "running": True}
+    )
+    config["hosts"].append(
+        {
+            "name": "sapapp2",
+            "port_offset": 5000,
+            "instances": [{"sid": "DEV", "nr": 0, "kind": "ABAP", "running": False}],
+        }
+    )
+    return config
+
+
+@pytest.fixture
+def extended_landscape(clock: FakeClock) -> MockLandscape:
+    return MockLandscape.from_dict(extended_config(), clock=clock)
+
+
 def soap_call(
     client: TestClient,
     namespace: str,

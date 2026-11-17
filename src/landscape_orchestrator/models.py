@@ -19,8 +19,18 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    func,
+    select,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    column_property,
+    mapped_column,
+    relationship,
+)
+
+from .roles import Role, instance_role
 
 STATUS_UNKNOWN = "UNKNOWN"
 
@@ -99,10 +109,44 @@ class Host(Base):
         passive_deletes=True,
         order_by="Database.name",
     )
+    agent_info: Mapped[HostAgentInfo | None] = relationship(
+        back_populates="host", cascade="all, delete-orphan", passive_deletes=True, lazy="selectin"
+    )
 
     @property
     def has_credentials(self) -> bool:
         return bool(self.username and self.password_encrypted)
+
+    @property
+    def hostagent_version(self) -> str | None:
+        return self.agent_info.display if self.agent_info else None
+
+
+class HostAgentInfo(Base):
+    """Version of the host agent, read at each discovery.
+
+    A separate table so that existing databases get it at startup without a migration.
+    """
+
+    __tablename__ = "host_agent_info"
+
+    host_id: Mapped[int] = mapped_column(
+        ForeignKey("hosts.id", ondelete="CASCADE"), primary_key=True
+    )
+    release: Mapped[str] = mapped_column(String(16))
+    patch: Mapped[str | None] = mapped_column(String(16))
+    details: Mapped[str | None] = mapped_column(String(255))
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    host: Mapped[Host] = relationship(back_populates="agent_info")
+
+    @property
+    def display(self) -> str:
+        """E.g. "7.22 PL72"."""
+        release = self.release
+        if len(release) == 3 and release.isdigit():
+            release = f"{release[0]}.{release[1:]}"
+        return f"{release} PL{self.patch}" if self.patch else release
 
 
 class Sid(Base):
@@ -218,8 +262,23 @@ class Instance(Base):
 
     @property
     def label(self) -> str:
-        """SID and instance number, e.g. DEV/00."""
-        return f"{self.sid.name}/{self.number}"
+        """SID and instance number, e.g. DEV/00.
+
+        If the same SID and number exist on several hosts, the instance hostname is added,
+        e.g. DEV/00 (sapapp2).
+        """
+        label = f"{self.sid.name}/{self.number}"
+        if (self.same_number_count or 0) > 1:
+            label += f" ({self.hostname})"
+        return label
+
+    @property
+    def role(self) -> Role:
+        return instance_role(self.features)
+
+    @property
+    def is_agent(self) -> bool:
+        return self.role is Role.AGENT
 
     @property
     def priority(self) -> float:
@@ -291,3 +350,20 @@ class ActivityLogEntry(Base):
     message: Mapped[str] = mapped_column(Text)
 
     activity: Mapped[Activity] = relationship(back_populates="entries")
+
+
+# Number of instances with the same SID and instance number, on any host. A table alias is
+# used because aliasing the mapped class here would configure the mappers too early.
+_other_instance = Instance.__table__.alias("other_instance")
+Instance.same_number_count = column_property(
+    select(func.count(_other_instance.c.id))
+    .where(
+        _other_instance.c.sid_id == Instance.sid_id,
+        _other_instance.c.number == Instance.number,
+    )
+    .correlate_except(_other_instance)
+    .scalar_subquery(),
+    # Keep the loaded value when the instance is updated; reloading it would need IO at
+    # attribute access, which async sessions do not allow.
+    expire_on_flush=False,
+)
