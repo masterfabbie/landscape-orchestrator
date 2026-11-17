@@ -40,9 +40,12 @@ class SoapService:
     namespace: str
     handlers: dict[str, Handler]
     protected: frozenset[str]
+    # Returns the users allowed to call protected methods; None allows every known user.
+    # A callable, so tests can change the landscape after the app was built.
+    administrators: Callable[[], frozenset[str] | None] = lambda: None
 
 
-def _check_auth(request: Request, users: dict[str, str]) -> None:
+def _check_auth(request: Request, users: dict[str, str]) -> str:
     header = request.headers.get("authorization", "")
     scheme, _, encoded = header.partition(" ")
     if scheme.lower() != "basic" or not encoded:
@@ -54,6 +57,7 @@ def _check_auth(request: Request, users: dict[str, str]) -> None:
     expected = users.get(user)
     if expected is None or not secrets.compare_digest(expected, password):
         raise SoapFault("Invalid Credentials")
+    return user
 
 
 def _soap_app(title: str, service: SoapService, users: dict[str, str]) -> FastAPI:
@@ -70,7 +74,10 @@ def _soap_app(title: str, service: SoapService, users: dict[str, str]) -> FastAP
             if handler is None:
                 raise SoapFault(f"Method '{method}' not implemented", "SOAP-ENV:Client")
             if method in service.protected:
-                _check_auth(request, users)
+                user = _check_auth(request, users)
+                allowed = service.administrators()
+                if allowed is not None and user not in allowed:
+                    raise SoapFault("Permission denied")
             payload = handler(params)
         except SoapFault as fault:
             headers = {"WWW-Authenticate": 'Basic realm="gSOAP Web Service"'}
@@ -206,6 +213,13 @@ def create_sapcontrol_app(landscape: MockLandscape, host_name: str, nr: int) -> 
             "RestartSystem": restart_system,
         },
         protected=SAPCONTROL_PROTECTED,
+        # Real systems allow administrative calls only to <sid>adm (unless configured
+        # otherwise); the mock does so when the landscape asks for it.
+        administrators=lambda: (
+            frozenset({f"{instance.sid.lower()}adm"})
+            if landscape.strict_sapstartsrv_auth
+            else None
+        ),
     )
     title = f"Mock sapstartsrv {instance.sid}/{nr:02d} on {host_name}"
     return _soap_app(title, service, landscape.users)

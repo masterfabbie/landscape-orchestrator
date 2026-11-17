@@ -121,3 +121,15 @@ def test_system_instance_list_contains_only_own_sid(client):
     """With HANA under its own SID, the ABAP system lists only its own instances."""
     _, result = soap_call(client, NS, "GetSystemInstanceList")
     assert sorted(item.findtext("instanceNr") for item in result.find("instance")) == ["0", "1"]
+
+
+def test_strict_auth_allows_administration_only_to_sid_adm(landscape):
+    landscape.strict_sapstartsrv_auth = True
+    client = TestClient(create_sapcontrol_app(landscape, "sapapp1", 0))
+
+    status, fault = soap_call(client, NS, "Stop", auth=("sapadm", "mock"))
+    assert status == 500
+    assert fault.findtext("faultstring") == "Permission denied"
+    # Reading stays possible for any user, as observed on a real system.
+    assert soap_call(client, NS, "GetProcessList", auth=("sapadm", "mock"))[0] == 200
+    assert soap_call(client, NS, "Stop", auth=AUTH)[0] == 200

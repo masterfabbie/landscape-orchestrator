@@ -21,7 +21,14 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from .clients import SoapConnectionError, SoapError
+from .clients import (
+    AuthenticationRequiredError,
+    InvalidCredentialsError,
+    PermissionDeniedError,
+    SoapConnectionError,
+    SoapError,
+    SoapFaultError,
+)
 from .clients.sapcontrol import StateColor, SystemInstance
 from .connections import ClientFactory
 from .crypto import SecretError
@@ -32,6 +39,7 @@ from .models import (
     Activity,
     ActivityLogEntry,
     Database,
+    Host,
     Instance,
     System,
     activity_systems,
@@ -73,6 +81,54 @@ class TargetNotFoundError(Exception):
 
 class OperationFailedError(Exception):
     """The operation did not reach its target state."""
+
+
+def explain_fault(
+    exc: SoapFaultError, call: str, host: Host, instance: Instance | None = None
+) -> OperationFailedError:
+    """Turn a SOAP fault into an error that says what was rejected and what to do.
+
+    ``instance`` set means the call went to the sapstartsrv of that instance, otherwise to
+    the host agent of ``host``.
+    """
+    if instance is None:
+        where = f"the host agent of {host.name}"
+        user = host.username
+        used = f"the credentials of host {host.name} ({user})" if user else "no credentials"
+        advice = (
+            f"Check the credentials of host {host.name}; the host agent usually expects sapadm."
+        )
+    else:
+        system = instance.system
+        where = f"the sapstartsrv of instance {system.sid}/{instance.number} on {host.name}"
+        admin = f"{system.sid.lower()}adm"
+        if system.has_credentials:
+            used = f"the credentials of system {system.sid} ({system.username})"
+            advice = f"Administrative calls at sapstartsrv need a user such as {admin}."
+        else:
+            user = host.username
+            used = (
+                f"no credentials of system {system.sid}, so those of host {host.name} ({user})"
+                if user
+                else "no credentials"
+            )
+            advice = (
+                f"Administrative calls at sapstartsrv need a user such as {admin}: "
+                f"store its credentials on the page of system {system.sid}."
+            )
+
+    if isinstance(exc, AuthenticationRequiredError):
+        reason = "credentials are required"
+    elif isinstance(exc, InvalidCredentialsError):
+        reason = "user or password are wrong"
+    elif isinstance(exc, PermissionDeniedError):
+        reason = "the user is not authorized"
+    else:
+        return OperationFailedError(f"{call} at {where} failed: {exc.faultstring}")
+    return OperationFailedError(
+        f"{call} at {where} was rejected ({exc.faultstring}): {reason}. "
+        f"The request used {used}. {advice}"
+    )
 
 
 def _now() -> datetime:
@@ -412,9 +468,13 @@ class OperationRunner:
         host, system = instance.host, instance.system
         verb = "Start" if start else "Stop"
         target = StateColor.GREEN.name if start else StateColor.GRAY.name
-        async with self._clients.hostagent(host) as agent:
-            operation = agent.start_instance if start else agent.stop_instance
-            await operation(system.sid, instance.number)
+        call = "StartInstance" if start else "StopInstance"
+        try:
+            async with self._clients.hostagent(host) as agent:
+                operation = agent.start_instance if start else agent.stop_instance
+                await operation(system.sid, instance.number)
+        except SoapFaultError as exc:
+            raise explain_fault(exc, call, host) from exc
         await self._log(
             session, activity, f"{verb} of {activity.target_label} requested via host agent"
         )
@@ -446,6 +506,8 @@ class OperationRunner:
                 return instance_status(await sapcontrol.get_process_list())
         except SoapConnectionError:
             return STATUS_UNKNOWN
+        except SoapFaultError as exc:
+            raise explain_fault(exc, "GetProcessList", instance.host, instance) from exc
 
     # --- whole system -------------------------------------------------------------------
 
@@ -468,6 +530,9 @@ class OperationRunner:
                         await sapcontrol.stop_system(waittimeout=timeout)
             except SoapConnectionError:
                 continue
+            except SoapFaultError as exc:
+                call = "StartSystem" if start else "StopSystem"
+                raise explain_fault(exc, call, instance.host, instance) from exc
             await self._log(
                 session,
                 activity,
@@ -510,6 +575,10 @@ class OperationRunner:
                     states = await sapcontrol.get_system_instance_list()
             except SoapConnectionError:
                 continue
+            except SoapFaultError as exc:
+                raise explain_fault(
+                    exc, "GetSystemInstanceList", instance.host, instance
+                ) from exc
             return sorted(states, key=lambda state: state.instance_nr)
         return []
 

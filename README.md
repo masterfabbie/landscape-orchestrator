@@ -37,12 +37,14 @@ Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenban
 - Der Datenbankstatus `SAPHostControl-DB-WARNING` kommt in der Praxis vor
 - Die HANA-Datenbank hat in der echten Landschaft eine **eigene SID**. Deshalb gibt es die
   Abhängigkeiten zwischen Systemen (siehe „Operationen und Aktivitäten“).
+- **`StopSystem` mit `sapadm` wird abgelehnt** („Permission denied“). Lesen darf `sapadm` am
+  sapstartsrv, administrieren nicht. Für Systemoperationen braucht das System eigene
+  Zugangsdaten, typischerweise `<sid>adm`.
 
 Noch nicht gegen echte Hosts getestet:
 
 - Start und Stopp über den Host Agent, einschließlich des Flags `O-INSTANCE`
-- `StartSystem` und `StopSystem` sowie die Frage, ob dafür `sapadm` reicht oder `<sid>adm`
-  nötig ist
+- `StartSystem` und `StopSystem` mit den Zugangsdaten von `<sid>adm`
 - ob ein gestopptes System alle Prozesse grau meldet
 - Abhängigkeiten zwischen Systemen
 - HTTPS
@@ -169,7 +171,9 @@ Verhalten:
 
 - **Zugangsdaten:** Passwörter werden verschlüsselt gespeichert und von der API nie
   zurückgegeben. Die Zugangsdaten des Hosts gelten für den Host Agent. Für den sapstartsrv
-  gelten die Zugangsdaten des Systems, falls gesetzt, sonst die des Hosts.
+  gelten die Zugangsdaten des Systems, falls gesetzt, sonst die des Hosts. Lesende Aufrufe am
+  sapstartsrv funktionieren mit `sapadm`; Start und Stopp eines ganzen Systems brauchen
+  Zugangsdaten von `<sid>adm` am System.
 - **Discovery löscht nichts.** Instanzen und Datenbanken, die der Host nicht mehr meldet,
   bleiben im Inventar und werden im Ergebnis als fehlend aufgeführt.
 - **Nicht erreichbarer Host Agent:** Die Discovery antwortet mit HTTP 502, der Host wird als
@@ -229,6 +233,9 @@ curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/
   jede Statusänderung fest, und der Status im Inventar wird dabei aktualisiert.
 - **Datenbanken:** Am Ende jeder Aktivität wird der Status der Datenbanken auf den
   beteiligten Hosts neu gelesen, damit er zum Zustand der Instanzen passt.
+- **Fehlermeldungen:** Lehnt ein Dienst einen Aufruf ab, nennt die Meldung den Aufruf, den
+  Dienst, die verwendeten Zugangsdaten und was zu tun ist, z. B. dass am System Zugangsdaten
+  von `<sid>adm` fehlen.
 - **Serverneustart:** Aktivitäten, die beim Beenden des Servers noch liefen, werden als
   `FAILED` mit dem Hinweis „Interrupted“ vermerkt. Der Zustand des Ziels ist dann unbekannt
   und sollte per Discovery geprüft werden.
@@ -346,6 +353,9 @@ Mögliche Instanztypen (`kind`): `HDB`, `ERS`, `ASCS`, `SCS`, `ABAP`, `J2EE`.
 
 Verhalten:
 
+- Mit `"strict_sapstartsrv_auth": true` erlaubt der simulierte sapstartsrv administrative
+  Aufrufe nur `<sid>adm` und antwortet anderen bekannten Benutzern mit „Permission denied“,
+  wie ein echtes System. Standard ist `false`.
 - Start und Stopp laufen asynchron wie beim echten Dienst: Der Aufruf kehrt sofort zurück,
   die Instanz ist danach `start_duration` bzw. `stop_duration` Sekunden lang gelb.
 - `StartSystem` startet nach Instanzpriorität (HDB, dann ASCS, dann Anwendungsserver),

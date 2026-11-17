@@ -286,8 +286,53 @@ async def test_wrong_credentials_fail_the_activity(app, api):
     activity = await run(app, api, f"/api/instances/{dialog}/start")
 
     assert activity["status"] == "FAILED"
-    assert activity["error"] == "Invalid Credentials"
+    assert activity["error"] == (
+        "StartInstance at the host agent of sapapp1 was rejected (Invalid Credentials): "
+        "user or password are wrong. The request used the credentials of host sapapp1 "
+        "(devadm). Check the credentials of host sapapp1; the host agent usually expects "
+        "sapadm."
+    )
     assert (await statuses(api))["00"] == "GRAY"
+
+
+async def test_system_operation_without_admin_credentials_explains_what_to_do(
+    app, api, landscape
+):
+    """Like a real system: sapstartsrv lets sapadm read, but not stop the system."""
+    landscape.strict_sapstartsrv_auth = True
+    await api.put("/api/hosts/1/credentials", json={"username": "sapadm", "password": "mock"})
+    dev = await system_id(api, "DEV")
+
+    activity = await run(app, api, f"/api/systems/{dev}/stop")
+
+    assert activity["status"] == "FAILED"
+    assert activity["error"] == (
+        "StopSystem at the sapstartsrv of instance DEV/01 on sapapp1 was rejected "
+        "(Permission denied): the user is not authorized. The request used no credentials "
+        "of system DEV, so those of host sapapp1 (sapadm). Administrative calls at "
+        "sapstartsrv need a user such as devadm: store its credentials on the page of "
+        "system DEV."
+    )
+
+    await api.put(
+        f"/api/systems/{dev}/credentials", json={"username": "devadm", "password": "mock"}
+    )
+    assert (await run(app, api, f"/api/systems/{dev}/stop"))["status"] == "SUCCEEDED"
+
+
+async def test_wrong_system_credentials_are_named(app, api, landscape):
+    landscape.strict_sapstartsrv_auth = True
+    dev = await system_id(api, "DEV")
+    await api.put(
+        f"/api/systems/{dev}/credentials", json={"username": "sapadm", "password": "mock"}
+    )
+
+    activity = await run(app, api, f"/api/systems/{dev}/start")
+
+    assert activity["error"].endswith(
+        "The request used the credentials of system DEV (sapadm). Administrative calls at "
+        "sapstartsrv need a user such as devadm."
+    )
 
 
 async def test_unreachable_sapstartsrv_during_instance_start(app, api, transport):

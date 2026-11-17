@@ -168,9 +168,13 @@ class MockLandscape:
         start_duration: float = 3.0,
         stop_duration: float = 2.0,
         clock: Callable[[], float] = time.monotonic,
+        strict_sapstartsrv_auth: bool = False,
     ) -> None:
         self.hosts = hosts
         self.users = users or {}
+        # True: administrative sapstartsrv calls are allowed only to <sid>adm, as on real
+        # systems; other known users get "Permission denied".
+        self.strict_sapstartsrv_auth = strict_sapstartsrv_auth
         self.start_duration = start_duration
         self.stop_duration = stop_duration
         self.clock = clock
@@ -213,6 +217,7 @@ class MockLandscape:
             start_duration=data.get("start_duration", 3.0),
             stop_duration=data.get("stop_duration", 2.0),
             clock=clock,
+            strict_sapstartsrv_auth=data.get("strict_sapstartsrv_auth", False),
         )
 
     def host(self, name: str) -> MockHost:

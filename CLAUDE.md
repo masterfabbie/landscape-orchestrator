@@ -112,7 +112,11 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
   erkannt; `GetProcessList` und `GetSystemInstanceList` am sapstartsrv funktionieren mit
   `sapadm`; `Database/InstanceName` und `Database/Release` sind gefüllt; SystemDB und Tenant
   erscheinen einzeln; `SAPHostControl-DB-WARNING` kommt vor; HANA hat eine eigene SID.
-- Start, Stopp und Abhängigkeiten sind noch nicht gegen echte Systeme getestet.
+- `StopSystem` am sapstartsrv mit `sapadm` wird mit „Permission denied“ abgelehnt. Für
+  Systemoperationen braucht das System Zugangsdaten von `<sid>adm`. Der Mock bildet das mit
+  `strict_sapstartsrv_auth` nach.
+- Start und Stopp einzelner Instanzen über den Host Agent sowie Abhängigkeiten sind noch nicht
+  gegen echte Systeme getestet.
 
 ## Offene Annahmen, die ein Test mit einer echten Instanz klären muss
 
@@ -122,9 +126,8 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
    die zurückgegebene Operation-ID nicht aus. `GetOperationResults` ist nicht umgesetzt.
 3. **Zielzustand:** Eine Operation gilt als fertig, wenn alle Prozesse grün (Start) bzw. grau
    (Stopp) sind. Ob echte Instanzen das so melden, ist offen.
-4. **Geschützte Methoden am sapstartsrv:** Lesende Aufrufe funktionieren mit `sapadm`.
-   Offen ist, ob `StartSystem` und `StopSystem` mit `sapadm` erlaubt sind oder `<sid>adm`
-   brauchen.
+4. **Geschützte Methoden am sapstartsrv:** Geklärt: Lesen geht mit `sapadm`, `StopSystem`
+   nicht. Offen ist nur noch, ob `<sid>adm` für `StartSystem` und `StopSystem` reicht.
 5. **Datenbanken:** Der Schlüssel `Database/Vendor` ist angenommen.
 6. **Verschachtelung bei `GetComputerSystem`:** Der Client sucht Klassen in jeder Tiefe. Die
    echte Struktur ist nicht mit der des Mocks verglichen.
