@@ -525,7 +525,7 @@ async def test_pools(browser):
     assert "Development line" in pools and 'href="/configuration/systems/1">DEV</a>' in pools
 
     landscape = (await browser.get("/landscape")).text
-    assert 'href="/landscape?tab=systems&pool=1"' in landscape
+    assert 'name="pool" value="1"' in landscape and 'name="pool" value="none"' in landscape
     in_pool = (await browser.get("/landscape?tab=systems&pool=1")).text
     assert ">DEV</a>" in in_pool and ">HDV</a>" not in in_pool
     no_pool = (await browser.get("/landscape?tab=systems&pool=none")).text
@@ -785,3 +785,103 @@ async def test_host_agent_version_is_shown(extended_browser):
     assert "saphostexec 722 (EXT), patch 1611" in hosts
     assert "7.22 PL72" in (await extended_browser.get("/hosts/1")).text
     assert "7.22 PL72" in (await extended_browser.get("/configuration/hosts/1")).text
+
+
+# --- filters, tags, status refresh -----------------------------------------------------
+
+
+async def test_tags_forms(browser):
+    await add_hosts(browser)
+    saved = await browser.post("/configuration/systems/1/tags", data={"tags": "dev, SLA=1"})
+    assert saved.headers["location"] == "/configuration/systems/1?notice=tags_saved"
+    page = (await browser.get("/configuration/systems/1")).text
+    assert 'value="dev, sla=1"' in page
+    assert '<span class="tag">sla=1</span>' in (await browser.get("/systems/1")).text
+
+    invalid = await browser.post("/configuration/systems/1/tags", data={"tags": "bad tag"})
+    assert invalid.headers["location"] == "/configuration/systems/1?error=tag_invalid&e_tag=bad+tag"
+    assert "Invalid tag: bad tag" in (await browser.get(invalid.headers["location"])).text
+    twice = await browser.post("/configuration/hosts/1/tags", data={"tags": "a=1, a=2"})
+    assert twice.headers["location"].endswith("error=tag_duplicate&e_tag=a")
+
+    host = await browser.post("/configuration/hosts/2/tags", data={"tags": "db"})
+    assert host.headers["location"] == "/configuration/hosts/2?notice=tags_saved"
+    assert '<span class="tag">db</span>' in (await browser.get("/landscape?tab=hosts")).text
+
+
+async def test_landscape_filters(browser):
+    await add_hosts(browser)
+    await browser.post("/configuration/pools", data={"name": "xDV"})
+    await browser.post("/configuration/systems/1/pool", data={"pool_id": "1"})
+    await browser.post("/configuration/systems/1/tags", data={"tags": "dev, sla=1"})
+    await browser.post("/configuration/systems/2/tags", data={"tags": "sla=2"})
+    await browser.post("/configuration/hosts/2/tags", data={"tags": "db"})
+
+    async def shown(**params) -> set[str]:
+        page = (await browser.get("/landscape", params={"tab": "systems"} | params)).text
+        return {
+            name
+            for name in ("DEV", "HDV")
+            if re.search(rf'class="strong" href="/systems/\d+">{name}</a>', page)
+        }
+
+    assert await shown() == {"DEV", "HDV"}
+    assert await shown(name="d") == {"DEV", "HDV"}
+    assert await shown(name="hd") == {"HDV"}
+    assert await shown(pool="1") == {"DEV"}
+    assert await shown(pool=["1", "none"]) == {"DEV", "HDV"}
+    assert await shown(tag="sla") == {"DEV", "HDV"}
+    assert await shown(tag="sla=2") == {"HDV"}
+    assert await shown(tag=["dev", "sla=2"]) == {"DEV", "HDV"}
+    assert await shown(hosttag="db") == {"HDV"}
+    assert await shown(type="hana") == {"HDV"}
+    assert await shown(type=["scs", "hana"]) == {"DEV", "HDV"}
+    assert await shown(host="sapapp") == {"DEV"}
+    assert await shown(status="GRAY") == {"DEV", "HDV"}
+    assert await shown(status="GREEN") == set()
+    assert await shown(tag="sla", pool="1") == {"DEV"}  # all filters must match
+
+    page = (await browser.get("/landscape", params={"status": "GREEN"})).text
+    assert "Nothing matches the filters." in page
+    page = (await browser.get("/landscape", params={"tag": "sla"})).text
+    assert "Systems: 2, instances: 3" in page
+    assert 'name="tag" value="sla" checked' in page
+
+    hosts = (await browser.get("/landscape", params={"tab": "hosts", "tag": "db"})).text
+    assert ">sapdb1</a>" in hosts and ">sapapp1</a>" not in hosts
+    hosts = (await browser.get("/landscape", params={"tab": "hosts", "name": "app"})).text
+    assert ">sapapp1</a>" in hosts and ">sapdb1</a>" not in hosts
+
+
+async def test_choose_visible_filters(browser):
+    page = (await browser.get("/landscape")).text
+    assert 'name="name"' in page and 'name="hosttag"' not in page
+
+    response = await browser.post(
+        "/landscape/filters", data={"tab": "systems", "field": ["hosttag", "type", "bogus"]}
+    )
+    assert response.headers["location"] == "/landscape?tab=systems"
+    assert response.cookies.get("lo_filters_systems") == "type.hosttag"
+    page = (await browser.get("/landscape")).text
+    assert 'name="name"' not in page and "Host tags" in page and "Instance type" in page
+    # A filter with a value stays visible even if it is not chosen.
+    page = (await browser.get("/landscape", params={"name": "x"})).text
+    assert 'name="name" value="x"' in page
+    # The language switch keeps the filters.
+    assert "/language/de?next=" in page and "name%3Dx" in page
+
+
+async def test_refresh_button(browser, landscape):
+    await add_hosts(browser)
+    assert 'action="/systems/1/refresh"' in (await browser.get("/systems/1")).text
+    assert 'action="/systems/1/refresh"' in (await browser.get("/landscape")).text
+    landscape.start_instance(landscape.host("sapapp1").instance(0))
+
+    response = await browser.post("/systems/1/refresh")
+    assert response.headers["location"] == "/systems/1?notice=status_refreshed"
+    page = (await browser.get(response.headers["location"])).text
+    assert "Status refreshed." in page and "in transition" in page
+
+    back = await browser.post("/systems/1/refresh", data={"back": "landscape"})
+    assert back.headers["location"] == "/landscape?notice=status_refreshed"
+    assert (await browser.post("/systems/99/refresh")).status_code == 404

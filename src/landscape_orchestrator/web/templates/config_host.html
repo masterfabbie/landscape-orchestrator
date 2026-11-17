@@ -26,6 +26,10 @@
   </dl>
 </section>
 <section class="card">
+  <h2>{{ t("field.tags") }}</h2>
+  {{ ui.tags_form("/configuration/hosts/" ~ host.id ~ "/tags", host, t) }}
+</section>
+<section class="card">
   <h2>{{ t("field.instances") }}</h2>
   {% if host.instances %}
   <ul class="plain">

@@ -20,6 +20,11 @@
 </section>
 
 <section class="card">
+  <h2>{{ t("field.tags") }}</h2>
+  {{ ui.tags_form("/configuration/systems/" ~ system.id ~ "/tags", system, t) }}
+</section>
+
+<section class="card">
   <h2>{{ t("field.instances") }}</h2>
   {% if system.instances %}
   {{ ui.config_instances(system, depends, t, instance_type, back="system", show_priority=true) }}

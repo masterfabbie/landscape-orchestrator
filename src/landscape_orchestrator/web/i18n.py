@@ -98,6 +98,59 @@ TEXTS: dict[str, tuple[str, str]] = {
     ),
     "field.sid": ("SID", "SID"),
     "field.hostagent": ("Host agent", "Host Agent"),
+    "field.tags": ("Tags", "Tags"),
+    "tags.hint": (
+        "Separate tags with commas. A tag is a key with an optional value, e.g. dev, "
+        "internetfacing, sla=1. Keys: lowercase letters, digits, - and _.",
+        "Tags durch Kommas trennen. Ein Tag ist ein Schlüssel mit optionalem Wert, z. B. dev, "
+        "internetfacing, sla=1. Schlüssel: Kleinbuchstaben, Ziffern, - und _.",
+    ),
+    "notice.tags_saved": ("Tags saved.", "Tags gespeichert."),
+    "error.tag_invalid": (
+        "Invalid tag: {tag}. Keys may contain lowercase letters, digits, - and _; values "
+        "letters, digits, ., - and _.",
+        "Ungültiges Tag: {tag}. Schlüssel dürfen Kleinbuchstaben, Ziffern, - und _ enthalten, "
+        "Werte Buchstaben, Ziffern, ., - und _.",
+    ),
+    "error.tag_duplicate": (
+        "The tag key {tag} is given twice.",
+        "Der Tag-Schlüssel {tag} ist doppelt angegeben.",
+    ),
+    "error.tag_too_many": ("Too many tags.{tag}", "Zu viele Tags.{tag}"),
+    "refresh.button": ("Refresh status", "Status aktualisieren"),
+    "refresh.hint": (
+        "Read the status of all instances of this system once",
+        "Status aller Instanzen dieses Systems einmal neu abfragen",
+    ),
+    "notice.status_refreshed": ("Status refreshed.", "Status aktualisiert."),
+    "filter.name": ("Name", "Name"),
+    "filter.status": ("Status", "Status"),
+    "filter.pool": ("Pool", "Pool"),
+    "filter.host": ("Host", "Host"),
+    "filter.type": ("Instance type", "Instanztyp"),
+    "filter.tag": ("Tags", "Tags"),
+    "filter.hosttag": ("Host tags", "Host-Tags"),
+    "filter.reach": ("Reachable", "Erreichbar"),
+    "filter.os": ("Operating system", "Betriebssystem"),
+    "filter.agent": ("Host agent", "Host Agent"),
+    "filter.any": ("Any", "Alle"),
+    "filter.selected": ("selected", "ausgewählt"),
+    "filter.no_values": ("No values yet", "Noch keine Werte"),
+    "filter.text_hint": ("contains …", "enthält …"),
+    "filter.apply": ("Apply filters", "Filter anwenden"),
+    "filter.reset": ("Reset", "Zurücksetzen"),
+    "filter.customize": ("Customize filters", "Filter anpassen"),
+    "filter.customize_hint": (
+        "The choice is stored in this browser. Filters with a value are always shown.",
+        "Die Auswahl wird in diesem Browser gespeichert. Filter mit einem Wert werden immer "
+        "angezeigt.",
+    ),
+    "filter.no_match": ("Nothing matches the filters.", "Nichts passt zu den Filtern."),
+    "landscape.counts": (
+        "Systems: {systems}, instances: {instances}",
+        "Systeme: {systems}, Instanzen: {instances}",
+    ),
+    "landscape.host_count": ("Hosts: {hosts}", "Hosts: {hosts}"),
     "agents.group": ("Diagnostics agents", "Diagnostics-Agents"),
     "agents.short": ("agents", "Agents"),
     "agents.hint": (

@@ -132,7 +132,7 @@ Die Oberfläche hat fünf Bereiche. **Landscape** dient zum Beobachten und Bedie
 | Bereich | Inhalt |
 |---|---|
 | Übersicht | Kennzahlen zu Systemen, Instanzen, Hosts und Aktivitäten der letzten 24 Stunden |
-| Landscape | Tab „Systeme“ mit Status, Pool, Abhängigkeiten und Knöpfen für Start, Stopp, Neustart, filterbar nach Pool; Tab „Hosts“ mit Version des Host Agents. Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
+| Landscape | Tab „Systeme“ mit Status, Pool, Tags, Abhängigkeiten und Knöpfen für Start, Stopp, Neustart und „Status aktualisieren“; Tab „Hosts“ mit Version des Host Agents und Tags. Beide Tabs mit Filtern. Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
 | Activities | Tab „Aktivitäten“ mit allen Operationen und Detailseite mit Protokoll; Tab „Protokolle“ mit den letzten 200 Protokolleinträgen |
 | Configuration | Tab „Hosts“: anlegen, Discovery, Zugangsdaten, löschen. Tab „Systeme“: nicht zugeordnete Instanzen, Systeme anlegen und zuordnen, Systeme aufklappbar mit ihren Instanzen; Seite eines Systems mit Name, Instanzen, Pool, Abhängigkeiten, Zugangsdaten je SID, Löschen. Tab „Pools“: anlegen und löschen |
 | Administration | Versionsstand und aktuelle Einstellungen; Plattform-Einstellungen folgen |
@@ -142,6 +142,44 @@ Administration; nur „Übersicht“ wird übersetzt.
 
 **Pools** fassen Systeme zusammen, die zusammengehören, z. B. Entwicklungs-, Test- und
 Produktivsystem eines Produkts. Ein System gehört zu höchstens einem Pool.
+
+### Filter
+
+Die Listen unter Landscape lassen sich filtern:
+
+| Tab | Filter |
+|---|---|
+| Systeme | Name, Status, Pool, Host, Instanztyp, Tags, Host-Tags |
+| Hosts | Name, Erreichbar, Betriebssystem, Host Agent (Version), Tags |
+
+- Innerhalb eines Filters reicht ein Treffer (Pool A oder B, Tag `dev` oder `sla=2`); alle
+  gesetzten Filter müssen zutreffen.
+- Textfilter suchen ohne Groß-/Kleinschreibung nach enthaltenem Text. „Host“ prüft Hostname
+  und Instanz-Hostname aller Instanzen des Systems; „Host-Tags“ findet Systeme mit einer
+  Instanz auf einem Host mit dem Tag.
+- Die Filterwerte stehen in der Adresse; eine gefilterte Ansicht lässt sich als Lesezeichen
+  speichern.
+- Unter „Filter anpassen“ wählt man, welche Filter angezeigt werden. Die Auswahl steht in einem
+  Cookie dieses Browsers (später pro Benutzer). Filter mit einem Wert werden immer angezeigt.
+
+### Tags
+
+Hosts und Systeme tragen Tags: ein Schlüssel mit optionalem Wert, z. B. `dev`,
+`internetfacing`, `sla=1`. Gepflegt werden sie kommagetrennt auf der Konfigurationsseite des
+Hosts bzw. Systems.
+
+- Schlüssel: Kleinbuchstaben, Ziffern, `-` und `_`, höchstens 32 Zeichen; Großbuchstaben
+  werden klein geschrieben. Werte: Buchstaben, Ziffern, `.`, `-` und `_`, höchstens 64
+  Zeichen. Je Schlüssel ein Wert, höchstens 50 Tags.
+- Im Filter passt `sla` auf jeden Wert von `sla`, `sla=1` nur auf diesen Wert.
+- Host-Tags gehen nicht auf Systeme über.
+
+### Status aktualisieren
+
+Der Knopf „Status aktualisieren“ (Systemseite und Landscape-Liste) fragt den sapstartsrv aller
+Instanzen des Systems parallel ab, Diagnostics Agents eingeschlossen, und liest den Status der
+Datenbanken auf den betroffenen Hosts. Das ist keine Aktivität und geht auch, während eine
+läuft. Nicht erreichbare Instanzen erscheinen als Warnung und mit Status „unbekannt“.
 
 ### Systeme anlegen
 
@@ -210,7 +248,8 @@ keine Inventardaten.
 | Methode | Pfad | Zweck |
 |---|---|---|
 | GET | `/health` | Lebenszeichen, ohne Token |
-| GET | `/api/hosts` | Hosts auflisten |
+| GET | `/api/hosts` | Hosts auflisten; `?tag=` filtert |
+| PUT | `/api/hosts/{id}/tags` | Tags eines Hosts ersetzen |
 | POST | `/api/hosts` | Host anlegen |
 | GET | `/api/hosts/{id}` | Host mit Instanzen und Datenbanken |
 | PUT | `/api/hosts/{id}/credentials` | Zugangsdaten des Hosts setzen |
@@ -219,7 +258,9 @@ keine Inventardaten.
 | GET | `/api/instances` | alle Instanzen mit SID, System und Zuordnungsvorschlag (`suggested_system_id`); `?unassigned=true` nur nicht zugeordnete |
 | GET | `/api/sids` | SIDs mit Angabe, ob Zugangsdaten hinterlegt sind |
 | PUT | `/api/sids/{id}/credentials` | Zugangsdaten für den sapstartsrv der Instanzen einer SID setzen |
-| GET | `/api/systems` | Systeme mit ihren Instanzen und Abhängigkeiten |
+| GET | `/api/systems` | Systeme mit ihren Instanzen und Abhängigkeiten; `?tag=` filtert (mehrfach möglich, ein Treffer reicht) |
+| PUT | `/api/systems/{id}/tags` | Tags eines Systems ersetzen (`{"tags": ["dev", "sla=1"]}`) |
+| POST | `/api/systems/{id}/refresh` | Status aller Instanzen einmal neu lesen; liefert System und Warnungen |
 | POST | `/api/systems` | System aus nicht zugeordneten Instanzen anlegen (`{"name": "...", "instance_ids": [ids], "pool_id": id, "description": "..."}`) |
 | GET | `/api/systems/{id}` | ein System |
 | PATCH | `/api/systems/{id}` | Name und Beschreibung ändern |

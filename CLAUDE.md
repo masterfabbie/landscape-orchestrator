@@ -57,6 +57,9 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `discovery.py` | liest einen Host aus und aktualisiert das Inventar |
 | `dependencies.py` | Abhängigkeiten zwischen Systemen, Reihenfolge von Start und Stopp |
 | `roles.py` | Rolle einer Instanz aus ihren Features: Datenbank, zentrale Dienste, Anwendungsserver, Diagnostics Agent |
+| `tags.py` | Tags von Hosts und Systemen (Schlüssel mit optionalem Wert): prüfen, ersetzen, vergleichen |
+| `filters.py` | Filter der Landscape-Listen (Werte aus der Adresse, sichtbare Filter) |
+| `status.py` | Status lesen ohne Aktivität: Instanzen eines Systems (Knopf „Status aktualisieren“) und Datenbanken |
 | `systems.py` | Systeme als Gruppen von Instanzen: anlegen, zuordnen, entfernen, löschen, Namens- und Zuordnungsvorschläge, abgeleitete „Hängt ab von“-SIDs |
 | `pools.py` | Zuordnung von Systemen zu Pools |
 | `operations.py` | Start, Stopp, Neustart als Hintergrund-Aktivitäten (`OperationRunner`) |
@@ -103,6 +106,14 @@ Wichtige Entwurfsentscheidungen:
   erhöhen; der Server weist ältere Datenbanken dann mit einer Meldung ab (Tabelle
   `schema_info`). Schema 2 (Systeme als Gruppen) war ein solcher Bruch; der Eigentümer hat
   dafür seine Daten gelöscht.
+- **Tags** sind Schlüssel mit optionalem Wert (`dev`, `sla=1`), je Schlüssel ein Wert, in den
+  Tabellen `host_tags` und `system_tags`. Beim Ersetzen werden vorhandene Schlüssel
+  aktualisiert statt gelöscht und neu angelegt (sonst Primärschlüssel-Konflikt im selben
+  Flush).
+- **Filter** der Landscape: innerhalb eines Filters reicht ein Treffer, alle Filter müssen
+  passen; gefiltert wird in Python über die geladenen Listen. Welche Filter sichtbar sind,
+  steht im Cookie `lo_filters_<tab>` (Namen durch Punkte getrennt); später soll das pro
+  Benutzer gespeichert werden.
 - **Discovery löscht nichts**, sie meldet fehlende Einträge nur.
 - **Die Oberfläche lädt keine externen Dateien** und nutzt kein JavaScript-Framework.
 - **Aufbau der Oberfläche:** Übersicht (Kennzahlen), Landscape (beobachten und bedienen:
@@ -212,3 +223,4 @@ Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 - kein Verschieben von Instanzen (Adaptive Computing)
 - Übersicht nur mit einfachen Kennzahlen; Diagramme und Diagnosenachrichten fehlen noch
 - Verbindungsdaten eines Hosts lassen sich nach dem Anlegen nicht ändern (nur Zugangsdaten)
+- Filterauswahl nur pro Browser (Cookie), noch nicht pro Benutzer

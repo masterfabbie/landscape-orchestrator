@@ -41,13 +41,13 @@ from .models import (
     STATUS_UNKNOWN,
     Activity,
     ActivityLogEntry,
-    Database,
     Host,
     Instance,
     System,
     activity_systems,
 )
 from .roles import Role
+from .status import refresh_databases
 
 logger = logging.getLogger(__name__)
 
@@ -350,26 +350,7 @@ class OperationRunner:
                 or_(Instance.system_id == activity.system_id, Instance.system_id.in_(involved))
             )
         hosts = {instance.host.id: instance.host for instance in await session.scalars(query)}
-        now = _now()
-        for host in hosts.values():
-            known = {
-                (database.name, database.type): database
-                for database in await session.scalars(
-                    select(Database).where(Database.host_id == host.id)
-                )
-            }
-            if not known:
-                continue
-            try:
-                async with self._clients.hostagent(host) as agent:
-                    reported = await agent.list_databases()
-            except SoapError:
-                continue
-            for found in reported:
-                database = known.get((found.name, found.type))
-                if database is not None:
-                    database.last_status = found.status.name
-                    database.status_checked_at = now
+        await refresh_databases(session, hosts.values(), self._clients)
         await session.commit()
 
     async def _finish(self, session: AsyncSession, activity: Activity, error: str | None) -> None:

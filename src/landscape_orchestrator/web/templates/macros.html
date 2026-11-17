@@ -162,3 +162,22 @@
 </details>
 {% endif %}
 {% endmacro %}
+
+{% macro tag_chips(tags) %}
+{% for tag in tags %}<span class="tag">{{ tag.text }}</span>{% endfor %}
+{% endmacro %}
+
+{% macro refresh_button(system_id, t, back="") %}
+<form class="inline" method="post" action="/systems/{{ system_id }}/refresh">
+  {% if back %}<input type="hidden" name="back" value="{{ back }}">{% endif %}
+  <button type="submit" class="secondary" title="{{ t('refresh.hint') }}">{{ t("refresh.button") }}</button>
+</form>
+{% endmacro %}
+
+{% macro tags_form(action, owner, t) %}
+<form method="post" action="{{ action }}" class="stack">
+  <p class="muted">{{ t("tags.hint") }}</p>
+  <label>{{ t("field.tags") }} <input name="tags" maxlength="2000" value="{{ owner.tags | map(attribute='text') | join(', ') }}" placeholder="dev, internetfacing, sla=1"></label>
+  <div><button type="submit">{{ t("action.save") }}</button></div>
+</form>
+{% endmacro %}

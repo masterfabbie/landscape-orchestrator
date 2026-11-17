@@ -112,10 +112,20 @@ class Host(Base):
     agent_info: Mapped[HostAgentInfo | None] = relationship(
         back_populates="host", cascade="all, delete-orphan", passive_deletes=True, lazy="selectin"
     )
+    tags: Mapped[list[HostTag]] = relationship(
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="HostTag.key",
+    )
 
     @property
     def has_credentials(self) -> bool:
         return bool(self.username and self.password_encrypted)
+
+    @property
+    def tag_list(self) -> list[str]:
+        return [tag.text for tag in self.tags]
 
     @property
     def hostagent_version(self) -> str | None:
@@ -193,6 +203,12 @@ class System(Base):
     pool: Mapped[Pool | None] = relationship(
         secondary=pool_systems, back_populates="systems", uselist=False
     )
+    tags: Mapped[list[SystemTag]] = relationship(
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="SystemTag.key",
+    )
     required_by: Mapped[list[System]] = relationship(
         secondary=system_dependencies,
         primaryjoin=lambda: System.id == system_dependencies.c.depends_on_id,
@@ -200,6 +216,10 @@ class System(Base):
         back_populates="depends_on",
         order_by="System.name",
     )
+
+    @property
+    def tag_list(self) -> list[str]:
+        return [tag.text for tag in self.tags]
 
     @property
     def pool_id(self) -> int | None:
@@ -212,6 +232,34 @@ class System(Base):
     @property
     def required_by_ids(self) -> list[int]:
         return [system.id for system in self.required_by]
+
+
+class _TagMixin:
+    """A tag: a key with an optional value, e.g. "dev" or "sla=1". One value per key."""
+
+    key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    # Empty for a tag without value.
+    value: Mapped[str] = mapped_column(String(64), default="")
+
+    @property
+    def text(self) -> str:
+        return f"{self.key}={self.value}" if self.value else self.key
+
+
+class HostTag(_TagMixin, Base):
+    __tablename__ = "host_tags"
+
+    host_id: Mapped[int] = mapped_column(
+        ForeignKey("hosts.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class SystemTag(_TagMixin, Base):
+    __tablename__ = "system_tags"
+
+    system_id: Mapped[int] = mapped_column(
+        ForeignKey("systems.id", ondelete="CASCADE"), primary_key=True
+    )
 
 
 class Pool(Base):

@@ -5,19 +5,61 @@
 <h1>{{ t("nav.landscape") }}</h1>
 {{ ui.tabs([("systems", "/landscape?tab=systems", t("tab.systems")), ("hosts", "/landscape?tab=hosts", t("tab.hosts"))], tab, t("nav.landscape")) }}
 
+<section class="card filters">
+  <form method="get" action="/landscape" class="filter-form">
+    <input type="hidden" name="tab" value="{{ tab }}">
+    <div class="filter-fields">
+    {% for name in visible_filters %}
+      {% set label = t("filter." ~ name) %}
+      {% if name in filter_options %}
+        {% set chosen = filter_values.get(name, []) %}
+        <div class="filter-field">
+          <span class="filter-label">{{ label }}</span>
+          <details class="multi">
+            <summary>{% if chosen %}{{ chosen | length }} {{ t("filter.selected") }}{% else %}{{ t("filter.any") }}{% endif %}</summary>
+            <div class="multi-options">
+            {% for value, text, translated in filter_options[name] %}
+              <label><input type="checkbox" name="{{ name }}" value="{{ value }}" {% if value in chosen %}checked{% endif %}> {{ t(text) if translated else text }}</label>
+            {% else %}
+              <span class="muted">{{ t("filter.no_values") }}</span>
+            {% endfor %}
+            </div>
+          </details>
+        </div>
+      {% else %}
+        <label class="filter-field"><span class="filter-label">{{ label }}</span>
+          <input name="{{ name }}" value="{{ filter_values.get(name, [''])[0] }}" placeholder="{{ t('filter.text_hint') }}">
+        </label>
+      {% endif %}
+    {% endfor %}
+    </div>
+    <div class="row">
+      <button type="submit">{{ t("filter.apply") }}</button>
+      <a class="button-link" href="/landscape?tab={{ tab }}">{{ t("filter.reset") }}</a>
+    </div>
+  </form>
+  <details class="filter-choice">
+    <summary>{{ t("filter.customize") }}</summary>
+    <form method="post" action="/landscape/filters" class="stack">
+      <input type="hidden" name="tab" value="{{ tab }}">
+      <div class="checks">
+      {% for name in filter_fields %}
+        <label><input type="checkbox" name="field" value="{{ name }}" {% if name in visible_filters %}checked{% endif %}> {{ t("filter." ~ name) }}</label>
+      {% endfor %}
+      </div>
+      <p class="muted">{{ t("filter.customize_hint") }}</p>
+      <div><button type="submit">{{ t("action.save") }}</button></div>
+    </form>
+  </details>
+</section>
+
 {% if tab == "systems" %}
-  {% if pools %}
-  <nav class="chips" aria-label="{{ t('field.pool') }}">
-    <a href="/landscape?tab=systems" {% if not pool_filter %}aria-current="page"{% endif %}>{{ t("pool.all") }}</a>
-    {% for pool in pools %}<a href="/landscape?tab=systems&pool={{ pool.id }}" {% if pool_filter == pool.id | string %}aria-current="page"{% endif %}>{{ pool.name }}</a>{% endfor %}
-    <a href="/landscape?tab=systems&pool=none" {% if pool_filter == "none" %}aria-current="page"{% endif %}>{{ t("pool.none") }}</a>
-  </nav>
-  {% endif %}
   <section class="card">
+  <p class="muted">{{ t("landscape.counts", systems=systems | length, instances=instance_count) }}</p>
   {% if systems %}
   <div class="table-wrap">
   <table>
-    <thead><tr><th>{{ t("field.system") }}</th><th>{{ t("field.pool") }}</th><th>{{ t("field.status") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("deps.depends_on") }}</th><th>{{ t("field.actions") }}</th></tr></thead>
+    <thead><tr><th>{{ t("field.system") }}</th><th>{{ t("field.pool") }}</th><th>{{ t("field.status") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("field.tags") }}</th><th>{{ t("deps.depends_on") }}</th><th>{{ t("field.actions") }}</th></tr></thead>
     <tbody>
     {% for system in systems %}
       <tr>
@@ -29,23 +71,30 @@
         </td>
         <td>{% for instance in system.instances | rejectattr("is_agent") | sort(attribute="priority") %}<span class="mono" title="{{ instance_type(instance.features) }}">{{ instance.label }}</span>{% if not loop.last %} {% endif %}{% endfor %}
           {% set agents = system.instances | selectattr("is_agent") | list %}{% if agents %}<span class="muted">+ {{ agents | length }} {{ t("agents.short") }}</span>{% endif %}</td>
+        <td>{{ ui.tag_chips(system.tags) }}</td>
         <td>{% for dependency in system.depends_on %}<a href="/systems/{{ dependency.id }}">{{ dependency.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</td>
-        <td>{{ ui.operation_buttons("/systems/" ~ system.id, t, active.get(system.id)) }}</td>
+        <td>
+          {{ ui.operation_buttons("/systems/" ~ system.id, t, active.get(system.id)) }}
+          {{ ui.refresh_button(system.id, t, back="landscape") }}
+        </td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
   </div>
+  {% elif filter_values %}
+  <p>{{ t("filter.no_match") }}</p>
   {% else %}
   <p>{{ t("overview.empty") }} <a href="/configuration?tab=hosts">{{ t("hosts.add") }}</a></p>
   {% endif %}
   </section>
 {% else %}
   <section class="card">
+  <p class="muted">{{ t("landscape.host_count", hosts=hosts | length) }}</p>
   {% if hosts %}
   <div class="table-wrap">
   <table>
-    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("field.address") }}</th><th>{{ t("field.os") }}</th><th>{{ t("field.hostagent") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("field.reachable") }}</th><th>{{ t("field.last_discovery") }}</th></tr></thead>
+    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("field.address") }}</th><th>{{ t("field.os") }}</th><th>{{ t("field.hostagent") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("field.tags") }}</th><th>{{ t("field.reachable") }}</th><th>{{ t("field.last_discovery") }}</th></tr></thead>
     <tbody>
     {% for host in hosts %}
       <tr>
@@ -54,6 +103,7 @@
         <td>{{ host.os_name or "" }} {{ host.os_version or "" }}</td>
         <td class="mono" {% if host.agent_info and host.agent_info.details %}title="saphostexec {{ host.agent_info.details }}"{% endif %}>{{ host.hostagent_version or "" }}</td>
         <td>{{ host.instances | length }}</td>
+        <td>{{ ui.tag_chips(host.tags) }}</td>
         <td>{{ ui.reach_badge(host, t) }}</td>
         <td class="muted">{{ host.last_discovery_at | time or t("hosts.never") }}</td>
       </tr>
@@ -61,6 +111,8 @@
     </tbody>
   </table>
   </div>
+  {% elif filter_values %}
+  <p>{{ t("filter.no_match") }}</p>
   {% else %}
   <p>{{ t("hosts.empty") }} <a href="/configuration?tab=hosts">{{ t("hosts.add") }}</a></p>
   {% endif %}

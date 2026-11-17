@@ -24,7 +24,7 @@ from ..crypto import SecretBox
 from ..db import create_engine, create_session_factory, create_tables
 from ..dependencies import DependencyError, set_dependencies
 from ..discovery import DiscoveryError, discover_host
-from ..models import Activity, Host, Instance, Pool, Sid, System
+from ..models import Activity, Host, HostTag, Instance, Pool, Sid, System, SystemTag
 from ..operations import (
     DEFAULT_TIMEOUT_SECONDS,
     NotAssignedError,
@@ -35,6 +35,7 @@ from ..operations import (
 )
 from ..pools import UnknownPoolError, assign_pool
 from ..settings import Settings
+from ..status import refresh_system
 from ..systems import (
     SystemChangeError,
     assign_instances,
@@ -44,6 +45,7 @@ from ..systems import (
     unassign_instance,
     update_system,
 )
+from ..tags import TagError, matches, parse_tags, replace_tags
 from ..web import AppContext, register_web
 from .schemas import (
     ActivityDetail,
@@ -60,10 +62,12 @@ from .schemas import (
     PoolAssignment,
     PoolCreate,
     PoolOut,
+    RefreshOut,
     SidOut,
     SystemCreate,
     SystemOut,
     SystemUpdate,
+    TagsIn,
 )
 
 # Status codes of SystemChangeError.code; everything else is 422.
@@ -165,9 +169,28 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Host not found")
         return host
 
+    TagFilter = Annotated[
+        list[str],
+        Query(description='Only entries with one of these tags, e.g. "dev" or "sla=1"'),
+    ]
+
+    def parsed_tags(body: TagsIn) -> dict[str, str]:
+        try:
+            return parse_tags(body.tags)
+        except TagError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
     @api.get("/hosts", response_model=list[HostOut])
-    async def list_hosts(session: Session) -> list[Host]:
-        return list(await session.scalars(select(Host).order_by(Host.name)))
+    async def list_hosts(session: Session, tag: TagFilter = []) -> list[Host]:  # noqa: B006
+        hosts = list(await session.scalars(select(Host).order_by(Host.name)))
+        return [h for h in hosts if matches(h.tags, tag)] if tag else hosts
+
+    @api.put("/hosts/{host_id}/tags", response_model=HostOut)
+    async def set_host_tags(host_id: int, body: TagsIn, session: Session) -> Host:
+        host = await load_host(session, host_id)
+        replace_tags(host.tags, HostTag, parsed_tags(body))
+        await session.commit()
+        return host
 
     @api.post("/hosts", response_model=HostOut, status_code=status.HTTP_201_CREATED)
     async def create_host(body: HostCreate, session: Session) -> Host:
@@ -187,6 +210,7 @@ def create_app(
             password_encrypted=secret_box.encrypt(body.password) if body.password else None,
         )
         host.agent_info = None  # nothing read yet; avoids a lazy load
+        host.tags = []
         session.add(host)
         try:
             await session.commit()
@@ -281,8 +305,24 @@ def create_app(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @api.get("/systems", response_model=list[SystemOut])
-    async def list_systems(session: Session) -> list[System]:
-        return list(await session.scalars(_systems_query()))
+    async def list_systems(session: Session, tag: TagFilter = []) -> list[System]:  # noqa: B006
+        systems = list(await session.scalars(_systems_query()))
+        return [s for s in systems if matches(s.tags, tag)] if tag else systems
+
+    @api.put("/systems/{system_id}/tags", response_model=SystemOut)
+    async def set_system_tags(system_id: int, body: TagsIn, session: Session) -> System:
+        system = await load_system(session, system_id)
+        replace_tags(system.tags, SystemTag, parsed_tags(body))
+        await session.commit()
+        return await load_system(session, system_id)
+
+    @api.post("/systems/{system_id}/refresh", response_model=RefreshOut)
+    async def refresh_system_route(system_id: int, session: Session) -> dict[str, object]:
+        """Read the status of all instances of the system once. Creates no activity."""
+        await load_system(session, system_id)
+        warnings = await refresh_system(session, system_id, clients)
+        await session.commit()
+        return {"system": await load_system(session, system_id), "warnings": warnings}
 
     @api.post("/systems", response_model=SystemOut, status_code=status.HTTP_201_CREATED)
     async def create_system_route(body: SystemCreate, session: Session) -> System:

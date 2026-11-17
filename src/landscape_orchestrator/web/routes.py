@@ -28,15 +28,29 @@ from ..connections import ClientFactory
 from ..crypto import SecretBox
 from ..dependencies import DependencyError, load_graph, set_dependencies, would_create_cycle
 from ..discovery import DiscoveryError, discover_host
+from ..filters import FIELDS as FILTER_FIELDS
+from ..filters import PARAMS as FILTER_PARAMS
+from ..filters import (
+    REACH_VALUES,
+    STATUS_VALUES,
+    TYPE_VALUES,
+    filter_hosts,
+    filter_systems,
+    read_values,
+    tag_options,
+    visible_fields,
+)
 from ..models import (
     STATUS_UNKNOWN,
     Activity,
     ActivityLogEntry,
     Host,
+    HostTag,
     Instance,
     Pool,
     Sid,
     System,
+    SystemTag,
 )
 from ..operations import (
     ACTIVE_STATUSES,
@@ -48,6 +62,7 @@ from ..operations import (
 )
 from ..pools import UnknownPoolError, assign_pool
 from ..settings import Settings
+from ..status import refresh_system
 from ..systems import (
     SystemChangeError,
     assign_instances,
@@ -61,6 +76,7 @@ from ..systems import (
     unassigned_instances,
     update_system,
 )
+from ..tags import TagError, parse_tags, replace_tags
 from .i18n import LANGUAGES, instance_type_key, pick_language, translate
 from .sessions import SESSION_COOKIE, SESSION_LIFETIME_SECONDS, create_session, is_valid_session
 
@@ -160,7 +176,7 @@ def render(request: Request, name: str, status_code: int = 200, **context: Any) 
     if query.get("error"):
         values = {k[2:]: v for k, v in query.items() if k.startswith("e_")}
         error = t(f"error.{query['error']}", **values)
-    kept = [(k, v) for k, v in query.multi_items() if k == "tab" or k == "pool"]
+    kept = [(k, v) for k, v in query.multi_items() if k == "tab" or k in FILTER_PARAMS]
     context = {
         "t": t,
         "language": language,
@@ -354,25 +370,77 @@ async def overview(request: Request, session: DbSession) -> HTMLResponse:
 # --- landscape --------------------------------------------------------------------------
 
 
+def _instance_type(instance: Instance) -> str | None:
+    key = instance_type_key(instance.features)
+    return key.removeprefix("itype.") if key else None
+
+
+def _filter_cookie(tab: str) -> str:
+    return f"lo_filters_{tab}"
+
+
 @pages.get("/landscape")
-async def landscape(
-    request: Request, session: DbSession, tab: str | None = None, pool: str | None = None
-) -> HTMLResponse:
+async def landscape(request: Request, session: DbSession, tab: str | None = None) -> HTMLResponse:
     tab = _tab(tab, ("systems", "hosts"))
+    query = {key: request.query_params.getlist(key) for key in request.query_params}
+    values = read_values(tab, query)
     active = await _active_by_system(session)
-    context: dict[str, Any] = {"tab": tab, "active": active}
+    context: dict[str, Any] = {
+        "tab": tab,
+        "active": active,
+        "filter_values": values,
+        "filter_fields": [f.name for f in FILTER_FIELDS[tab]],
+        "visible_filters": visible_fields(tab, request.cookies.get(_filter_cookie(tab)), values),
+    }
     if tab == "systems":
-        systems = await _all_systems(session)
-        pools = await _all_pools(session)
-        if pool == "none":
-            systems = [s for s in systems if s.pool is None]
-        elif pool and pool.isdigit():
-            systems = [s for s in systems if s.pool_id == int(pool)]
-        context |= {"systems": systems, "pools": pools, "pool_filter": pool or ""}
+        all_systems = await _all_systems(session)
+        systems = filter_systems(all_systems, values, system_status, _instance_type)
+        hosts = await _all_hosts(session)
+        options = {
+            "status": [(v, f"status.{v}", True) for v in STATUS_VALUES],
+            "pool": [(str(p.id), p.name, False) for p in await _all_pools(session)]
+            + [("none", "pool.none", True)],
+            "type": [(v, f"itype.{v}", True) for v in TYPE_VALUES],
+            "tag": [(v, v, False) for v in tag_options(all_systems)],
+            "hosttag": [(v, v, False) for v in tag_options(hosts)],
+        }
+        context |= {
+            "systems": systems,
+            "filter_options": options,
+            "instance_count": sum(len(s.instances) for s in systems),
+        }
     else:
-        context["hosts"] = await _all_hosts(session)
+        all_hosts = await _all_hosts(session)
+        versions = sorted({h.hostagent_version for h in all_hosts if h.hostagent_version})
+        context |= {
+            "hosts": filter_hosts(all_hosts, values),
+            "filter_options": {
+                "reach": [(v, f"reach.{v}", True) for v in REACH_VALUES],
+                "agent": [(v, v, False) for v in versions],
+                "tag": [(v, v, False) for v in tag_options(all_hosts)],
+            },
+        }
     refresh = OVERVIEW_REFRESH_SECONDS if active else None
     return render(request, "landscape.html", refresh=refresh, **context)
+
+
+@pages.post("/landscape/filters")
+async def choose_filters(
+    tab: Annotated[str, Form()] = "systems",
+    field: Annotated[list[str], Form()] = [],  # noqa: B006 - FastAPI copies it
+) -> Response:
+    """Remember in a cookie which filters this browser shows."""
+    tab = _tab(tab, ("systems", "hosts"))
+    known = [f.name for f in FILTER_FIELDS[tab]]
+    response = redirect("/landscape", tab=tab)
+    response.set_cookie(
+        _filter_cookie(tab),
+        # "." as separator: a comma would be quoted in the cookie.
+        ".".join(name for name in known if name in field),
+        max_age=365 * 24 * 3600,
+        samesite="lax",
+    )
+    return response
 
 
 @pages.get("/hosts")
@@ -433,6 +501,18 @@ async def system_detail(request: Request, system_id: int, session: DbSession) ->
         refresh=refresh,
         depends=depends_on_sids(system),
     )
+
+
+@pages.post("/systems/{system_id}/refresh")
+async def refresh_system_status(
+    system_id: int, context: Context, session: DbSession, back: Annotated[str, Form()] = ""
+) -> Response:
+    """Read the status of all instances of the system once; no activity is created."""
+    await _load_system(session, system_id)
+    warnings = await refresh_system(session, system_id, context.clients)
+    await session.commit()
+    target = "/landscape" if back == "landscape" else f"/systems/{system_id}"
+    return redirect(target, notice="status_refreshed", warning=warnings)
 
 
 @pages.post("/systems/{system_id}/{operation}")
@@ -578,6 +658,7 @@ async def create_host(
         password_encrypted=context.secret_box.encrypt(password) if password else None,
     )
     host.agent_info = None  # nothing read yet; avoids a lazy load
+    host.tags = []
     session.add(host)
     try:
         await session.commit()
@@ -627,6 +708,26 @@ async def set_host_credentials(
     host.password_encrypted = context.secret_box.encrypt(password)
     await session.commit()
     return redirect(target, notice="credentials_saved")
+
+
+async def _save_tags(
+    session: AsyncSession, owner: Host | System, tag_class: type, text: str, target: str
+) -> Response:
+    try:
+        tags = parse_tags([text])
+    except TagError as exc:
+        return redirect(target, error=exc.code, e_tag=exc.tag)
+    replace_tags(owner.tags, tag_class, tags)
+    await session.commit()
+    return redirect(target, notice="tags_saved")
+
+
+@pages.post("/configuration/hosts/{host_id}/tags")
+async def set_host_tags(
+    host_id: int, session: DbSession, tags: Annotated[str, Form()] = ""
+) -> Response:
+    host = await _load_host(session, host_id)
+    return await _save_tags(session, host, HostTag, tags, f"/configuration/hosts/{host_id}")
 
 
 @pages.post("/configuration/hosts/{host_id}/delete")
@@ -759,6 +860,15 @@ async def save_system(
         return _change_error(target, exc)
     await session.commit()
     return redirect(target, notice="system_saved")
+
+
+@pages.post("/configuration/systems/{system_id}/tags")
+async def set_system_tags(
+    system_id: int, session: DbSession, tags: Annotated[str, Form()] = ""
+) -> Response:
+    system = await _load_system(session, system_id)
+    target = f"/configuration/systems/{system_id}"
+    return await _save_tags(session, system, SystemTag, tags, target)
 
 
 @pages.post("/configuration/systems/{system_id}/delete")

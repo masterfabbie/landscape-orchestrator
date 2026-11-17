@@ -10,10 +10,12 @@
     <a class="badge badge-running" href="/activities/{{ active.id }}">{{ t("overview.running") }}: {{ t("kind." ~ active.kind) }} {{ active.target_label }}</a>
   {% endif %}
   {{ ui.operation_buttons("/systems/" ~ system.id, t, active, system=true) }}
+  {{ ui.refresh_button(system.id, t) }}
 </div>
 <section class="card">
   <dl>
     {% if system.description %}<dt>{{ t("field.description") }}</dt><dd>{{ system.description }}</dd>{% endif %}
+    <dt>{{ t("field.tags") }}</dt><dd>{% if system.tags %}{{ ui.tag_chips(system.tags) }}{% else %}{{ t("deps.none") }}{% endif %}</dd>
     <dt>{{ t("field.pool") }}</dt><dd>{{ system.pool.name if system.pool else t("pool.none") }}</dd>
     <dt>{{ t("deps.depends_on") }}</dt>
     <dd>{% for dependency in system.depends_on %}<a href="/systems/{{ dependency.id }}">{{ dependency.name }}</a>{% if not loop.last %}, {% endif %}{% else %}{{ t("deps.none") }}{% endfor %}</dd>

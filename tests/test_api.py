@@ -324,3 +324,62 @@ async def test_pools(api):
     systems = {s["name"]: s for s in (await api.get("/api/systems")).json()}
     assert systems["DEV"]["pool_id"] is None
     assert (await api.delete("/api/pools/99")).status_code == 404
+
+
+async def test_tags_and_tag_filter(api):
+    dev, hdv = await discover_both(api)
+
+    saved = await api.put(f"/api/systems/{dev}/tags", json={"tags": ["dev", "SLA=1"]})
+    assert saved.status_code == 200 and saved.json()["tags"] == ["dev", "sla=1"]
+    await api.put(f"/api/systems/{hdv}/tags", json={"tags": ["sla=2"]})
+    host = await api.put("/api/hosts/2/tags", json={"tags": ["dev", "db"]})
+    assert host.json()["tags"] == ["db", "dev"]
+
+    def names(response) -> list[str]:
+        return [s["name"] for s in response.json()]
+
+    assert names(await api.get("/api/systems", params={"tag": "sla"})) == ["DEV", "HDV"]
+    assert names(await api.get("/api/systems", params={"tag": "sla=2"})) == ["HDV"]
+    assert names(await api.get("/api/systems", params={"tag": ["dev", "sla=2"]})) == [
+        "DEV",
+        "HDV",
+    ]
+    assert names(await api.get("/api/hosts", params={"tag": "db"})) == ["sapdb1"]
+
+    invalid = await api.put(f"/api/systems/{dev}/tags", json={"tags": ["bad tag"]})
+    assert invalid.status_code == 422
+    assert (await api.put("/api/systems/99/tags", json={"tags": []})).status_code == 404
+    cleared = await api.put(f"/api/systems/{dev}/tags", json={"tags": []})
+    assert cleared.json()["tags"] == []
+
+
+async def test_refresh_system(api, landscape):
+    dev, _ = await discover_both(api)
+    landscape.start_instance(landscape.host("sapapp1").instance(0))
+
+    response = await api.post(f"/api/systems/{dev}/refresh")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["warnings"] == []
+    statuses = {i["number"]: i["last_status"] for i in body["system"]["instances"]}
+    assert statuses == {"00": "YELLOW", "01": "GRAY"}
+    assert (await api.post("/api/systems/99/refresh")).status_code == 404
+
+
+async def test_refresh_reports_unreachable_instances(settings, landscape):
+    transport = MockLandscapeTransport(landscape)
+    app = create_app(settings, transport=transport)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": f"Bearer {settings.api_token}"},
+        ) as client:
+            dev, _ = await discover_both(client)
+            transport.remove_port(50013)
+            body = (await client.post(f"/api/systems/{dev}/refresh")).json()
+    assert len(body["warnings"]) == 1
+    assert body["warnings"][0].startswith("DEV/00: sapstartsrv could not be queried")
+    statuses = {i["number"]: i["last_status"] for i in body["system"]["instances"]}
+    assert statuses["00"] == "UNKNOWN"

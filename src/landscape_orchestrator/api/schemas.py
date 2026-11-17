@@ -85,6 +85,8 @@ class HostOut(BaseModel):
     last_discovery_at: datetime | None
     # E.g. "7.22 PL72", read at the last discovery.
     hostagent_version: str | None
+    # E.g. ["dev", "sla=1"].
+    tags: list[str] = Field(validation_alias=AliasChoices("tag_list", "tags"))
 
 
 class HostDetail(HostOut):
@@ -107,6 +109,7 @@ class SystemOut(BaseModel):
     id: int
     name: str
     description: str | None
+    tags: list[str] = Field(validation_alias=AliasChoices("tag_list", "tags"))
     pool_id: int | None
     depends_on_ids: list[int]
     required_by_ids: list[int]
@@ -168,6 +171,18 @@ class SystemUpdate(BaseModel):
 
 class InstanceIds(BaseModel):
     instance_ids: list[int] = Field(min_length=1, max_length=200)
+
+
+class TagsIn(BaseModel):
+    # E.g. ["dev", "sla=1"]; replaces all tags.
+    tags: list[str] = Field(max_length=50)
+
+
+class RefreshOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    system: SystemOut
+    warnings: list[str]
 
 
 class DependenciesIn(BaseModel):
