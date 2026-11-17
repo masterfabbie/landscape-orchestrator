@@ -41,6 +41,13 @@ Server gegen die simulierte Landschaft, braucht `LO_SECRET_KEY` und `LO_API_TOKE
 .venv/bin/lo-server --mock
 ```
 
+Schema der Datenbank aus `LO_DATABASE_URL` anzeigen bzw. migrieren (macht der Server beim Start
+auch selbst):
+
+```bash
+.venv/bin/lo-db current
+```
+
 Vor jedem Commit müssen Tests und Lint grün sein. Die CI prüft beides auf Python 3.11 und 3.13.
 
 ## Aufbau
@@ -51,7 +58,9 @@ Alles liegt unter `src/landscape_orchestrator/`.
 |---|---|
 | `soapxml.py` | SOAP-Envelopes bauen und lesen, gemeinsam für Clients und Mock |
 | `clients/` | asynchrone SOAP-Clients: `HostAgentClient` (SAPHostControl, Port 1128/1129), `SapControlClient` (sapstartsrv, Port 5NN13/5NN14), gemeinsame Fehlerklassen in `base.py` |
-| `models.py`, `db.py` | Datenmodell (SQLAlchemy, asynchron): Host, Sid, Instance, System, Pool, Database, Activity, ActivityLogEntry; Schemaversion und Prüfung beim Start |
+| `models.py`, `db.py` | Datenmodell (SQLAlchemy, asynchron): Host, Sid, Instance, System, Pool, Database, Activity, ActivityLogEntry; Migration beim Start, Sicherungskopie, Befehl `lo-db` |
+| `migrations/` | Alembic-Migrationen (`env.py`, `versions/`) |
+| `hosts.py` | Verbindungsdaten eines Hosts ändern |
 | `crypto.py`, `settings.py` | Verschlüsselung gespeicherter Passwörter (Fernet), Konfiguration aus Umgebungsvariablen |
 | `connections.py` | baut Clients für Inventareinträge samt Zugangsdaten |
 | `discovery.py` | liest einen Host aus und aktualisiert das Inventar |
@@ -100,12 +109,24 @@ Wichtige Entwurfsentscheidungen:
 - **Nur eine aktive Aktivität pro System.** Eine Aktivität sperrt alle beteiligten Systeme
   (Tabelle `activity_systems`); weitere werden abgelehnt. Solange sie läuft, lässt sich das
   System auch nicht ändern (Instanzen zuordnen oder entfernen, löschen).
-- **Schema:** Es gibt keine Migrationen. Kompatible Erweiterungen nur durch neue Tabellen;
-  `create_all` legt sie beim Start auch in bestehenden Datenbanken an, neue Spalten in
-  bestehenden Tabellen nicht. Für inkompatible Änderungen `SCHEMA_VERSION` in `models.py`
-  erhöhen; der Server weist ältere Datenbanken dann mit einer Meldung ab (Tabelle
-  `schema_info`). Schema 2 (Systeme als Gruppen) war ein solcher Bruch; der Eigentümer hat
-  dafür seine Daten gelöscht.
+- **Schema und Migrationen:** Das Schema wird mit Alembic verwaltet (`migrations/`).
+  `upgrade_database` läuft beim Start (Server und `create_app`): leere Datenbank anlegen,
+  Datenbank von vor den Migrationen (Tabelle `schema_info` mit Version 2) übernehmen
+  (fehlende Tabellen per `create_all`, dann `stamp 0001`, dann `upgrade`), sonst migrieren.
+  Vor dem Migrieren bestehender Daten wird die SQLite-Datei kopiert; die letzten 5 Kopien
+  bleiben (Wunsch des Eigentümers: automatisch, mit Sicherung). Schema 1 und unbekannte
+  Revisionen werden abgewiesen. `create_all` wird sonst nicht mehr benutzt.
+- **Neue Migration anlegen:** Modell ändern, dann gegen eine Datenbank auf neuestem Stand
+  automatisch erzeugen, z. B. mit `alembic_config()` aus `db.py` und
+  `command.revision(config, message=..., autogenerate=True, rev_id="000N")` (die Verbindung
+  über `config.attributes["connection"]`). Die erzeugte Datei prüfen und kürzen. Revisionen
+  sind fortlaufend nummeriert (`0001`, `0002`, …). `render_as_batch` ist an, weil SQLite
+  Spalten nur durch Neuaufbau der Tabelle ändern kann; bei solchen Migrationen auf die
+  Fremdschlüssel achten (`PRAGMA foreign_keys` ist an). Der Test
+  `test_models_match_migrations` schlägt fehl, wenn eine Migration fehlt.
+- **Verbindungsdaten eines Hosts** lassen sich ändern (`hosts.update_connection`), nicht aber
+  während einer Aktivität, die eine Instanz oder ein System auf dem Host betrifft. Geprüft wird
+  die neue Verbindung erst durch die nächste Discovery.
 - **Tags** sind Schlüssel mit optionalem Wert (`dev`, `sla=1`), je Schlüssel ein Wert, in den
   Tabellen `host_tags` und `system_tags`. Beim Ersetzen werden vorhandene Schlüssel
   aktualisiert statt gelöscht und neu angelegt (sonst Primärschlüssel-Konflikt im selben
@@ -212,7 +233,7 @@ Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 ## Bekannte Lücken
 
 - keine Benutzer und Rollen, nur ein gemeinsames Token
-- keine Schema-Migrationen; Tabellen werden beim Start angelegt
+- Migrationen nur vorwärts; zurück geht es über die Sicherungskopie
 - Aktivitäten lassen sich nicht abbrechen
 - keine eigenen Datenbank-Operationen (`StartDatabase`, `StopDatabase`)
 - jede SID nur einmal
@@ -222,5 +243,4 @@ Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 - Protokollmeldungen der Aktivitäten sind nur englisch
 - kein Verschieben von Instanzen (Adaptive Computing)
 - Übersicht nur mit einfachen Kennzahlen; Diagramme und Diagnosenachrichten fehlen noch
-- Verbindungsdaten eines Hosts lassen sich nach dem Anlegen nicht ändern (nur Zugangsdaten)
 - Filterauswahl nur pro Browser (Cookie), noch nicht pro Benutzer

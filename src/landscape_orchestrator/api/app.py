@@ -21,9 +21,10 @@ from sqlalchemy.orm import selectinload
 from .. import __version__
 from ..connections import ClientFactory
 from ..crypto import SecretBox
-from ..db import create_engine, create_session_factory, create_tables
+from ..db import create_engine, create_session_factory, upgrade_database
 from ..dependencies import DependencyError, set_dependencies
 from ..discovery import DiscoveryError, discover_host
+from ..hosts import Connection, HostChangeError, update_connection
 from ..models import Activity, Host, HostTag, Instance, Pool, Sid, System, SystemTag
 from ..operations import (
     DEFAULT_TIMEOUT_SECONDS,
@@ -56,6 +57,7 @@ from .schemas import (
     HostCreate,
     HostDetail,
     HostOut,
+    HostUpdate,
     InstanceIds,
     InstanceListOut,
     InstanceOut,
@@ -111,7 +113,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        await create_tables(engine)
+        await upgrade_database(engine, settings.database_url)
         await runner.recover_interrupted()
         yield
         await runner.shutdown()
@@ -223,6 +225,19 @@ def create_app(
     @api.get("/hosts/{host_id}", response_model=HostDetail)
     async def get_host(host_id: int, session: Session) -> Host:
         return await load_host(session, host_id)
+
+    @api.patch("/hosts/{host_id}", response_model=HostOut)
+    async def update_host(host_id: int, body: HostUpdate, session: Session) -> Host:
+        """Change connection data. Not checked against the host; run a discovery afterwards."""
+        host = await load_host(session, host_id)
+        try:
+            await update_connection(session, host, Connection(**body.model_dump()))
+        except HostChangeError as exc:
+            await session.rollback()
+            code = {"busy": 409, "host_exists": 409}.get(exc.code, 422)
+            raise HTTPException(code, str(exc)) from exc
+        await session.commit()
+        return host
 
     @api.put("/hosts/{host_id}/credentials", status_code=status.HTTP_204_NO_CONTENT)
     async def set_host_credentials(host_id: int, body: Credentials, session: Session) -> Response:

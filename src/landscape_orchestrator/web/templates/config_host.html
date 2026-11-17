@@ -26,6 +26,24 @@
   </dl>
 </section>
 <section class="card">
+  <h2>{{ t("host.edit_connection") }}</h2>
+  <form method="post" action="/configuration/hosts/{{ host.id }}/connection" class="stack">
+    <p class="muted">{{ t("host.connection_hint") }}</p>
+    <div class="fields">
+      <label>{{ t("field.name") }} <input name="name" required maxlength="255" value="{{ host.name }}"></label>
+      <label>{{ t("field.address") }} <input name="address" maxlength="255" value="{{ host.address }}" placeholder="{{ t('field.address_hint') }}"></label>
+      <label>{{ t("field.hostagent_port") }} <input name="hostagent_port" type="number" min="1" max="65535" value="{{ host.hostagent_port or '' }}" placeholder="{{ 1129 if host.https else 1128 }}"></label>
+      <label>{{ t("field.port_offset") }} <input name="sapcontrol_port_offset" type="number" min="0" max="15000" value="{{ host.sapcontrol_port_offset or '' }}" placeholder="{{ t('field.port_offset_hint') }}"></label>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" name="https" {% if host.https %}checked{% endif %}> {{ t("field.https") }}</label>
+      <label><input type="checkbox" name="verify_tls" {% if host.verify_tls %}checked{% endif %}> {{ t("field.verify_tls") }}</label>
+    </div>
+    <div><button type="submit">{{ t("action.save") }}</button></div>
+  </form>
+</section>
+
+<section class="card">
   <h2>{{ t("field.tags") }}</h2>
   {{ ui.tags_form("/configuration/hosts/" ~ host.id ~ "/tags", host, t) }}
 </section>

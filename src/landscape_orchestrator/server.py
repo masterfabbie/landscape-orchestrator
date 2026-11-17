@@ -9,17 +9,19 @@ import sys
 import uvicorn
 
 from .api import create_app
-from .db import SchemaError, create_engine, create_tables
+from .db import SchemaError, create_engine, upgrade_database
 from .settings import Settings, SettingsError
 
 
 async def _prepare_database(database_url: str) -> None:
-    """Create or check the schema before serving, so an old database fails clearly."""
+    """Migrate the schema before serving, so an unusable database fails clearly."""
     engine = create_engine(database_url)
     try:
-        await create_tables(engine)
+        backup = await upgrade_database(engine, database_url)
     finally:
         await engine.dispose()
+    if backup:
+        print(f"Database migrated; backup before the migration: {backup}")
 
 
 def main() -> None:

@@ -8,7 +8,7 @@ from landscape_orchestrator.clients import HostAgentClient, SoapFaultError
 from landscape_orchestrator.clients.sapcontrol import OSProcess, StateColor
 from landscape_orchestrator.connections import ClientFactory
 from landscape_orchestrator.crypto import SecretBox, generate_secret_key
-from landscape_orchestrator.db import create_engine, create_session_factory, create_tables
+from landscape_orchestrator.db import create_engine, create_session_factory, upgrade_database
 from landscape_orchestrator.discovery import DiscoveryError, discover_host, instance_status
 from landscape_orchestrator.mock.transport import MockLandscapeTransport
 from landscape_orchestrator.models import Database, Host, Instance, Sid, System
@@ -33,8 +33,9 @@ def clients(secret_box, transport) -> ClientFactory:
 
 @pytest.fixture
 async def session(tmp_path):
-    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
-    await create_tables(engine)
+    url = f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+    engine = create_engine(url)
+    await upgrade_database(engine, url)
     async with create_session_factory(engine)() as session:
         yield session
     await engine.dispose()

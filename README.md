@@ -121,6 +121,37 @@ Hosts die eingebaute simulierte Landschaft an:
 .venv/bin/lo-server --mock
 ```
 
+### Datenbank und Migrationen
+
+Das Schema wird mit Alembic verwaltet. Beim Start bringt der Server die Datenbank automatisch
+auf den neuesten Stand:
+
+| Zustand | Verhalten |
+|---|---|
+| neue, leere Datenbank | wird angelegt |
+| Datenbank einer Version vor den Migrationen (Schema 2) | wird übernommen, die Daten bleiben erhalten |
+| ältere Migration | wird migriert |
+| Schema 1 oder neuer als der Code | Abbruch mit Meldung |
+
+Bevor bestehende Daten migriert werden, legt der Server eine Kopie der SQLite-Datei daneben an
+(`landscape.db.bak-<Zeitstempel>`, UTC). Die letzten 5 Kopien bleiben erhalten, ältere werden
+gelöscht. Der Server meldet die Kopie beim Start.
+
+Der Befehl `lo-db` zeigt und migriert das Schema ohne den Server, für die Datenbank aus
+`LO_DATABASE_URL`:
+
+```bash
+.venv/bin/lo-db current
+```
+
+```bash
+.venv/bin/lo-db upgrade
+```
+
+```bash
+.venv/bin/lo-db history
+```
+
 ## Web-Oberfläche
 
 Nach dem Start ist die Oberfläche unter `http://127.0.0.1:8000/` erreichbar. Angemeldet wird
@@ -134,7 +165,7 @@ Die Oberfläche hat fünf Bereiche. **Landscape** dient zum Beobachten und Bedie
 | Übersicht | Kennzahlen zu Systemen, Instanzen, Hosts und Aktivitäten der letzten 24 Stunden |
 | Landscape | Tab „Systeme“ mit Status, Pool, Tags, Abhängigkeiten und Knöpfen für Start, Stopp, Neustart und „Status aktualisieren“; Tab „Hosts“ mit Version des Host Agents und Tags. Beide Tabs mit Filtern. Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
 | Activities | Tab „Aktivitäten“ mit allen Operationen und Detailseite mit Protokoll; Tab „Protokolle“ mit den letzten 200 Protokolleinträgen |
-| Configuration | Tab „Hosts“: anlegen, Discovery, Zugangsdaten, löschen. Tab „Systeme“: nicht zugeordnete Instanzen, Systeme anlegen und zuordnen, Systeme aufklappbar mit ihren Instanzen; Seite eines Systems mit Name, Instanzen, Pool, Abhängigkeiten, Zugangsdaten je SID, Löschen. Tab „Pools“: anlegen und löschen |
+| Configuration | Tab „Hosts“: anlegen, Verbindung ändern, Discovery, Zugangsdaten, Tags, löschen. Tab „Systeme“: nicht zugeordnete Instanzen, Systeme anlegen und zuordnen, Systeme aufklappbar mit ihren Instanzen; Seite eines Systems mit Name, Instanzen, Pool, Abhängigkeiten, Zugangsdaten je SID, Löschen. Tab „Pools“: anlegen und löschen |
 | Administration | Versionsstand und aktuelle Einstellungen; Plattform-Einstellungen folgen |
 
 Die Hauptmenüpunkte heißen in beiden Sprachen Landscape, Activities, Configuration und
@@ -252,6 +283,7 @@ keine Inventardaten.
 | PUT | `/api/hosts/{id}/tags` | Tags eines Hosts ersetzen |
 | POST | `/api/hosts` | Host anlegen |
 | GET | `/api/hosts/{id}` | Host mit Instanzen und Datenbanken |
+| PATCH | `/api/hosts/{id}` | Verbindungsdaten ändern (Name, Adresse, `hostagent_port`, `https`, `verify_tls`, `sapcontrol_port_offset`); nicht angegebene Felder bleiben, Port 0 heißt Standardport. Während einer Aktivität auf dem Host: HTTP 409 |
 | PUT | `/api/hosts/{id}/credentials` | Zugangsdaten des Hosts setzen |
 | DELETE | `/api/hosts/{id}` | Host samt Instanzen und Datenbanken löschen |
 | POST | `/api/hosts/{id}/discover` | Host auslesen und Inventar aktualisieren |
@@ -313,10 +345,10 @@ Einschränkungen:
 - Die API kennt nur ein gemeinsames Token, keine Benutzer und Rollen.
 - Der Server selbst spricht nur HTTP. Für den Zugriff über ein Netzwerk gehört ein
   Reverse-Proxy mit TLS davor.
-- Das Datenbankschema wird beim Start angelegt; Migrationen gibt es nicht. Die Datenbank
-  trägt eine Schemaversion. **Mit dem neuen Systemmodell (Schema 2) ist eine ältere Datenbank
-  nicht mehr verwendbar:** Der Server bricht mit einer Meldung ab. Die Datenbankdatei
-  (Standard `landscape.db`) löschen und das Inventar neu einrichten.
+- Eine Datenbank aus der Zeit vor dem Systemmodell (Schema 1) ist nicht verwendbar; der
+  Server bricht mit einer Meldung ab. Sie muss gelöscht und das Inventar neu eingerichtet
+  werden.
+- Migrationen gibt es nur vorwärts; zum alten Stand führt die Sicherungskopie zurück.
 - Jede SID gibt es nur einmal. Zwei Landschaften mit gleicher SID lassen sich nicht
   unterscheiden.
 

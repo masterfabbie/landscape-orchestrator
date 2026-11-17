@@ -245,6 +245,20 @@ TEXTS: dict[str, tuple[str, str]] = {
         "Diesen Host samt Instanzen und Datenbanken löschen?",
     ),
     "host.connection": ("Connection", "Verbindung"),
+    "host.edit_connection": ("Change connection", "Verbindung ändern"),
+    "host.connection_hint": (
+        "The new data is not checked when saving. Run a discovery afterwards to check it.",
+        "Die neuen Daten werden beim Speichern nicht geprüft. Starte danach eine Discovery, "
+        "um sie zu prüfen.",
+    ),
+    "notice.connection_saved": (
+        "Connection saved. Run a discovery to check it.",
+        "Verbindung gespeichert. Starte eine Discovery, um sie zu prüfen.",
+    ),
+    "error.host_busy": (
+        "An activity is still running on this host. Try again later.",
+        "Auf diesem Host läuft noch eine Aktivität. Versuche es später erneut.",
+    ),
     "host.system_info": ("System information", "Systeminformationen"),
     "host.no_instances": (
         "No instances known. Run a discovery.",

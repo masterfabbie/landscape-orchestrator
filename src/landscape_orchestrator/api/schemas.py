@@ -23,6 +23,17 @@ class HostCreate(BaseModel):
     password: str | None = Field(default=None, min_length=1)
 
 
+class HostUpdate(BaseModel):
+    """Connection data; omitted fields stay unchanged. hostagent_port 0 means the default."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    address: str | None = Field(default=None, min_length=1, max_length=255)
+    hostagent_port: int | None = Field(default=None, ge=0, le=65535)
+    https: bool | None = None
+    verify_tls: bool | None = None
+    sapcontrol_port_offset: int | None = Field(default=None, ge=0, le=15000)
+
+
 class InstanceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

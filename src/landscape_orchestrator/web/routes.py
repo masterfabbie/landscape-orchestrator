@@ -40,6 +40,7 @@ from ..filters import (
     tag_options,
     visible_fields,
 )
+from ..hosts import Connection, HostChangeError, update_connection
 from ..models import (
     STATUS_UNKNOWN,
     Activity,
@@ -670,6 +671,39 @@ async def create_host(
 @pages.get("/configuration/hosts/{host_id}")
 async def configure_host(request: Request, host_id: int, session: DbSession) -> HTMLResponse:
     return render(request, "config_host.html", host=await _load_host(session, host_id))
+
+
+@pages.post("/configuration/hosts/{host_id}/connection")
+async def set_host_connection(
+    host_id: int,
+    session: DbSession,
+    name: Annotated[str, Form()] = "",
+    address: Annotated[str, Form()] = "",
+    hostagent_port: Annotated[str, Form()] = "",
+    sapcontrol_port_offset: Annotated[str, Form()] = "",
+    https: Annotated[bool, Form()] = False,
+    verify_tls: Annotated[bool, Form()] = False,
+) -> Response:
+    host = await _load_host(session, host_id)
+    target = f"/configuration/hosts/{host_id}"
+    try:
+        change = Connection(
+            name=name,
+            address=address,
+            hostagent_port=_optional_int(hostagent_port, 1, 65535) or 0,
+            https=https,
+            verify_tls=verify_tls,
+            sapcontrol_port_offset=_optional_int(sapcontrol_port_offset, 0, 15000) or 0,
+        )
+    except ValueError:
+        return redirect(target, error="invalid_input")
+    try:
+        await update_connection(session, host, change)
+    except HostChangeError as exc:
+        await session.rollback()
+        return redirect(target, error="host_busy" if exc.code == "busy" else exc.code)
+    await session.commit()
+    return redirect(target, notice="connection_saved")
 
 
 @pages.post("/configuration/hosts/{host_id}/discover")

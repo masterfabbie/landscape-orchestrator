@@ -709,3 +709,16 @@ async def test_system_with_virtual_hostnames(settings, clock):
             stop = await run(application, client, f"/api/systems/{system['id']}/stop")
             assert stop["status"] == "SUCCEEDED", stop["error"]
     assert virtual.host("sapapp1").instance(0).status(clock()) is Status.STOPPED
+
+
+async def test_host_connection_cannot_change_during_activity(app, api):
+    first = await api.post(f"/api/systems/{await system_id(api, 'DEV')}/start")
+    assert first.status_code == 202
+
+    busy = await api.patch("/api/hosts/1", json={"address": "localhost"})
+    assert busy.status_code == 409 and "still running" in busy.json()["detail"]
+    other = await api.patch("/api/hosts/2", json={"address": "127.0.0.1"})
+    assert other.status_code == 200  # the HANA host is not part of the DEV start
+
+    await app.state.runner.wait(first.json()["id"])
+    assert (await api.patch("/api/hosts/1", json={"address": "127.0.0.1"})).status_code == 200

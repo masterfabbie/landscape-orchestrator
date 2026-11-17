@@ -34,19 +34,11 @@ from .roles import Role, instance_role
 
 STATUS_UNKNOWN = "UNKNOWN"
 
-# Increase when the schema changes incompatibly; the server refuses older databases.
-SCHEMA_VERSION = 2
 
 
 class Base(DeclarativeBase):
     pass
 
-
-schema_info = Table(
-    "schema_info",
-    Base.metadata,
-    Column("version", Integer, nullable=False),
-)
 
 system_dependencies = Table(
     "system_dependencies",

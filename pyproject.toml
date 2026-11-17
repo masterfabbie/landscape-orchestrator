@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "aiosqlite>=0.20",
+    "alembic>=1.13",
     "cryptography>=42",
     "defusedxml>=0.7",
     "fastapi>=0.115",
@@ -27,6 +28,7 @@ dev = [
 ]
 
 [project.scripts]
+lo-db = "landscape_orchestrator.db:main"
 lo-keygen = "landscape_orchestrator.crypto:keygen"
 lo-mock = "landscape_orchestrator.mock.server:main"
 lo-server = "landscape_orchestrator.server:main"

@@ -383,3 +383,26 @@ async def test_refresh_reports_unreachable_instances(settings, landscape):
     assert body["warnings"][0].startswith("DEV/00: sapstartsrv could not be queried")
     statuses = {i["number"]: i["last_status"] for i in body["system"]["instances"]}
     assert statuses["00"] == "UNKNOWN"
+
+
+async def test_update_host_connection(api):
+    host = await create_host(api, APP_HOST | {"hostagent_port": 4711})
+    await create_host(api, {"name": "other"})
+    path = f"/api/hosts/{host['id']}"
+
+    # Wrong port first: the discovery fails; after the change it works.
+    assert (await api.post(f"{path}/discover")).status_code == 502
+    changed = await api.patch(path, json={"hostagent_port": 0, "name": "app1"})
+    assert changed.status_code == 200
+    body = changed.json()
+    assert (body["name"], body["hostagent_port"], body["address"]) == ("app1", None, "127.0.0.1")
+    assert (await api.post(f"{path}/discover")).status_code == 200
+
+    unchanged = (await api.patch(path, json={})).json()
+    assert unchanged["name"] == "app1" and unchanged["has_credentials"] is True
+    https = (await api.patch(path, json={"https": True, "verify_tls": False})).json()
+    assert (https["https"], https["verify_tls"]) == (True, False)
+
+    assert (await api.patch(path, json={"name": "OTHER"})).status_code == 409
+    assert (await api.patch(path, json={"hostagent_port": 70000})).status_code == 422
+    assert (await api.patch("/api/hosts/99", json={})).status_code == 404
