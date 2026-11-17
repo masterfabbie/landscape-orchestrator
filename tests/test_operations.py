@@ -5,9 +5,10 @@ import asyncio
 import httpx
 import pytest
 
+from conftest import stopped_config
 from landscape_orchestrator.api import create_app
 from landscape_orchestrator.crypto import generate_api_token, generate_secret_key
-from landscape_orchestrator.mock.landscape import Status
+from landscape_orchestrator.mock.landscape import MockLandscape, Status
 from landscape_orchestrator.mock.transport import MockLandscapeTransport
 from landscape_orchestrator.settings import Settings
 
@@ -672,3 +673,39 @@ async def test_host_agent_version_is_stored(extended_api):
     _, api = extended_api
     hosts = (await api.get("/api/hosts")).json()
     assert {h["hostagent_version"] for h in hosts} == {"7.22 PL72"}
+
+
+async def test_system_with_virtual_hostnames(settings, clock):
+    """Instances under virtual hostnames are started and stopped with their hostname."""
+    config = stopped_config()
+    config["hosts"][0]["instances"][0]["hostname"] = "sapdevcs"  # DEV/01
+    config["hosts"][0]["instances"][1]["hostname"] = "sapdevci"  # DEV/00
+    virtual = MockLandscape.from_dict(config, clock=clock)
+
+    async def fake_sleep(seconds: float) -> None:
+        clock.advance(seconds)
+        await asyncio.sleep(0)
+
+    application = create_app(
+        settings,
+        transport=MockLandscapeTransport(virtual),
+        poll_interval=1.0,
+        sleep=fake_sleep,
+        clock=clock,
+    )
+    async with application.router.lifespan_context(application):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application),
+            base_url="http://test",
+            headers={"Authorization": f"Bearer {settings.api_token}"},
+        ) as client:
+            host = (await client.post("/api/hosts", json=APP_HOST)).json()
+            await client.post(f"/api/hosts/{host['id']}/discover")
+            body = {"name": "DEV", "instance_ids": [1, 2]}
+            system = (await client.post("/api/systems", json=body)).json()
+
+            start = await run(application, client, f"/api/systems/{system['id']}/start")
+            assert start["status"] == "SUCCEEDED", start["error"]
+            stop = await run(application, client, f"/api/systems/{system['id']}/stop")
+            assert stop["status"] == "SUCCEEDED", stop["error"]
+    assert virtual.host("sapapp1").instance(0).status(clock()) is Status.STOPPED

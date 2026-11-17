@@ -618,7 +618,7 @@ class OperationRunner:
         try:
             async with self._clients.hostagent(instance.host) as agent:
                 operation = agent.start_instance if start else agent.stop_instance
-                await operation(instance.sid.name, instance.number)
+                await operation(instance.sid.name, instance.number, hostname=instance.hostname)
         except SoapFaultError as exc:
             raise explain_fault(exc, call, instance.host) from exc
         except SoapConnectionError as exc:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from conftest import AUTH
+from conftest import AUTH, stopped_config
 from landscape_orchestrator.clients import (
     AuthenticationRequiredError,
     HostAgentClient,
@@ -16,6 +16,7 @@ from landscape_orchestrator.clients.hostagent import (
     parse_version_info,
 )
 from landscape_orchestrator.mock.apps import create_hostagent_app
+from landscape_orchestrator.mock.landscape import MockLandscape
 
 pytestmark = pytest.mark.anyio
 
@@ -161,3 +162,20 @@ def test_parse_version_info_from_log_lines():
         assert (version.release, version.patch) == ("722", "72")
         assert version.details.endswith("(Oct 13 2026, 09:26:37)")
     assert parse_version_info(OperationResult("", {}, [("Info", "something else")])) is None
+
+
+async def test_instance_with_virtual_hostname_needs_hostname(clock):
+    """A real host agent did not find an instance with a virtual hostname without it."""
+    config = stopped_config()
+    config["hosts"][0]["instances"][1]["hostname"] = "sapdevci"  # DEV/00
+    virtual = MockLandscape.from_dict(config, clock=clock)
+    async with make_client(virtual) as client:
+        with pytest.raises(SoapFaultError, match="SAP Instance not found!"):
+            await client.start_instance("DEV", 0)
+        with pytest.raises(SoapFaultError, match="SAP Instance not found!"):
+            await client.start_instance("DEV", 0, hostname="sapapp1")
+        await client.start_instance("DEV", 0, hostname="sapdevci")
+        await client.start_instance("DEV", 1, hostname="sapapp1")
+        clock.advance(3)
+        running = await client.list_instances(InstanceStatus.RUNNING)
+    assert sorted(i.hostname for i in running) == ["sapapp1", "sapdevci"]

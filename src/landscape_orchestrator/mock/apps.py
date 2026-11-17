@@ -388,13 +388,21 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
         }
 
     def _find_instance(params: dict[str, Any]) -> MockInstance:
+        # A real host agent identifies an instance by SID, number and SAPLOCALHOST. Without
+        # mHostname it found instances running under the physical hostname, but answered
+        # "SAP Instance not found!" for an instance with a virtual hostname.
         spec = params.get("aInstance")
         spec = spec if isinstance(spec, dict) else {}
         sid, number = spec.get("mSid"), spec.get("mSystemNumber")
+        hostname = (spec.get("mHostname") or host.name).lower()
         for inst in host.instances:
-            if inst.sid == sid and f"{inst.nr:02d}" == str(number).zfill(2):
+            if (
+                inst.sid == sid
+                and f"{inst.nr:02d}" == str(number).zfill(2)
+                and inst.hostname.lower() == hostname
+            ):
                 return inst
-        raise SoapFault(f"Instance {sid}/{number} not found on host {host.name}")
+        raise SoapFault("SAP Instance not found!")
 
     def _operation_result(description: str) -> dict[str, Any]:
         return {

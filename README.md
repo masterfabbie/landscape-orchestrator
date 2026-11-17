@@ -57,6 +57,12 @@ Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenban
   `patch number` (angezeigt z. B. als „7.22 PL72“) sowie die Versionszeile von
   `saphostexec`. Achtung: Die Komponentenzeilen nennen einen anderen Patch (Kernel-Patch,
   z. B. 1611) als der Abschnitt „SAPHOSTAGENT information“ (z. B. 72).
+- Die Versionsanzeige („7.22 PL72“) und der parallele Start von Datenbank und zentralen
+  Diensten funktionieren aus dem Tool heraus.
+- **Virtuelle Hostnamen:** Ohne Hostnamen meldete der Host Agent bei `StartInstance` für eine
+  Instanz mit virtuellem Hostnamen „SAP Instance not found!“. Er erkennt eine Instanz an SID,
+  Instanznummer und SAPLOCALHOST. Das Tool sendet deshalb bei Start und Stopp den Hostnamen
+  der Instanz aus der Discovery mit; dass das am echten System hilft, ist noch zu bestätigen.
 - **Diagnostics Agents** melden das Feature `SMDAGENT`.
 - Zentrale Dienste und Anwendungsserver eines Systems können auf verschiedenen Hosts dieselbe
   Instanznummer haben.

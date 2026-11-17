@@ -335,24 +335,36 @@ class HostAgentClient(SoapClient):
         sid: str,
         system_number: str | int,
         *,
+        hostname: str | None = None,
         timeout: int = 0,
         options: Sequence[InstanceOption] = (InstanceOption.INSTANCE,),
     ) -> OperationResult:
-        """Start an instance. ``timeout`` 0 is asynchronous, -1 waits until it is done."""
-        return await self._instance_operation("StartInstance", sid, system_number, timeout, options)
+        """Start an instance. ``timeout`` 0 is asynchronous, -1 waits until it is done.
+
+        ``hostname`` is the SAPLOCALHOST of the instance as reported by ListInstances. It is
+        required for instances with a virtual hostname; a real host agent answered "SAP
+        Instance not found!" without it.
+        """
+        return await self._instance_operation(
+            "StartInstance", sid, system_number, hostname, timeout, options
+        )
 
     async def stop_instance(
         self,
         sid: str,
         system_number: str | int,
         *,
+        hostname: str | None = None,
         timeout: int = 0,
         soft_timeout: int = 0,
         options: Sequence[InstanceOption] = (InstanceOption.INSTANCE,),
     ) -> OperationResult:
-        """Stop an instance. ``timeout`` 0 is asynchronous, -1 waits until it is done."""
+        """Stop an instance. ``timeout`` 0 is asynchronous, -1 waits until it is done.
+
+        ``hostname``: see :meth:`start_instance`.
+        """
         return await self._instance_operation(
-            "StopInstance", sid, system_number, timeout, options, soft_timeout
+            "StopInstance", sid, system_number, hostname, timeout, options, soft_timeout
         )
 
     async def _instance_operation(
@@ -360,6 +372,7 @@ class HostAgentClient(SoapClient):
         method: str,
         sid: str,
         system_number: str | int,
+        hostname: str | None,
         timeout: int,
         options: Sequence[InstanceOption],
         soft_timeout: int = 0,
@@ -368,7 +381,7 @@ class HostAgentClient(SoapClient):
         result = await self.call(
             method,
             {
-                "aInstance": {"mSid": sid, "mSystemNumber": number},
+                "aInstance": {"mSid": sid, "mHostname": hostname, "mSystemNumber": number},
                 "aOptions": {
                     "mTimeout": timeout,
                     "mOptions": [option.value for option in options],

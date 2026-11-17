@@ -167,9 +167,16 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
   Antwort sind Protokollzeilen mit `kernel release` und `patch number`. Diagnostics Agents
   melden `SMDAGENT`. Zentrale Dienste und Anwendungsserver können auf verschiedenen Hosts
   dieselbe Instanznummer haben.
+- Aus dem Tool bestätigt: Die Version des Host Agents wird per SOAP gelesen und richtig
+  angezeigt (die Schlüssel der Meldungen sind weiter unbekannt; der Parser ignoriert sie).
+  Der Parallelstart von Datenbank und zentralen Diensten funktioniert.
+- **Virtuelle Hostnamen:** `StartInstance` nur mit SID und Nummer schlug für eine Instanz mit
+  virtuellem Hostnamen mit „SAP Instance not found!“ fehl. Der Host Agent erkennt eine
+  Instanz an SID, Nummer und SAPLOCALHOST; das Tool sendet deshalb `mHostname` (Hostname aus
+  `ListInstances`), und der Mock verlangt ihn wie der echte Host Agent. Der Erfolg mit
+  `mHostname` ist am echten System noch zu bestätigen.
 - Noch nicht gegen echte Systeme getestet: verteilte Systeme mit Instanzen auf mehreren
-  Hosts, die parallele Startreihenfolge, `ExecuteOperation` über SOAP aus dem Tool (die
-  Schlüssel der Meldungen sind unbekannt; der Parser ignoriert sie).
+  Hosts.
 
 ## Offene Annahmen, die ein Test mit einer echten Instanz klären muss
 
