@@ -147,8 +147,11 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
   Dialoginstanz) nach Startpriorität, HANA-Instanz, und ein vollständiger Neustart mit
   Abhängigkeit vom Datenbanksystem. Der Statuswechsel kann nach der Anforderung einige
   Sekunden auf sich warten lassen.
-- Noch nicht gegen echte Systeme getestet: das neue Systemmodell (Schema 2), insbesondere ein
-  System mit Instanzen mehrerer SIDs.
+- Das Systemmodell (Schema 2) funktioniert: Ein System aus zentralen Diensten, Dialoginstanz
+  und HANA-Instanz mit eigener SID ließ sich als Ganzes stoppen und starten, einzelne
+  Instanzen darin ließen sich neu starten und starten.
+- Noch nicht gegen echte Systeme getestet: verteilte Systeme mit Instanzen auf mehreren
+  Hosts.
 
 ## Offene Annahmen, die ein Test mit einer echten Instanz klären muss
 

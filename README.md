@@ -14,7 +14,7 @@ Dies ist ein unabhängiges Projekt und kein SAP-Produkt.
 | Mock-Umgebung (simulierter Host Agent und sapstartsrv) | vorhanden |
 | SOAP-Clients für Host Agent und sapstartsrv | vorhanden; Host-Agent-Teil gegen echte Hosts bestätigt |
 | Inventar (Hosts, SIDs, Instanzen, Datenbanken) mit Discovery und REST-API | vorhanden; gegen echte Hosts bestätigt |
-| Systeme als selbst angelegte Gruppen von Instanzen | vorhanden, bisher nur gegen den Mock getestet |
+| Systeme als selbst angelegte Gruppen von Instanzen | vorhanden; gegen ein echtes System bestätigt |
 | Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | vorhanden; gegen ein echtes System bestätigt |
 | Abhängigkeiten zwischen Systemen | vorhanden; gegen ein echtes System bestätigt |
 | Web-Oberfläche (Deutsch und Englisch) | vorhanden |
@@ -49,10 +49,13 @@ Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenban
   und Stopp der HANA-Instanz. Ein vollständiger Neustart mit angelegter Abhängigkeit vom
   Datenbanksystem lief erfolgreich durch.
 
+- **Systeme aus Instanzen mehrerer SIDs:** Ein System aus zentralen Diensten, Dialoginstanz
+  und der HANA-Instanz mit eigener SID ließ sich als Ganzes stoppen (rund 56 Sekunden) und
+  starten; Neustart und Start einzelner Instanzen dieses Systems funktionieren ebenfalls.
+
 Noch nicht gegen echte Hosts getestet:
 
-- das neue Systemmodell (Systeme als selbst angelegte Gruppen, auch mit Instanzen mehrerer
-  SIDs)
+- verteilte Systeme mit Instanzen auf mehreren Hosts
 - HTTPS
 
 Nicht Teil der ersten Version: Verschieben von Instanzen (Adaptive Computing),
