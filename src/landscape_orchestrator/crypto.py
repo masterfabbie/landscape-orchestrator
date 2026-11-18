@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import secrets
-
 from cryptography.fernet import Fernet, InvalidToken
 
 
@@ -36,11 +34,6 @@ def generate_secret_key() -> str:
     return Fernet.generate_key().decode()
 
 
-def generate_api_token() -> str:
-    return secrets.token_urlsafe(32)
-
-
 def keygen() -> None:
-    """Entry point of ``lo-keygen``: print fresh values for the environment variables."""
+    """Entry point of ``lo-keygen``: print a fresh value for LO_SECRET_KEY."""
     print(f"LO_SECRET_KEY={generate_secret_key()}")
-    print(f"LO_API_TOKEN={generate_api_token()}")

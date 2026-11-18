@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "macros.html" as ui %}
+{% import "macros.html" as ui with context %}
 {% block title %}{{ system.name }}{% endblock %}
 {% block content %}
 <p class="crumbs"><a href="/landscape">{{ t("nav.landscape") }}</a> / {{ t("tab.systems") }}</p>
@@ -22,7 +22,7 @@
     <dt>{{ t("deps.required_by") }}</dt>
     <dd>{% for other in system.required_by %}<a href="/systems/{{ other.id }}">{{ other.name }}</a>{% if not loop.last %}, {% endif %}{% else %}{{ t("deps.none") }}{% endfor %}</dd>
   </dl>
-  <p><a href="/configuration/systems/{{ system.id }}">{{ t("action.configure") }}</a></p>
+  {% if can("configurator") %}<p><a href="/configuration/systems/{{ system.id }}">{{ t("action.configure") }}</a></p>{% endif %}
 </section>
 <section class="card">
   <h2>{{ t("field.instances") }}</h2>

@@ -5,13 +5,14 @@
 
 import asyncio
 import secrets
+import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -25,7 +26,18 @@ from ..db import create_engine, create_session_factory, upgrade_database
 from ..dependencies import DependencyError, set_dependencies
 from ..discovery import DiscoveryError, discover_host
 from ..hosts import Connection, HostChangeError, update_connection
-from ..models import Activity, Host, HostTag, Instance, Pool, Sid, System, SystemTag
+from ..models import (
+    Activity,
+    ApiToken,
+    Host,
+    HostTag,
+    Instance,
+    Pool,
+    Sid,
+    System,
+    SystemTag,
+    User,
+)
 from ..operations import (
     DEFAULT_TIMEOUT_SECONDS,
     NotAssignedError,
@@ -34,6 +46,7 @@ from ..operations import (
     OperationRunner,
     TargetNotFoundError,
 )
+from ..permissions import required_role
 from ..pools import UnknownPoolError, assign_pool
 from ..settings import Settings
 from ..status import refresh_system
@@ -47,6 +60,16 @@ from ..systems import (
     update_system,
 )
 from ..tags import TagError, matches, parse_tags, replace_tags
+from ..users import (
+    UserError,
+    create_token,
+    create_user,
+    has_role,
+    set_password,
+    token_user,
+    update_user,
+    user_count,
+)
 from ..web import AppContext, register_web
 from .schemas import (
     ActivityDetail,
@@ -61,6 +84,8 @@ from .schemas import (
     InstanceIds,
     InstanceListOut,
     InstanceOut,
+    NewTokenOut,
+    PasswordReset,
     PoolAssignment,
     PoolCreate,
     PoolOut,
@@ -70,6 +95,11 @@ from .schemas import (
     SystemOut,
     SystemUpdate,
     TagsIn,
+    TokenCreate,
+    TokenOut,
+    UserCreate,
+    UserOut,
+    UserUpdate,
 )
 
 # Status codes of SystemChangeError.code; everything else is 422.
@@ -115,28 +145,51 @@ def create_app(
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await upgrade_database(engine, settings.database_url)
         await runner.recover_interrupted()
+        async with session_factory() as session:
+            if await user_count(session) == 0:
+                # One-time code for creating the first admin on the page /setup.
+                code = "-".join(secrets.token_hex(3).upper() for _ in range(3))
+                app.state.setup_code = code
+                print(
+                    f"No user exists yet. Open /setup and create the first admin with the "
+                    f"setup code {code}",
+                    file=sys.stderr,
+                    flush=True,
+                )
         yield
         await runner.shutdown()
         await engine.dispose()
 
     bearer = HTTPBearer(auto_error=False)
 
-    async def require_token(
-        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-    ) -> None:
-        token = credentials.credentials if credentials else ""
-        if not secrets.compare_digest(token.encode(), settings.api_token.encode()):
-            raise HTTPException(
-                status.HTTP_401_UNAUTHORIZED,
-                "Missing or invalid API token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
     async def get_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
             yield session
 
     Session = Annotated[AsyncSession, Depends(get_session)]
+
+    async def require_user(
+        request: Request,
+        session: Session,
+        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    ) -> User:
+        """The user of the personal API token, if the route allows the user's role."""
+        user = await token_user(session, credentials.credentials if credentials else "")
+        if user is None:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                "Missing, invalid or expired API token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        await session.commit()  # records when the token was last used
+        route = request.scope.get("route")
+        needed = required_role(request.method, getattr(route, "path", request.url.path))
+        if not has_role(user, needed):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires the role {needed}")
+        request.state.user = user
+        return user
+
+    CurrentUser = Annotated[User, Depends(require_user)]
 
     app = FastAPI(
         title="Landscape Orchestrator",
@@ -147,11 +200,12 @@ def create_app(
         openapi_url=None,
     )
     # The interface description under /api/docs is readable without a token; it contains
-    # no inventory data. Every call to a route needs the token.
+    # no inventory data. Every call to a route needs a personal API token, and the role of
+    # its user must allow the route (see permissions.py).
     api = FastAPI(
         title="Landscape Orchestrator API",
         version=__version__,
-        dependencies=[Depends(require_token)],
+        dependencies=[Depends(require_user)],
     )
 
     @app.get("/health")
@@ -467,11 +521,14 @@ def create_app(
         instance_id: int,
         operation: OperationName,
         session: Session,
+        user: CurrentUser,
         timeout: Timeout = DEFAULT_TIMEOUT_SECONDS,
     ) -> Activity:
         """Start, stop or restart one instance through the host agent."""
         kind = OperationKind(operation.upper())
-        return await submit(runner.submit_instance(session, instance_id, kind, timeout))
+        return await submit(
+            runner.submit_instance(session, instance_id, kind, timeout, user.username)
+        )
 
     @api.post(
         "/systems/{system_id}/{operation}",
@@ -482,11 +539,14 @@ def create_app(
         system_id: int,
         operation: OperationName,
         session: Session,
+        user: CurrentUser,
         timeout: Timeout = DEFAULT_TIMEOUT_SECONDS,
     ) -> Activity:
         """Start, stop or restart a whole system in the order of the start priorities."""
         kind = OperationKind(operation.upper())
-        return await submit(runner.submit_system(session, system_id, kind, timeout))
+        return await submit(
+            runner.submit_system(session, system_id, kind, timeout, user.username)
+        )
 
     @api.get("/activities", response_model=list[ActivityOut])
     async def list_activities(
@@ -506,7 +566,100 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Activity not found")
         return activity
 
+    # --- own account and users ------------------------------------------------------------
+
+    def user_error(exc: UserError) -> HTTPException:
+        code = {"username_taken": 409, "last_admin": 409}.get(exc.code, 422)
+        return HTTPException(code, str(exc))
+
+    async def load_user(session: AsyncSession, user_id: int) -> User:
+        user = await session.get(User, user_id)
+        if user is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+        return user
+
+    @api.get("/me", response_model=UserOut)
+    async def me(user: CurrentUser) -> User:
+        return user
+
+    @api.get("/me/tokens", response_model=list[TokenOut])
+    async def my_tokens(user: CurrentUser, session: Session) -> list[ApiToken]:
+        query = select(ApiToken).where(ApiToken.user_id == user.id).order_by(ApiToken.id)
+        return list(await session.scalars(query))
+
+    @api.post("/me/tokens", response_model=NewTokenOut, status_code=status.HTTP_201_CREATED)
+    async def create_my_token(
+        body: TokenCreate, user: CurrentUser, session: Session
+    ) -> dict[str, object]:
+        """Create a token; its value is returned only in this response."""
+        try:
+            token, plain = await create_token(session, user, body.name, body.expires_at)
+        except UserError as exc:
+            raise user_error(exc) from exc
+        await session.commit()
+        return {"token": plain, "info": token}
+
+    @api.delete("/me/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_my_token(token_id: int, user: CurrentUser, session: Session) -> Response:
+        token = await session.get(ApiToken, token_id)
+        if token is None or token.user_id != user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Token not found")
+        await session.delete(token)
+        await session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @api.get("/users", response_model=list[UserOut])
+    async def list_users(session: Session) -> list[User]:
+        return list(await session.scalars(select(User).order_by(User.username)))
+
+    @api.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+    async def create_user_route(body: UserCreate, session: Session) -> User:
+        """Create a user with a start password that must be changed at the first sign-in."""
+        try:
+            user = await create_user(
+                session,
+                body.username,
+                body.password,
+                body.role,
+                display_name=body.display_name,
+                must_change_password=True,
+            )
+        except UserError as exc:
+            raise user_error(exc) from exc
+        await session.commit()
+        return user
+
+    @api.patch("/users/{user_id}", response_model=UserOut)
+    async def update_user_route(user_id: int, body: UserUpdate, session: Session) -> User:
+        user = await load_user(session, user_id)
+        try:
+            await update_user(
+                session,
+                user,
+                role=body.role,
+                active=body.active,
+                display_name=body.display_name,
+            )
+        except UserError as exc:
+            await session.rollback()
+            raise user_error(exc) from exc
+        await session.commit()
+        return user
+
+    @api.put("/users/{user_id}/password", status_code=status.HTTP_204_NO_CONTENT)
+    async def reset_password(user_id: int, body: PasswordReset, session: Session) -> Response:
+        """Set a start password; the user must change it at the next sign-in."""
+        user = await load_user(session, user_id)
+        try:
+            set_password(user, body.password, must_change=True)
+        except UserError as exc:
+            raise user_error(exc) from exc
+        await session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     app.state.runner = runner
+    app.state.setup_code = None
+    app.state.session_factory = session_factory
     app.mount("/api", api)
     register_web(app, AppContext(settings, secret_box, clients, session_factory, runner))
     return app

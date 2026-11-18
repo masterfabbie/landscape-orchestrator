@@ -34,11 +34,17 @@ gearbeitet wird und was offen ist.
 .venv/bin/ruff check .
 ```
 
-Server gegen die simulierte Landschaft, braucht `LO_SECRET_KEY` und `LO_API_TOKEN`
-(erzeugen mit `.venv/bin/lo-keygen`):
+Server gegen die simulierte Landschaft, braucht `LO_SECRET_KEY` (erzeugen mit
+`.venv/bin/lo-keygen`). Ohne Benutzer gibt er einen Einrichtungscode für `/setup` aus:
 
 ```bash
 .venv/bin/lo-server --mock
+```
+
+Benutzer ohne Oberfläche anlegen (fragt das Passwort ab):
+
+```bash
+.venv/bin/lo-user add chief --role admin
 ```
 
 Schema der Datenbank aus `LO_DATABASE_URL` anzeigen bzw. migrieren (macht der Server beim Start
@@ -61,6 +67,9 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `models.py`, `db.py` | Datenmodell (SQLAlchemy, asynchron): Host, Sid, Instance, System, Pool, Database, Activity, ActivityLogEntry; Migration beim Start, Sicherungskopie, Befehl `lo-db` |
 | `migrations/` | Alembic-Migrationen (`env.py`, `versions/`) |
 | `hosts.py` | Verbindungsdaten eines Hosts ändern |
+| `users.py` | Benutzer, Rollen, Passwörter (scrypt), Sperre nach Fehlversuchen, Sitzungs-Cookies, persönliche API-Tokens, Einstellungen pro Benutzer |
+| `permissions.py` | welche Rolle eine Route braucht, gemeinsam für API und Oberfläche |
+| `usercli.py` | Befehl `lo-user` |
 | `crypto.py`, `settings.py` | Verschlüsselung gespeicherter Passwörter (Fernet), Konfiguration aus Umgebungsvariablen |
 | `connections.py` | baut Clients für Inventareinträge samt Zugangsdaten |
 | `discovery.py` | liest einen Host aus und aktualisiert das Inventar |
@@ -72,8 +81,8 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `systems.py` | Systeme als Gruppen von Instanzen: anlegen, zuordnen, entfernen, löschen, Namens- und Zuordnungsvorschläge, abgeleitete „Hängt ab von“-SIDs |
 | `pools.py` | Zuordnung von Systemen zu Pools |
 | `operations.py` | Start, Stopp, Neustart als Hintergrund-Aktivitäten (`OperationRunner`) |
-| `api/` | REST-API unter `/api`, geschützt durch ein Bearer-Token; `create_app` baut die Anwendung |
-| `web/` | servergerenderte Oberfläche (Jinja2), Sitzungs-Cookie, Übersetzungen |
+| `api/` | REST-API unter `/api`, geschützt durch persönliche API-Tokens; `create_app` baut die Anwendung |
+| `web/` | servergerenderte Oberfläche (Jinja2), Anmeldung, Einrichtung, Konto, Übersetzungen |
 | `mock/` | simulierter Host Agent und sapstartsrv für Entwicklung und Tests |
 
 Wichtige Entwurfsentscheidungen:
@@ -133,13 +142,29 @@ Wichtige Entwurfsentscheidungen:
   Flush).
 - **Filter** der Landscape: innerhalb eines Filters reicht ein Treffer, alle Filter müssen
   passen; gefiltert wird in Python über die geladenen Listen. Welche Filter sichtbar sind,
-  steht im Cookie `lo_filters_<tab>` (Namen durch Punkte getrennt); später soll das pro
-  Benutzer gespeichert werden.
+  steht pro Benutzer in `user_settings` (Schlüssel `filters.<tab>`, Namen durch Punkte
+  getrennt).
+- **Benutzer und Rollen** (Wunsch des Eigentümers: vier Rollen wie in LaMa, kein gemeinsames
+  Token mehr): viewer < operator < configurator < admin. Welche Rolle eine Route braucht,
+  steht zentral in `permissions.required_role` (nach Methode und Routen-Vorlage); API
+  (`require_user`) und Oberfläche (`require_login`) prüfen dort. Neue Routen dort einordnen;
+  ohne Sonderfall gilt: GET → viewer, sonst configurator. Vorlagen blenden Knöpfe mit
+  `can("operator")` usw. aus (Makros mit `import … with context`).
+- **Anmeldung:** Sitzungs-Cookie mit Benutzer-ID, `session_epoch` und Ablauf, signiert mit
+  einem aus `LO_SECRET_KEY` abgeleiteten Schlüssel. Passwort- oder Rollenänderung und
+  Deaktivieren erhöhen `session_epoch` und beenden so alle Sitzungen. Startpasswörter
+  (`must_change_password`) erzwingen den Wechsel vor jeder anderen Seite.
+- **Erster Admin:** Ohne Benutzer erzeugt `create_app` beim Start einen einmaligen
+  Einrichtungscode (`app.state.setup_code`) und gibt ihn auf stderr aus; `/setup` legt damit
+  den ersten Admin an. `LO_API_TOKEN` wird nicht mehr verwendet.
+- **API-Tokens** sind persönlich, haben die Rechte ihres Benutzers, optional ein Ablaufdatum;
+  gespeichert wird nur der SHA-256-Hash. Aktivitäten speichern `requested_by`.
 - **Discovery löscht nichts**, sie meldet fehlende Einträge nur.
 - **Die Oberfläche lädt keine externen Dateien** und nutzt kein JavaScript-Framework.
 - **Aufbau der Oberfläche:** Übersicht (Kennzahlen), Landscape (beobachten und bedienen:
   Systeme, Hosts), Activities (Aktivitäten, Protokolle), Configuration (einrichten: Hosts,
-  Systeme, Pools), Administration (Plattform-Einstellungen, noch weitgehend leer). Die
+  Systeme, Pools), Administration (Benutzer; Plattform-Einstellungen folgen), „Mein Konto“
+  (Passwort, API-Tokens). Die
   Menüpunkte außer „Übersicht“ heißen in beiden Sprachen englisch, wie vom Eigentümer
   gewünscht.
 - **Pools** gruppieren zusammengehörige Systeme (z. B. Entwicklung, Test, Produktion eines
@@ -159,6 +184,8 @@ Wichtige Entwurfsentscheidungen:
   Oberfläche legen daraus die Systeme `DEV` und `HDV` an. Ein Test fasst alle drei Instanzen
   in einem System zusammen und prüft die Reihenfolge über SIDs hinweg. Die Fixture
   `single_sid_landscape` legt HANA in `DEV`; sie testet den simulierten `StartSystem`.
+- Benutzer für Tests legt `make_user(app, name, role)` aus `tests/conftest.py` an (Passwort
+  `PASSWORD`, liefert ein API-Token). Eine autouse-Fixture senkt die scrypt-Kosten.
 - Zeit wird über eine falsche Uhr gesteuert (`FakeClock` in `tests/conftest.py`). Tests, die
   Operationen ausführen, übergeben `sleep` und `clock` an `create_app`.
 - Neue Funktionen brauchen Tests, auch für Fehlerfälle. Verhalten, das der Mock simulieren
@@ -232,7 +259,8 @@ Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 
 ## Bekannte Lücken
 
-- keine Benutzer und Rollen, nur ein gemeinsames Token
+- nur lokale Benutzer, kein LDAP oder SSO
+- Änderungen an der Konfiguration werden nicht protokolliert, nur Aktivitäten
 - Migrationen nur vorwärts; zurück geht es über die Sicherungskopie
 - Aktivitäten lassen sich nicht abbrechen
 - keine eigenen Datenbank-Operationen (`StartDatabase`, `StopDatabase`)
@@ -243,4 +271,3 @@ Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 - Protokollmeldungen der Aktivitäten sind nur englisch
 - kein Verschieben von Instanzen (Adaptive Computing)
 - Übersicht nur mit einfachen Kennzahlen; Diagramme und Diagnosenachrichten fehlen noch
-- Filterauswahl nur pro Browser (Cookie), noch nicht pro Benutzer

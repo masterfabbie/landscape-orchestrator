@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 
 import uvicorn
@@ -39,6 +40,12 @@ def main() -> None:
         settings = Settings.from_env()
     except SettingsError as exc:
         sys.exit(f"Configuration error: {exc}")
+    if os.environ.get("LO_API_TOKEN"):
+        print(
+            "LO_API_TOKEN is no longer used and is ignored. Sign in with a user; create "
+            "personal API tokens under 'My account'.",
+            file=sys.stderr,
+        )
     try:
         asyncio.run(_prepare_database(settings.database_url))
     except SchemaError as exc:

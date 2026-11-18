@@ -174,6 +174,7 @@ class OperationRunner:
         instance_id: int,
         kind: OperationKind,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        requested_by: str | None = None,
     ) -> Activity:
         instance = await session.scalar(
             select(Instance)
@@ -193,6 +194,7 @@ class OperationRunner:
             instance.id,
             timeout_seconds,
             {instance.system_id},
+            requested_by,
         )
 
     async def submit_system(
@@ -201,6 +203,7 @@ class OperationRunner:
         system_id: int,
         kind: OperationKind,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        requested_by: str | None = None,
     ) -> Activity:
         system = await session.get(System, system_id)
         if system is None:
@@ -215,6 +218,7 @@ class OperationRunner:
             None,
             timeout_seconds,
             system_plan.involved,
+            requested_by,
         )
 
     @staticmethod
@@ -233,6 +237,7 @@ class OperationRunner:
         instance_id: int | None,
         timeout_seconds: int,
         involved: set[int],
+        requested_by: str | None = None,
     ) -> Activity:
         # One activity per system at a time: operations on a system and on its instances
         # would otherwise work against each other. A system operation also covers the
@@ -261,6 +266,7 @@ class OperationRunner:
                 system_id=system_id,
                 instance_id=instance_id,
                 status=ActivityStatus.PENDING,
+                requested_by=requested_by,
                 timeout_seconds=timeout_seconds,
                 requested_at=_now(),
             )
@@ -319,6 +325,8 @@ class OperationRunner:
             try:
                 await self._execute(session, activity)
             except asyncio.CancelledError:
+                # The cancellation may have hit a flush; start from a clean transaction.
+                await session.rollback()
                 await self._finish(session, activity, "Interrupted by server shutdown.")
                 raise
             except (OperationFailedError, SoapError, SecretError) as exc:

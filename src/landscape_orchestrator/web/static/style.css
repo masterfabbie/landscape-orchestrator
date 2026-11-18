@@ -243,3 +243,4 @@ details.multi[open] > .multi-options { display: flex; }
 /* Tags and secondary buttons */
 .tag { display: inline-block; margin: 0 4px 2px 0; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; font-size: 0.85rem; font-family: ui-monospace, monospace; }
 button.secondary { background: transparent; color: var(--accent); border-color: var(--accent); }
+.token-value { word-break: break-all; user-select: all; margin: 6px 0 0; }

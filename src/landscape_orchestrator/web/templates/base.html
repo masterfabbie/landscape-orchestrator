@@ -15,8 +15,8 @@
     <a href="/" {% if path == "/" %}aria-current="page"{% endif %}>{{ t("nav.overview") }}</a>
     <a href="/landscape" {% if path.startswith(("/landscape", "/systems", "/hosts")) %}aria-current="page"{% endif %}>{{ t("nav.landscape") }}</a>
     <a href="/activities" {% if path.startswith("/activities") %}aria-current="page"{% endif %}>{{ t("nav.activities") }}</a>
-    <a href="/configuration" {% if path.startswith("/configuration") %}aria-current="page"{% endif %}>{{ t("nav.configuration") }}</a>
-    <a href="/administration" {% if path.startswith("/administration") %}aria-current="page"{% endif %}>{{ t("nav.administration") }}</a>
+    {% if can("configurator") %}<a href="/configuration" {% if path.startswith("/configuration") %}aria-current="page"{% endif %}>{{ t("nav.configuration") }}</a>{% endif %}
+    {% if can("admin") %}<a href="/administration" {% if path.startswith("/administration") %}aria-current="page"{% endif %}>{{ t("nav.administration") }}</a>{% endif %}
   </nav>
   {% endblock %}
   <div class="topbar-end">
@@ -26,6 +26,7 @@
       {% endfor %}
     </span>
     {% block session %}
+    {% if user %}<a href="/account" {% if path.startswith("/account") %}aria-current="page"{% endif %} title="{{ t('role.' ~ user.role) }}">{{ user.label }}</a>{% endif %}
     <form method="post" action="/logout"><button class="link" type="submit">{{ t("nav.logout") }}</button></form>
     {% endblock %}
   </div>

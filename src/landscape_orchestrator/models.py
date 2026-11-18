@@ -362,6 +362,8 @@ class Activity(Base):
         ForeignKey("instances.id", ondelete="SET NULL")
     )
     status: Mapped[str] = mapped_column(String(16), index=True)
+    # Username of whoever requested the activity.
+    requested_by: Mapped[str | None] = mapped_column(String(64))
     timeout_seconds: Mapped[int] = mapped_column(Integer)
     error: Mapped[str | None] = mapped_column(Text)
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -407,3 +409,65 @@ Instance.same_number_count = column_property(
     # attribute access, which async sessions do not allow.
     expire_on_flush=False,
 )
+
+
+class User(Base):
+    """A person who signs in. Roles: viewer < operator < configurator < admin."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True)
+    display_name: Mapped[str | None] = mapped_column(String(255))
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(16))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Set for start passwords given by an admin; the user must choose a new one.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Increased to end all browser sessions, e.g. after a password or role change.
+    session_epoch: Mapped[int] = mapped_column(Integer, default=0)
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    tokens: Mapped[list[ApiToken]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ApiToken.id",
+    )
+
+    @property
+    def label(self) -> str:
+        return self.display_name or self.username
+
+
+class ApiToken(Base):
+    """Personal token for the REST API; only its SHA-256 hash is stored."""
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    # First characters of the token, to recognize it in lists.
+    prefix: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship(back_populates="tokens")
+
+
+class UserSetting(Base):
+    """Per-user preferences, e.g. which landscape filters are shown."""
+
+    __tablename__ = "user_settings"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)

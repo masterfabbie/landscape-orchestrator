@@ -45,6 +45,7 @@ from ..models import (
     STATUS_UNKNOWN,
     Activity,
     ActivityLogEntry,
+    ApiToken,
     Host,
     HostTag,
     Instance,
@@ -52,6 +53,7 @@ from ..models import (
     Sid,
     System,
     SystemTag,
+    User,
 )
 from ..operations import (
     ACTIVE_STATUSES,
@@ -61,6 +63,7 @@ from ..operations import (
     OperationRunner,
     TargetNotFoundError,
 )
+from ..permissions import required_role
 from ..pools import UnknownPoolError, assign_pool
 from ..settings import Settings
 from ..status import refresh_system
@@ -78,8 +81,27 @@ from ..systems import (
     update_system,
 )
 from ..tags import TagError, parse_tags, replace_tags
+from ..users import (
+    ROLE_ORDER,
+    SESSION_LIFETIME_SECONDS,
+    Role,
+    UserError,
+    authenticate,
+    create_session,
+    create_token,
+    create_user,
+    get_setting,
+    has_role,
+    session_user,
+    set_password,
+    set_setting,
+    update_user,
+    user_count,
+    verify_password,
+)
 from .i18n import LANGUAGES, instance_type_key, pick_language, translate
-from .sessions import SESSION_COOKIE, SESSION_LIFETIME_SECONDS, create_session, is_valid_session
+
+SESSION_COOKIE = "lo_session"
 
 WEB_DIR = Path(__file__).parent
 LANGUAGE_COOKIE = "lo_lang"
@@ -105,6 +127,14 @@ class LoginRequiredError(Exception):
         self.next_path = next_path
 
 
+class SetupRequiredError(Exception):
+    """No user exists yet; the first admin has to be created."""
+
+
+class PasswordChangeRequiredError(Exception):
+    """The user signed in with a start password and must choose a new one."""
+
+
 # --- dependencies -----------------------------------------------------------------------
 
 
@@ -117,11 +147,27 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
         yield session
 
 
-def require_login(request: Request) -> None:
-    token = get_context(request).settings.api_token
-    if not is_valid_session(token, request.cookies.get(SESSION_COOKIE)):
+DbSessionDep = Annotated[AsyncSession, Depends(get_session)]
+
+
+async def require_login(request: Request, session: DbSessionDep) -> User:
+    """The signed-in user, if the page allows the user's role (see permissions.py)."""
+    secret_key = get_context(request).settings.secret_key
+    user = await session_user(session, secret_key, request.cookies.get(SESSION_COOKIE))
+    if user is None:
+        if await user_count(session) == 0:
+            raise SetupRequiredError()
         path = request.url.path if request.method == "GET" else "/"
         raise LoginRequiredError(path)
+    route = request.scope.get("route")
+    template = getattr(route, "path", request.url.path)
+    if user.must_change_password and not template.startswith("/account/password"):
+        raise PasswordChangeRequiredError()
+    needed = required_role(request.method, template)
+    if not has_role(user, needed):
+        raise HTTPException(403, f"Requires the role {needed}")
+    request.state.user = user
+    return user
 
 
 def check_origin(request: Request) -> None:
@@ -133,6 +179,7 @@ def check_origin(request: Request) -> None:
 
 
 Context = Annotated[AppContext, Depends(get_context)]
+CurrentUser = Annotated[User, Depends(require_login)]
 DbSession = Annotated[AsyncSession, Depends(get_session)]
 OperationName = Literal["start", "stop", "restart"]
 
@@ -178,8 +225,11 @@ def render(request: Request, name: str, status_code: int = 200, **context: Any) 
         values = {k[2:]: v for k, v in query.items() if k.startswith("e_")}
         error = t(f"error.{query['error']}", **values)
     kept = [(k, v) for k, v in query.multi_items() if k == "tab" or k in FILTER_PARAMS]
+    user = getattr(request.state, "user", None)
     context = {
         "t": t,
+        "user": user,
+        "can": lambda role: user is not None and has_role(user, Role(role)),
         "language": language,
         "languages": LANGUAGES,
         "path": request.url.path,
@@ -212,8 +262,21 @@ def _safe_next(target: str | None) -> str:
 # --- sign in, language ------------------------------------------------------------------
 
 
+def _set_session_cookie(request: Request, response: Response, secret_key: str, user: User) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        create_session(secret_key, user),
+        max_age=SESSION_LIFETIME_SECONDS,
+        httponly=True,
+        samesite="strict",
+        secure=request.url.scheme == "https",
+    )
+
+
 @public.get("/login")
-async def login_form(request: Request, next: str = "/") -> HTMLResponse:
+async def login_form(request: Request, session: DbSessionDep, next: str = "/") -> Response:
+    if await user_count(session) == 0:
+        return RedirectResponse("/setup", status_code=303)
     return render(request, "login.html", next=_safe_next(next), invalid=False)
 
 
@@ -221,21 +284,25 @@ async def login_form(request: Request, next: str = "/") -> HTMLResponse:
 async def login(
     request: Request,
     context: Context,
-    token: Annotated[str, Form()],
+    session: DbSessionDep,
+    username: Annotated[str, Form()] = "",
+    password: Annotated[str, Form()] = "",
     next: Annotated[str, Form()] = "/",
 ) -> Response:
-    expected = context.settings.api_token
-    if not secrets.compare_digest(token.strip().encode(), expected.encode()):
-        return render(request, "login.html", status_code=401, next=_safe_next(next), invalid=True)
-    response = RedirectResponse(_safe_next(next), status_code=303)
-    response.set_cookie(
-        SESSION_COOKIE,
-        create_session(expected),
-        max_age=SESSION_LIFETIME_SECONDS,
-        httponly=True,
-        samesite="strict",
-        secure=request.url.scheme == "https",
-    )
+    user = await authenticate(session, username, password)
+    await session.commit()  # keep the counter of failed attempts
+    if user is None:
+        return render(
+            request,
+            "login.html",
+            status_code=401,
+            next=_safe_next(next),
+            invalid=True,
+            username=username,
+        )
+    target = "/account/password" if user.must_change_password else _safe_next(next)
+    response = RedirectResponse(target, status_code=303)
+    _set_session_cookie(request, response, context.settings.secret_key, user)
     return response
 
 
@@ -243,6 +310,46 @@ async def login(
 async def logout() -> Response:
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
+@public.get("/setup")
+async def setup_form(request: Request, session: DbSessionDep) -> Response:
+    if await user_count(session) > 0:
+        return RedirectResponse("/login", status_code=303)
+    return render(request, "setup.html")
+
+
+@public.post("/setup")
+async def setup(
+    request: Request,
+    context: Context,
+    session: DbSessionDep,
+    code: Annotated[str, Form()] = "",
+    username: Annotated[str, Form()] = "",
+    display_name: Annotated[str, Form()] = "",
+    password: Annotated[str, Form()] = "",
+    password_repeat: Annotated[str, Form()] = "",
+) -> Response:
+    """Create the first admin with the one-time setup code printed at server start."""
+    if await user_count(session) > 0:
+        return RedirectResponse("/login", status_code=303)
+    expected = request.app.state.setup_code or ""
+    if not expected or not secrets.compare_digest(code.strip().encode(), expected.encode()):
+        return redirect("/setup", error="setup_code")
+    if password != password_repeat:
+        return redirect("/setup", error="password_mismatch")
+    try:
+        user = await create_user(
+            session, username, password, Role.ADMIN, display_name=display_name
+        )
+    except UserError as exc:
+        await session.rollback()
+        return redirect("/setup", error=exc.code)
+    await session.commit()
+    request.app.state.setup_code = None
+    response = redirect("/", notice="setup_done")
+    _set_session_cookie(request, response, context.settings.secret_key, user)
     return response
 
 
@@ -376,12 +483,14 @@ def _instance_type(instance: Instance) -> str | None:
     return key.removeprefix("itype.") if key else None
 
 
-def _filter_cookie(tab: str) -> str:
-    return f"lo_filters_{tab}"
+def _filter_setting(tab: str) -> str:
+    return f"filters.{tab}"
 
 
 @pages.get("/landscape")
-async def landscape(request: Request, session: DbSession, tab: str | None = None) -> HTMLResponse:
+async def landscape(
+    request: Request, session: DbSession, user: CurrentUser, tab: str | None = None
+) -> HTMLResponse:
     tab = _tab(tab, ("systems", "hosts"))
     query = {key: request.query_params.getlist(key) for key in request.query_params}
     values = read_values(tab, query)
@@ -391,7 +500,9 @@ async def landscape(request: Request, session: DbSession, tab: str | None = None
         "active": active,
         "filter_values": values,
         "filter_fields": [f.name for f in FILTER_FIELDS[tab]],
-        "visible_filters": visible_fields(tab, request.cookies.get(_filter_cookie(tab)), values),
+        "visible_filters": visible_fields(
+            tab, await get_setting(session, user, _filter_setting(tab)), values
+        ),
     }
     if tab == "systems":
         all_systems = await _all_systems(session)
@@ -427,21 +538,18 @@ async def landscape(request: Request, session: DbSession, tab: str | None = None
 
 @pages.post("/landscape/filters")
 async def choose_filters(
+    session: DbSession,
+    user: CurrentUser,
     tab: Annotated[str, Form()] = "systems",
     field: Annotated[list[str], Form()] = [],  # noqa: B006 - FastAPI copies it
 ) -> Response:
-    """Remember in a cookie which filters this browser shows."""
+    """Remember which filters this user sees."""
     tab = _tab(tab, ("systems", "hosts"))
     known = [f.name for f in FILTER_FIELDS[tab]]
-    response = redirect("/landscape", tab=tab)
-    response.set_cookie(
-        _filter_cookie(tab),
-        # "." as separator: a comma would be quoted in the cookie.
-        ".".join(name for name in known if name in field),
-        max_age=365 * 24 * 3600,
-        samesite="lax",
-    )
-    return response
+    chosen = ".".join(name for name in known if name in field)
+    await set_setting(session, user, _filter_setting(tab), chosen)
+    await session.commit()
+    return redirect("/landscape", tab=tab)
 
 
 @pages.get("/hosts")
@@ -518,11 +626,15 @@ async def refresh_system_status(
 
 @pages.post("/systems/{system_id}/{operation}")
 async def operate_system(
-    system_id: int, operation: OperationName, context: Context, session: DbSession
+    system_id: int,
+    operation: OperationName,
+    context: Context,
+    session: DbSession,
+    user: CurrentUser,
 ) -> Response:
     try:
         activity = await context.runner.submit_system(
-            session, system_id, OperationKind(operation.upper())
+            session, system_id, OperationKind(operation.upper()), requested_by=user.username
         )
     except TargetNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -533,14 +645,18 @@ async def operate_system(
 
 @pages.post("/instances/{instance_id}/{operation}")
 async def operate_instance(
-    instance_id: int, operation: OperationName, context: Context, session: DbSession
+    instance_id: int,
+    operation: OperationName,
+    context: Context,
+    session: DbSession,
+    user: CurrentUser,
 ) -> Response:
     instance = await session.get(Instance, instance_id)
     if instance is None:
         raise HTTPException(404, "Instance not found")
     try:
         activity = await context.runner.submit_instance(
-            session, instance_id, OperationKind(operation.upper())
+            session, instance_id, OperationKind(operation.upper()), requested_by=user.username
         )
     except NotAssignedError:
         return redirect(f"/hosts/{instance.host_id}", error="not_assigned")
@@ -1026,15 +1142,188 @@ async def delete_pool(pool_id: int, session: DbSession) -> Response:
 
 
 @pages.get("/administration")
-async def administration(request: Request, context: Context) -> HTMLResponse:
+async def administration(
+    request: Request, context: Context, session: DbSession, tab: str | None = None
+) -> HTMLResponse:
+    tab = _tab(tab, ("general", "users"))
     database = context.settings.database_url.split(":", 1)[0]
+    users = list(await session.scalars(select(User).order_by(User.username)))
     return render(
         request,
         "administration.html",
+        tab=tab,
         version=__version__,
         database=database,
         session_hours=SESSION_LIFETIME_SECONDS // 3600,
+        users=users,
+        roles=[role.value for role in ROLE_ORDER],
     )
+
+
+USERS_TAB = "/administration?tab=users"
+
+
+@pages.post("/administration/users")
+async def add_user(
+    session: DbSession,
+    username: Annotated[str, Form()] = "",
+    display_name: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = "viewer",
+    password: Annotated[str, Form()] = "",
+) -> Response:
+    """Create a user with a start password that must be changed at the first sign-in."""
+    if role not in {r.value for r in ROLE_ORDER}:
+        return redirect(USERS_TAB, error="invalid_input")
+    try:
+        user = await create_user(
+            session,
+            username,
+            password,
+            role,
+            display_name=display_name,
+            must_change_password=True,
+        )
+    except UserError as exc:
+        await session.rollback()
+        return redirect(USERS_TAB, error=exc.code)
+    await session.commit()
+    return redirect(USERS_TAB, notice="user_created", n_name=user.username)
+
+
+async def _load_user(session: AsyncSession, user_id: int) -> User:
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "User not found")
+    return user
+
+
+@pages.get("/administration/users/{user_id}")
+async def edit_user(request: Request, user_id: int, session: DbSession) -> HTMLResponse:
+    return render(
+        request,
+        "user.html",
+        edited=await _load_user(session, user_id),
+        roles=[role.value for role in ROLE_ORDER],
+    )
+
+
+@pages.post("/administration/users/{user_id}")
+async def save_user(
+    user_id: int,
+    session: DbSession,
+    display_name: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = "",
+    active: Annotated[bool, Form()] = False,
+) -> Response:
+    edited = await _load_user(session, user_id)
+    target = f"/administration/users/{user_id}"
+    if role not in {r.value for r in ROLE_ORDER}:
+        return redirect(target, error="invalid_input")
+    try:
+        await update_user(session, edited, role=role, active=active, display_name=display_name)
+    except UserError as exc:
+        await session.rollback()
+        return redirect(target, error=exc.code)
+    await session.commit()
+    return redirect(target, notice="user_saved")
+
+
+@pages.post("/administration/users/{user_id}/password")
+async def reset_user_password(
+    user_id: int, session: DbSession, password: Annotated[str, Form()] = ""
+) -> Response:
+    """Set a start password; the user must change it at the next sign-in."""
+    edited = await _load_user(session, user_id)
+    target = f"/administration/users/{user_id}"
+    try:
+        set_password(edited, password, must_change=True)
+    except UserError as exc:
+        return redirect(target, error=exc.code)
+    await session.commit()
+    return redirect(target, notice="password_reset")
+
+
+# --- own account ------------------------------------------------------------------------
+
+
+async def _render_account(
+    request: Request, session: AsyncSession, user: User, new_token: str | None = None
+) -> HTMLResponse:
+    tokens = list(
+        await session.scalars(
+            select(ApiToken).where(ApiToken.user_id == user.id).order_by(ApiToken.id)
+        )
+    )
+    return render(request, "account.html", tokens=tokens, new_token=new_token)
+
+
+@pages.get("/account")
+async def account(request: Request, session: DbSession, user: CurrentUser) -> HTMLResponse:
+    return await _render_account(request, session, user)
+
+
+@pages.post("/account/tokens")
+async def add_token(
+    request: Request,
+    session: DbSession,
+    user: CurrentUser,
+    name: Annotated[str, Form()] = "",
+    expires_days: Annotated[str, Form()] = "",
+) -> Response:
+    """Create a personal API token. Its value is shown once, on this response only."""
+    expires_at = None
+    if expires_days.strip():
+        if not expires_days.strip().isdigit() or not 1 <= int(expires_days) <= 3650:
+            return redirect("/account", error="invalid_input")
+        expires_at = datetime.now(UTC) + timedelta(days=int(expires_days))
+    try:
+        _, plain = await create_token(session, user, name, expires_at)
+    except UserError as exc:
+        return redirect("/account", error=exc.code)
+    await session.commit()
+    return await _render_account(request, session, user, new_token=plain)
+
+
+@pages.post("/account/tokens/{token_id}/delete")
+async def delete_token(token_id: int, session: DbSession, user: CurrentUser) -> Response:
+    token = await session.get(ApiToken, token_id)
+    if token is None or token.user_id != user.id:
+        raise HTTPException(404, "Token not found")
+    await session.delete(token)
+    await session.commit()
+    return redirect("/account", notice="token_deleted")
+
+
+@pages.get("/account/password")
+async def password_form(request: Request, user: CurrentUser) -> HTMLResponse:
+    return render(request, "password.html")
+
+
+@pages.post("/account/password")
+async def change_password(
+    request: Request,
+    context: Context,
+    session: DbSession,
+    user: CurrentUser,
+    current: Annotated[str, Form()] = "",
+    password: Annotated[str, Form()] = "",
+    password_repeat: Annotated[str, Form()] = "",
+) -> Response:
+    if not verify_password(current, user.password_hash):
+        return redirect("/account/password", error="password_wrong")
+    if password != password_repeat:
+        return redirect("/account/password", error="password_mismatch")
+    if password == current:
+        return redirect("/account/password", error="password_same")
+    try:
+        set_password(user, password)
+    except UserError as exc:
+        return redirect("/account/password", error=exc.code)
+    await session.commit()
+    # The change ended all sessions; this browser gets a new one.
+    response = redirect("/account", notice="password_changed")
+    _set_session_cookie(request, response, context.settings.secret_key, user)
+    return response
 
 
 # --- registration -----------------------------------------------------------------------
@@ -1046,6 +1335,14 @@ def register_web(app: FastAPI, context: AppContext) -> None:
     @app.exception_handler(LoginRequiredError)
     async def to_login(_: Request, exc: LoginRequiredError) -> Response:
         return redirect("/login", next=exc.next_path if exc.next_path != "/" else None)
+
+    @app.exception_handler(SetupRequiredError)
+    async def to_setup(_: Request, __: SetupRequiredError) -> Response:
+        return RedirectResponse("/setup", status_code=303)
+
+    @app.exception_handler(PasswordChangeRequiredError)
+    async def to_password(_: Request, __: PasswordChangeRequiredError) -> Response:
+        return redirect("/account/password", notice="password_change_required")
 
     app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
     app.include_router(public)

@@ -68,9 +68,12 @@ def test_models_match_migrations(tmp_path):
 
 def legacy_database(path) -> None:
     """A database as the last version before migrations left it, without host_tags."""
+    # The baseline migration creates exactly the tables of that version.
     engine = create_sync_engine(f"sqlite:///{path}")
-    tables_without_tags = [t for t in Base.metadata.sorted_tables if t.name != "host_tags"]
-    Base.metadata.create_all(engine, tables=tables_without_tags)
+    with engine.begin() as connection:
+        db._run(connection, "upgrade", "0001")
+        connection.exec_driver_sql("DROP TABLE alembic_version")
+        connection.exec_driver_sql("DROP TABLE host_tags")
     engine.dispose()
     with sqlite3.connect(path) as connection:
         connection.execute("CREATE TABLE schema_info (version INTEGER NOT NULL)")

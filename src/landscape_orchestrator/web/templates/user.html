@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{{ edited.username }}{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/administration?tab=users">{{ t("nav.administration") }}</a> / {{ t("tab.users") }}</p>
+<h1>{{ t("users.user") }} <span class="mono">{{ edited.username }}</span></h1>
+<section class="card">
+  <form method="post" action="/administration/users/{{ edited.id }}" class="stack">
+    <div class="fields">
+      <label>{{ t("field.display_name") }} <input name="display_name" maxlength="255" value="{{ edited.display_name or '' }}"></label>
+      <label>{{ t("field.role") }}
+        <select name="role">{% for role in roles %}<option value="{{ role }}" {% if edited.role == role %}selected{% endif %}>{{ t("role." ~ role) }}</option>{% endfor %}</select>
+      </label>
+    </div>
+    <div class="checks"><label><input type="checkbox" name="active" {% if edited.active %}checked{% endif %}> {{ t("users.active") }}</label></div>
+    <p class="muted">{{ t("users.save_hint") }}</p>
+    <div><button type="submit">{{ t("action.save") }}</button></div>
+  </form>
+</section>
+<section class="card">
+  <h2>{{ t("users.reset_password") }}</h2>
+  <form method="post" action="/administration/users/{{ edited.id }}/password" class="stack">
+    <label>{{ t("users.start_password") }} <input name="password" type="password" required minlength="12" autocomplete="new-password"></label>
+    <p class="muted">{{ t("users.start_password_hint") }}</p>
+    <div><button type="submit">{{ t("users.reset_password") }}</button></div>
+  </form>
+</section>
+{% endblock %}

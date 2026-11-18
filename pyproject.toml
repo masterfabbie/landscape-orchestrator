@@ -32,6 +32,7 @@ lo-db = "landscape_orchestrator.db:main"
 lo-keygen = "landscape_orchestrator.crypto:keygen"
 lo-mock = "landscape_orchestrator.mock.server:main"
 lo-server = "landscape_orchestrator.server:main"
+lo-user = "landscape_orchestrator.usercli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/landscape_orchestrator"]

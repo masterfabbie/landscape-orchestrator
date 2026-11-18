@@ -216,13 +216,130 @@ TEXTS: dict[str, tuple[str, str]] = {
     ),
     "nav.logout": ("Sign out", "Abmelden"),
     "login.title": ("Sign in", "Anmelden"),
-    "login.token": ("API token", "API-Token"),
-    "login.submit": ("Sign in", "Anmelden"),
-    "login.hint": (
-        "Enter the token configured in LO_API_TOKEN.",
-        "Gib das Token ein, das in LO_API_TOKEN konfiguriert ist.",
+    "login.invalid": (
+        "Sign-in failed. Check user and password; after several failed attempts the account "
+        "is locked for a minute.",
+        "Anmeldung fehlgeschlagen. Prüfe Benutzer und Passwort; nach mehreren Fehlversuchen "
+        "ist das Konto eine Minute gesperrt.",
     ),
-    "login.invalid": ("The token is not valid.", "Das Token ist ungültig."),
+    "setup.title": ("Set up", "Einrichtung"),
+    "setup.hint": (
+        "No user exists yet. Create the first administrator. The setup code was printed in "
+        "the console when the server started.",
+        "Es gibt noch keinen Benutzer. Lege den ersten Administrator an. Der "
+        "Einrichtungscode steht in der Konsole, in der der Server gestartet wurde.",
+    ),
+    "setup.code": ("Setup code", "Einrichtungscode"),
+    "setup.submit": ("Create administrator", "Administrator anlegen"),
+    "notice.setup_done": ("Administrator created. Welcome!", "Administrator angelegt. Willkommen!"),
+    "error.setup_code": (
+        "The setup code is not valid. It was printed when the server started.",
+        "Der Einrichtungscode ist ungültig. Er wurde beim Start des Servers ausgegeben.",
+    ),
+    "field.display_name": ("Display name", "Anzeigename"),
+    "field.password_repeat": ("Repeat password", "Passwort wiederholen"),
+    "field.role": ("Role", "Rolle"),
+    "field.requested_by": ("Requested by", "Angefordert von"),
+    "role.viewer": ("Viewer", "Viewer"),
+    "role.operator": ("Operator", "Operator"),
+    "role.configurator": ("Configurator", "Configurator"),
+    "role.admin": ("Admin", "Admin"),
+    "tab.general": ("General", "Allgemein"),
+    "tab.users": ("Users", "Benutzer"),
+    "users.roles_hint": (
+        "Viewer: read and refresh status. Operator: also start, stop and restart. "
+        "Configurator: also change the configuration. Admin: also users and settings.",
+        "Viewer: lesen und Status aktualisieren. Operator: zusätzlich starten, stoppen und "
+        "neu starten. Configurator: zusätzlich die Konfiguration ändern. Admin: zusätzlich "
+        "Benutzer und Einstellungen.",
+    ),
+    "users.add": ("Add user", "Benutzer anlegen"),
+    "users.user": ("User", "Benutzer"),
+    "users.active": ("active", "aktiv"),
+    "users.inactive": ("inactive", "inaktiv"),
+    "users.must_change": ("must change password", "muss Passwort ändern"),
+    "users.last_login": ("Last sign-in", "Letzte Anmeldung"),
+    "users.start_password": ("Start password", "Startpasswort"),
+    "users.start_password_hint": (
+        "At least 12 characters. The user must choose a new password at the next sign-in.",
+        "Mindestens 12 Zeichen. Der Benutzer muss bei der nächsten Anmeldung ein neues "
+        "Passwort wählen.",
+    ),
+    "users.reset_password": ("Reset password", "Passwort zurücksetzen"),
+    "users.save_hint": (
+        "Changing the role or deactivating signs the user out.",
+        "Eine Änderung der Rolle oder das Deaktivieren meldet den Benutzer ab.",
+    ),
+    "notice.user_created": ("User {name} created.", "Benutzer {name} angelegt."),
+    "notice.user_saved": ("User saved.", "Benutzer gespeichert."),
+    "notice.password_reset": (
+        "Start password set. The user must change it at the next sign-in.",
+        "Startpasswort gesetzt. Der Benutzer muss es bei der nächsten Anmeldung ändern.",
+    ),
+    "error.username_invalid": (
+        "User names consist of lowercase letters, digits, '.', '-' and '_'.",
+        "Benutzernamen bestehen aus Kleinbuchstaben, Ziffern, '.', '-' und '_'.",
+    ),
+    "error.username_taken": (
+        "A user with this name already exists.",
+        "Ein Benutzer mit diesem Namen existiert bereits.",
+    ),
+    "error.password_short": (
+        "The password needs at least 12 characters.",
+        "Das Passwort braucht mindestens 12 Zeichen.",
+    ),
+    "error.password_mismatch": (
+        "The passwords do not match.",
+        "Die Passwörter stimmen nicht überein.",
+    ),
+    "error.password_wrong": ("The current password is wrong.", "Das aktuelle Passwort ist falsch."),
+    "error.password_same": (
+        "Choose a password different from the current one.",
+        "Wähle ein anderes Passwort als das aktuelle.",
+    ),
+    "error.last_admin": (
+        "The last active admin must stay an active admin.",
+        "Der letzte aktive Admin muss aktiver Admin bleiben.",
+    ),
+    "account.title": ("My account", "Mein Konto"),
+    "account.password": ("Change password", "Passwort ändern"),
+    "account.current_password": ("Current password", "Aktuelles Passwort"),
+    "account.new_password": ("New password", "Neues Passwort"),
+    "account.password_hint": (
+        "At least 12 characters. Changing it signs out your other browser sessions.",
+        "Mindestens 12 Zeichen. Die Änderung meldet deine anderen Browser-Sitzungen ab.",
+    ),
+    "notice.password_changed": ("Password changed.", "Passwort geändert."),
+    "notice.password_change_required": (
+        "Please choose a new password first.",
+        "Bitte wähle zuerst ein neues Passwort.",
+    ),
+    "token.title": ("API tokens", "API-Tokens"),
+    "token.hint": (
+        "Personal tokens for the REST API (header Authorization: Bearer <token>). They have "
+        "the rights of your role. Only a hash is stored.",
+        "Persönliche Tokens für die REST-API (Header Authorization: Bearer <token>). Sie haben "
+        "die Rechte deiner Rolle. Gespeichert wird nur ein Hash.",
+    ),
+    "token.created": (
+        "New token. Copy it now; it is not shown again:",
+        "Neues Token. Kopiere es jetzt, es wird nicht wieder angezeigt:",
+    ),
+    "token.prefix": ("Begins with", "Beginnt mit"),
+    "token.created_at": ("Created", "Angelegt"),
+    "token.expires": ("Expires", "Läuft ab"),
+    "token.expires_days": ("Valid for days", "Gültig für Tage"),
+    "token.last_used": ("Last used", "Zuletzt benutzt"),
+    "token.never": ("never", "nie"),
+    "token.name_hint": ("e.g. monitoring script", "z. B. Monitoring-Skript"),
+    "token.create": ("Create token", "Token anlegen"),
+    "token.delete": ("Delete", "Löschen"),
+    "token.delete_confirm": (
+        "Delete this token? Programs using it lose access.",
+        "Dieses Token löschen? Programme, die es nutzen, verlieren den Zugriff.",
+    ),
+    "notice.token_deleted": ("Token deleted.", "Token gelöscht."),
+    "error.token_name": ("The token needs a name.", "Das Token braucht einen Namen."),
     "overview.systems": ("Systems", "Systeme"),
     "overview.databases": ("Databases", "Datenbanken"),
     "overview.empty": (

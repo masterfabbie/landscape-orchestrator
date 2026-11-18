@@ -5,8 +5,9 @@ import sqlite3
 import httpx
 import pytest
 
+from conftest import make_user
 from landscape_orchestrator.api import create_app
-from landscape_orchestrator.crypto import generate_api_token, generate_secret_key
+from landscape_orchestrator.crypto import generate_secret_key
 from landscape_orchestrator.mock.transport import MockLandscapeTransport
 from landscape_orchestrator.settings import Settings
 
@@ -25,7 +26,6 @@ DB_HOST = APP_HOST | {"name": "sapdb1", "hostagent_port": 11128, "sapcontrol_por
 def settings(tmp_path) -> Settings:
     return Settings(
         secret_key=generate_secret_key(),
-        api_token=generate_api_token(),
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'api.db'}",
     )
 
@@ -37,7 +37,7 @@ async def api(settings, landscape):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",
-            headers={"Authorization": f"Bearer {settings.api_token}"},
+            headers={"Authorization": f"Bearer {await make_user(app)}"},
         ) as client:
             yield client
 
@@ -374,7 +374,7 @@ async def test_refresh_reports_unreachable_instances(settings, landscape):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",
-            headers={"Authorization": f"Bearer {settings.api_token}"},
+            headers={"Authorization": f"Bearer {await make_user(app)}"},
         ) as client:
             dev, _ = await discover_both(client)
             transport.remove_port(50013)

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "macros.html" as ui %}
+{% import "macros.html" as ui with context %}
 {% block title %}{{ t("nav.landscape") }}{% endblock %}
 {% block content %}
 <h1>{{ t("nav.landscape") }}</h1>
@@ -85,7 +85,7 @@
   {% elif filter_values %}
   <p>{{ t("filter.no_match") }}</p>
   {% else %}
-  <p>{{ t("overview.empty") }} <a href="/configuration?tab=hosts">{{ t("hosts.add") }}</a></p>
+  <p>{{ t("overview.empty") }} {% if can("configurator") %}<a href="/configuration?tab=hosts">{{ t("hosts.add") }}</a>{% endif %}</p>
   {% endif %}
   </section>
 {% else %}
@@ -114,7 +114,7 @@
   {% elif filter_values %}
   <p>{{ t("filter.no_match") }}</p>
   {% else %}
-  <p>{{ t("hosts.empty") }} <a href="/configuration?tab=hosts">{{ t("hosts.add") }}</a></p>
+  <p>{{ t("hosts.empty") }} {% if can("configurator") %}<a href="/configuration?tab=hosts">{{ t("hosts.add") }}</a>{% endif %}</p>
   {% endif %}
   </section>
 {% endif %}

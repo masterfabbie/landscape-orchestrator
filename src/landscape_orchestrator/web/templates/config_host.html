@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "macros.html" as ui %}
+{% import "macros.html" as ui with context %}
 {% block title %}{{ host.name }}{% endblock %}
 {% block content %}
 <p class="crumbs"><a href="/configuration?tab=hosts">{{ t("nav.configuration") }}</a> / {{ t("tab.hosts") }}</p>

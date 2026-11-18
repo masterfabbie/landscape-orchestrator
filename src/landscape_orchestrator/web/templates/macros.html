@@ -3,6 +3,7 @@
 {% endmacro %}
 
 {% macro operation_buttons(action, t, disabled=false, system=false) %}
+{% if can("operator") %}
 <span class="buttons">
   {% for name in ("start", "stop", "restart") %}
   <form method="post" action="{{ action }}/{{ name }}" data-confirm="{{ t('op.confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
@@ -12,6 +13,7 @@
   </form>
   {% endfor %}
 </span>
+{% endif %}
 {% endmacro %}
 
 {# Instances of a system in the landscape: main instances, then the diagnostics agents in a
@@ -47,7 +49,7 @@
   <tbody>
   {% for instance in instances %}
     <tr>
-      {% if show_system %}<td>{% if instance.system %}<a href="/systems/{{ instance.system_id }}">{{ instance.system.name }}</a>{% else %}<a class="muted" href="/configuration?tab=systems">{{ t("unassigned.label") }}</a>{% endif %}</td>{% endif %}
+      {% if show_system %}<td>{% if instance.system %}<a href="/systems/{{ instance.system_id }}">{{ instance.system.name }}</a>{% elif can("configurator") %}<a class="muted" href="/configuration?tab=systems">{{ t("unassigned.label") }}</a>{% else %}<span class="muted">{{ t("unassigned.label") }}</span>{% endif %}</td>{% endif %}
       <td class="mono">{{ instance.label }}</td>
       <td>{{ instance_type(instance.features) }}</td>
       {% if depends is not none %}<td class="mono">{{ depends.get(instance.id, []) | join(", ") }}</td>{% endif %}

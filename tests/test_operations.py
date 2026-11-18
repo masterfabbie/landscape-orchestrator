@@ -5,9 +5,9 @@ import asyncio
 import httpx
 import pytest
 
-from conftest import stopped_config
+from conftest import make_user, stopped_config
 from landscape_orchestrator.api import create_app
-from landscape_orchestrator.crypto import generate_api_token, generate_secret_key
+from landscape_orchestrator.crypto import generate_secret_key
 from landscape_orchestrator.mock.landscape import MockLandscape, Status
 from landscape_orchestrator.mock.transport import MockLandscapeTransport
 from landscape_orchestrator.settings import Settings
@@ -27,7 +27,6 @@ DB_HOST = APP_HOST | {"name": "sapdb1", "hostagent_port": 11128, "sapcontrol_por
 def settings(tmp_path) -> Settings:
     return Settings(
         secret_key=generate_secret_key(),
-        api_token=generate_api_token(),
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'ops.db'}",
     )
 
@@ -65,7 +64,7 @@ async def api(app, settings):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
-        headers={"Authorization": f"Bearer {settings.api_token}"},
+        headers={"Authorization": f"Bearer {await make_user(app)}"},
     ) as client:
         for body in (APP_HOST, DB_HOST):
             host = (await client.post("/api/hosts", json=body)).json()
@@ -510,10 +509,10 @@ async def test_activities_interrupted_by_restart_are_marked_failed(
     make_app, settings, landscape
 ):
     landscape.start_duration = 10_000
-    headers = {"Authorization": f"Bearer {settings.api_token}"}
 
     first = make_app()
     async with first.router.lifespan_context(first):
+        headers = {"Authorization": f"Bearer {await make_user(first)}"}
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=first), base_url="http://test", headers=headers
         ) as client:
@@ -594,7 +593,7 @@ async def extended_api(settings, extended_landscape, clock):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=application),
             base_url="http://test",
-            headers={"Authorization": f"Bearer {settings.api_token}"},
+            headers={"Authorization": f"Bearer {await make_user(application)}"},
         ) as client:
             for body in (APP_HOST, DB_HOST, APP2_HOST):
                 host = (await client.post("/api/hosts", json=body)).json()
@@ -697,7 +696,7 @@ async def test_system_with_virtual_hostnames(settings, clock):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=application),
             base_url="http://test",
-            headers={"Authorization": f"Bearer {settings.api_token}"},
+            headers={"Authorization": f"Bearer {await make_user(application)}"},
         ) as client:
             host = (await client.post("/api/hosts", json=APP_HOST)).json()
             await client.post(f"/api/hosts/{host['id']}/discover")

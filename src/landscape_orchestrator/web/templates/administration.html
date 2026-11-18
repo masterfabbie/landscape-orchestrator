@@ -1,7 +1,10 @@
 {% extends "base.html" %}
+{% import "macros.html" as ui with context %}
 {% block title %}{{ t("nav.administration") }}{% endblock %}
 {% block content %}
 <h1>{{ t("nav.administration") }}</h1>
+{{ ui.tabs([("general", "/administration?tab=general", t("tab.general")), ("users", "/administration?tab=users", t("tab.users"))], tab, t("nav.administration")) }}
+{% if tab == "general" %}
 <section class="card">
   <p class="muted">{{ t("admin.planned") }}</p>
   <dl>
@@ -10,4 +13,41 @@
     <dt>{{ t("admin.session") }}</dt><dd>{{ t("admin.session_hours", hours=session_hours) }}</dd>
   </dl>
 </section>
+{% else %}
+<section class="card">
+  <p class="muted">{{ t("users.roles_hint") }}</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>{{ t("field.username") }}</th><th>{{ t("field.display_name") }}</th><th>{{ t("field.role") }}</th><th>{{ t("field.status") }}</th><th>{{ t("users.last_login") }}</th></tr></thead>
+    <tbody>
+    {% for row in users %}
+      <tr>
+        <td><a class="strong mono" href="/administration/users/{{ row.id }}">{{ row.username }}</a></td>
+        <td>{{ row.display_name or "" }}</td>
+        <td>{{ t("role." ~ row.role) }}</td>
+        <td>{% if row.active %}<span class="badge badge-green">{{ t("users.active") }}</span>{% else %}<span class="badge badge-gray">{{ t("users.inactive") }}</span>{% endif %}
+          {% if row.must_change_password %}<span class="muted">{{ t("users.must_change") }}</span>{% endif %}</td>
+        <td class="muted">{{ row.last_login_at | time or t("hosts.never") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+<section class="card">
+  <h2>{{ t("users.add") }}</h2>
+  <form method="post" action="/administration/users" class="stack">
+    <div class="fields">
+      <label>{{ t("field.username") }} <input name="username" required maxlength="64" autocomplete="off"></label>
+      <label>{{ t("field.display_name") }} <input name="display_name" maxlength="255"></label>
+      <label>{{ t("field.role") }}
+        <select name="role">{% for role in roles %}<option value="{{ role }}">{{ t("role." ~ role) }}</option>{% endfor %}</select>
+      </label>
+      <label>{{ t("users.start_password") }} <input name="password" type="password" required minlength="12" autocomplete="new-password"></label>
+    </div>
+    <p class="muted">{{ t("users.start_password_hint") }}</p>
+    <div><button type="submit">{{ t("users.add") }}</button></div>
+  </form>
+</section>
+{% endif %}
 {% endblock %}

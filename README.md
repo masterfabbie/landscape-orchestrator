@@ -95,7 +95,7 @@ python3 -m venv .venv
 
 ## Server starten
 
-Der Server braucht zwei Werte aus Umgebungsvariablen. `lo-keygen` erzeugt beide:
+Der Server braucht einen Schlüssel aus einer Umgebungsvariable. `lo-keygen` erzeugt ihn:
 
 ```bash
 .venv/bin/lo-keygen
@@ -104,7 +104,6 @@ Der Server braucht zwei Werte aus Umgebungsvariablen. `lo-keygen` erzeugt beide:
 | Variable | Bedeutung |
 |---|---|
 | `LO_SECRET_KEY` | Schlüssel, mit dem gespeicherte Passwörter verschlüsselt werden |
-| `LO_API_TOKEN` | Token für den Zugriff auf die REST-API (mindestens 16 Zeichen) |
 | `LO_DATABASE_URL` | optional, Standard `sqlite+aiosqlite:///./landscape.db` |
 
 **Den `LO_SECRET_KEY` sicher aufbewahren.** Geht er verloren oder wird er geändert, lassen sich
@@ -152,10 +151,64 @@ Der Befehl `lo-db` zeigt und migriert das Schema ohne den Server, für die Daten
 .venv/bin/lo-db history
 ```
 
+`LO_API_TOKEN` gibt es nicht mehr; ist es noch gesetzt, meldet der Server, dass er es
+ignoriert. Zugriff auf Oberfläche und API haben jetzt Benutzer (siehe „Benutzer und Rollen“).
+
+## Benutzer und Rollen
+
+**Erster Start:** Solange es keinen Benutzer gibt, gibt der Server beim Start einen einmaligen
+Einrichtungscode in der Konsole aus, z. B.
+
+```
+No user exists yet. Open /setup and create the first admin with the setup code 3F9A1C-…
+```
+
+Unter `http://127.0.0.1:8000/setup` legt man mit diesem Code den ersten Administrator an.
+Danach ist die Seite gesperrt. Der Code gilt nur bis zum nächsten Neustart; dann gibt der
+Server einen neuen aus.
+
+**Rollen** bauen aufeinander auf:
+
+| Recht | Viewer | Operator | Configurator | Admin |
+|---|---|---|---|---|
+| Übersicht, Landscape, Activities ansehen, Status aktualisieren | ✓ | ✓ | ✓ | ✓ |
+| Start, Stopp, Neustart | | ✓ | ✓ | ✓ |
+| Configuration: Hosts, Discovery, Systeme, Pools, Tags, Zugangsdaten | | | ✓ | ✓ |
+| Administration: Benutzer, Plattform-Einstellungen | | | | ✓ |
+
+Knöpfe ohne Berechtigung werden nicht angezeigt; direkte Aufrufe werden mit HTTP 403
+abgelehnt.
+
+- **Benutzer verwalten** (Administration → Benutzer): anlegen mit Startpasswort, das bei der
+  ersten Anmeldung geändert werden muss; Rolle ändern, deaktivieren, Passwort zurücksetzen.
+  Der letzte aktive Admin lässt sich weder herabstufen noch deaktivieren.
+- **Passwörter:** mindestens 12 Zeichen, gespeichert als scrypt-Hash.
+- **Anmeldung:** Benutzername und Passwort. Nach 5 Fehlversuchen ist das Konto eine Minute
+  gesperrt. Ändern sich Passwort oder Rolle oder wird der Benutzer deaktiviert, enden seine
+  Sitzungen.
+- **Mein Konto** (Name oben rechts): eigenes Passwort ändern, persönliche API-Tokens anlegen
+  und löschen.
+- **Nachvollziehbarkeit:** Jede Aktivität vermerkt, wer sie angefordert hat.
+- **Filterauswahl** in der Landscape wird pro Benutzer gespeichert.
+
+Ohne Oberfläche, z. B. wenn kein Admin mehr anmelden kann, hilft `lo-user` (fragt das Passwort
+ab; `passwd` entsperrt und aktiviert das Konto auch):
+
+```bash
+.venv/bin/lo-user add chief --role admin
+```
+
+```bash
+.venv/bin/lo-user passwd chief
+```
+
+```bash
+.venv/bin/lo-user list
+```
+
 ## Web-Oberfläche
 
-Nach dem Start ist die Oberfläche unter `http://127.0.0.1:8000/` erreichbar. Angemeldet wird
-mit dem Wert aus `LO_API_TOKEN`.
+Nach dem Start ist die Oberfläche unter `http://127.0.0.1:8000/` erreichbar.
 
 Die Oberfläche hat fünf Bereiche. **Landscape** dient zum Beobachten und Bedienen,
 **Configuration** zum Einrichten.
@@ -190,8 +243,8 @@ Die Listen unter Landscape lassen sich filtern:
   Instanz auf einem Host mit dem Tag.
 - Die Filterwerte stehen in der Adresse; eine gefilterte Ansicht lässt sich als Lesezeichen
   speichern.
-- Unter „Filter anpassen“ wählt man, welche Filter angezeigt werden. Die Auswahl steht in einem
-  Cookie dieses Browsers (später pro Benutzer). Filter mit einem Wert werden immer angezeigt.
+- Unter „Filter anpassen“ wählt man, welche Filter angezeigt werden. Die Auswahl wird pro
+  Benutzer gespeichert. Filter mit einem Wert werden immer angezeigt.
 
 ### Tags
 
@@ -253,15 +306,14 @@ lässt es sich nicht ändern.
   Übersicht, Landscape und Systemseite alle 5 Sekunden, solange eine Aktivität läuft.
 - **Keine externen Dateien:** Die Oberfläche lädt nichts aus dem Internet und kommt bis auf
   die Rückfrage vor Operationen ohne JavaScript aus.
-- **Anmeldung:** Ein signiertes Sitzungs-Cookie, 8 Stunden gültig, `HttpOnly` und
-  `SameSite=Strict`. Wird `LO_API_TOKEN` geändert, sind alle Sitzungen ungültig.
+- **Sitzung:** Ein signiertes Sitzungs-Cookie, 8 Stunden gültig, `HttpOnly` und
+  `SameSite=Strict`. Wird `LO_SECRET_KEY` geändert, sind alle Sitzungen ungültig.
   Formulare von fremden Websites werden abgelehnt.
 
 Einschränkungen:
 
-- Es gibt nur das gemeinsame Token, keine Benutzer und Rollen. Wer sich anmelden kann, darf
-  alles, auch Systeme stoppen.
-- Fehlgeschlagene Anmeldeversuche werden nicht begrenzt.
+- Keine Anmeldung über LDAP oder SSO, nur lokale Benutzer.
+- Änderungen an der Konfiguration werden noch nicht protokolliert (nur Aktivitäten).
 - Das Cookie wird nur mit dem Attribut `Secure` gesetzt, wenn der Server die Anfrage als
   HTTPS sieht. Hinter einem Reverse-Proxy muss dieser das Protokoll weiterreichen.
 
@@ -272,13 +324,21 @@ angelegt und danach per Discovery ausgelesen: Der Host Agent liefert Betriebssys
 Instanzen samt SID und Datenbanken, der sapstartsrv jeder Instanz liefert Status, Instanztyp und
 Startpriorität. Systeme legt man selbst aus Instanzen an (siehe „Systeme anlegen“).
 
-Alle Aufrufe unter `/api` verlangen den Header `Authorization: Bearer <LO_API_TOKEN>`.
+Alle Aufrufe unter `/api` verlangen ein persönliches API-Token im Header
+`Authorization: Bearer <token>`. Tokens legt man unter „Mein Konto“ an; sie haben die Rechte
+der Rolle ihres Benutzers und können ein Ablaufdatum haben. Gespeichert wird nur ein Hash.
 Die interaktive Schnittstellenbeschreibung unter `/api/docs` ist ohne Token lesbar; sie enthält
 keine Inventardaten.
 
 | Methode | Pfad | Zweck |
 |---|---|---|
 | GET | `/health` | Lebenszeichen, ohne Token |
+| GET | `/api/me` | eigener Benutzer |
+| GET, POST | `/api/me/tokens` | eigene API-Tokens auflisten bzw. anlegen (`{"name": "...", "expires_at": "..."}`; der Wert steht nur in der Antwort) |
+| DELETE | `/api/me/tokens/{id}` | eigenes Token löschen |
+| GET, POST | `/api/users` | Benutzer auflisten bzw. anlegen (nur Admin; Startpasswort muss geändert werden) |
+| PATCH | `/api/users/{id}` | Anzeigename, Rolle, aktiv ändern (nur Admin) |
+| PUT | `/api/users/{id}/password` | Startpasswort setzen (nur Admin) |
 | GET | `/api/hosts` | Hosts auflisten; `?tag=` filtert |
 | PUT | `/api/hosts/{id}/tags` | Tags eines Hosts ersetzen |
 | POST | `/api/hosts` | Host anlegen |
@@ -309,16 +369,16 @@ keine Inventardaten.
 | GET | `/api/activities` | Aktivitäten, neueste zuerst (`?limit=`) |
 | GET | `/api/activities/{id}` | Aktivität mit Protokoll |
 
-Beispiel mit der simulierten Landschaft:
+Beispiel mit der simulierten Landschaft (`LO_TOKEN` enthält ein persönliches API-Token):
 
 ```bash
-curl -H "Authorization: Bearer $LO_API_TOKEN" -H "Content-Type: application/json" \
+curl -H "Authorization: Bearer $LO_TOKEN" -H "Content-Type: application/json" \
   -d '{"name": "sapapp1", "address": "127.0.0.1", "username": "devadm", "password": "mock"}' \
   http://127.0.0.1:8000/api/hosts
 ```
 
 ```bash
-curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/hosts/1/discover
+curl -X POST -H "Authorization: Bearer $LO_TOKEN" http://127.0.0.1:8000/api/hosts/1/discover
 ```
 
 Verhalten:
@@ -342,7 +402,6 @@ Verhalten:
 
 Einschränkungen:
 
-- Die API kennt nur ein gemeinsames Token, keine Benutzer und Rollen.
 - Der Server selbst spricht nur HTTP. Für den Zugriff über ein Netzwerk gehört ein
   Reverse-Proxy mit TLS davor.
 - Eine Datenbank aus der Zeit vor dem Systemmodell (Schema 1) ist nicht verwendbar; der
@@ -358,7 +417,7 @@ Jede Operation läuft als Aktivität im Hintergrund. Der Aufruf antwortet sofort
 der Aktivität; den Fortschritt liest man über `/api/activities/{id}`.
 
 ```bash
-curl -X POST -H "Authorization: Bearer $LO_API_TOKEN" http://127.0.0.1:8000/api/systems/1/stop
+curl -X POST -H "Authorization: Bearer $LO_TOKEN" http://127.0.0.1:8000/api/systems/1/stop
 ```
 
 | Ziel | Weg | Fertig, wenn |

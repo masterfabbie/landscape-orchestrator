@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -154,6 +155,7 @@ class ActivityOut(BaseModel):
     kind: str
     target_type: str
     target_label: str
+    requested_by: str | None
     system_id: int | None
     instance_id: int | None
     status: str
@@ -216,3 +218,61 @@ class PoolOut(BaseModel):
 
 class PoolAssignment(BaseModel):
     pool_id: int | None
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    display_name: str | None
+    role: str
+    active: bool
+    must_change_password: bool
+    created_at: datetime
+    last_login_at: datetime | None
+
+
+Role = Literal["viewer", "operator", "configurator", "admin"]
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    display_name: str | None = Field(default=None, max_length=255)
+    role: Role
+    # Start password; the user must change it at the first sign-in.
+    password: str = Field(min_length=1)
+
+
+class UserUpdate(BaseModel):
+    display_name: str | None = Field(default=None, max_length=255)
+    role: Role | None = None
+    active: bool | None = None
+
+
+class PasswordReset(BaseModel):
+    password: str = Field(min_length=1)
+
+
+class TokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    expires_at: datetime | None = None
+
+
+class TokenOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    prefix: str
+    created_at: datetime
+    expires_at: datetime | None
+    last_used_at: datetime | None
+
+
+class NewTokenOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    # Shown only once; only a hash is stored.
+    token: str
+    info: TokenOut

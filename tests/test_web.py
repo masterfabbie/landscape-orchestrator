@@ -6,17 +6,13 @@ import re
 import httpx
 import pytest
 
+from conftest import PASSWORD, make_user
 from landscape_orchestrator.api import create_app
-from landscape_orchestrator.crypto import generate_api_token, generate_secret_key
+from landscape_orchestrator.crypto import generate_secret_key
 from landscape_orchestrator.mock.transport import MockLandscapeTransport
 from landscape_orchestrator.settings import Settings
 from landscape_orchestrator.web.i18n import TEXTS, instance_type_key, pick_language, translate
-from landscape_orchestrator.web.sessions import (
-    SESSION_COOKIE,
-    SESSION_LIFETIME_SECONDS,
-    create_session,
-    is_valid_session,
-)
+from landscape_orchestrator.web.routes import SESSION_COOKIE
 
 pytestmark = pytest.mark.anyio
 
@@ -33,7 +29,6 @@ DB_HOST = APP_HOST | {
 def settings(tmp_path) -> Settings:
     return Settings(
         secret_key=generate_secret_key(),
-        api_token=generate_api_token(),
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'web.db'}",
     )
 
@@ -60,14 +55,20 @@ async def anonymous(app):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
+        await make_user(app)  # the admin "admin"; without any user, pages lead to /setup
         yield client
 
 
+async def sign_in(client: httpx.AsyncClient, username: str = "admin") -> httpx.Response:
+    response = await client.post("/login", data={"username": username, "password": PASSWORD})
+    assert response.status_code == 303, response.text
+    return response
+
+
 @pytest.fixture
-async def browser(anonymous, settings):
-    """A signed-in browser session."""
-    response = await anonymous.post("/login", data={"token": settings.api_token})
-    assert response.status_code == 303
+async def browser(anonymous):
+    """A browser signed in as admin."""
+    await sign_in(anonymous)
     return anonymous
 
 
@@ -90,18 +91,6 @@ async def add_hosts(browser: httpx.AsyncClient, systems: bool = True) -> None:
 
 
 # --- sessions and translations -----------------------------------------------------------
-
-
-def test_session_cookie_validation():
-    value = create_session("token-a", now=1000)
-    assert is_valid_session("token-a", value, now=1000)
-    assert is_valid_session("token-a", value, now=1000 + SESSION_LIFETIME_SECONDS - 1)
-    assert not is_valid_session("token-a", value, now=1000 + SESSION_LIFETIME_SECONDS + 1)
-    assert not is_valid_session("token-b", value, now=1000)
-    assert not is_valid_session("token-a", None)
-    assert not is_valid_session("token-a", "garbage")
-    expires, signature = value.split(".")
-    assert not is_valid_session("token-a", f"{int(expires) + 1000}.{signature}", now=1000)
 
 
 def test_every_text_has_both_languages():
@@ -163,19 +152,21 @@ async def test_posts_require_login(anonymous):
     assert response.headers["location"] == "/login"
 
 
-async def test_login_with_wrong_token(anonymous):
-    response = await anonymous.post("/login", data={"token": "wrong"})
+async def test_login_with_wrong_password(anonymous):
+    response = await anonymous.post("/login", data={"username": "admin", "password": "wrong"})
     assert response.status_code == 401
-    assert "The token is not valid." in response.text
+    assert "Sign-in failed." in response.text
     assert SESSION_COOKIE not in response.cookies
+    unknown = await anonymous.post("/login", data={"username": "nobody", "password": PASSWORD})
+    assert unknown.status_code == 401
 
 
-async def test_login_sets_protected_cookie_and_returns_to_page(anonymous, settings):
+async def test_login_sets_protected_cookie_and_returns_to_page(anonymous):
     redirect = await anonymous.get("/activities")
     assert redirect.headers["location"] == "/login?next=%2Factivities"
 
     response = await anonymous.post(
-        "/login", data={"token": settings.api_token, "next": "/activities"}
+        "/login", data={"username": "admin", "password": PASSWORD, "next": "/activities"}
     )
     assert response.headers["location"] == "/activities"
     cookie = response.headers["set-cookie"]
@@ -184,8 +175,9 @@ async def test_login_sets_protected_cookie_and_returns_to_page(anonymous, settin
 
 
 @pytest.mark.parametrize("target", ["https://evil.example/", "//evil.example", "/\\evil"])
-async def test_login_does_not_redirect_to_other_sites(anonymous, settings, target):
-    response = await anonymous.post("/login", data={"token": settings.api_token, "next": target})
+async def test_login_does_not_redirect_to_other_sites(anonymous, target):
+    data = {"username": "admin", "password": PASSWORD, "next": target}
+    response = await anonymous.post("/login", data=data)
     assert response.headers["location"] == "/"
 
 
@@ -205,8 +197,9 @@ async def test_cross_site_post_is_rejected(browser):
     assert same_site.status_code == 303
 
 
-async def test_api_token_is_not_accepted_as_session_on_pages(anonymous, settings):
-    response = await anonymous.get("/", headers={"Authorization": f"Bearer {settings.api_token}"})
+async def test_api_token_is_not_accepted_as_session_on_pages(anonymous, app):
+    token = await make_user(app, "script", "viewer")
+    response = await anonymous.get("/", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 303
 
 
@@ -727,3 +720,168 @@ async def test_change_host_connection(browser):
         "/configuration/hosts/1/connection", data={"name": "app1", "hostagent_port": "99999"}
     )
     assert bad.headers["location"] == "/configuration/hosts/1?error=invalid_input"
+
+
+
+# --- diagnostics agents, duplicate instance numbers, host agent version -----------------
+
+APP2_HOST = APP_HOST | {
+    "name": "sapapp2",
+    "hostagent_port": "6128",
+    "sapcontrol_port_offset": "5000",
+}
+
+
+@pytest.fixture
+async def extended_browser(settings, extended_landscape, clock):
+    """Signed in, hosts sapapp1, sapdb1, sapapp2 discovered, one system DEV with all six
+    instances (including the diagnostics agent DAA/98 and DEV/00 on two hosts)."""
+
+    async def fake_sleep(seconds: float) -> None:
+        clock.advance(seconds)
+        await asyncio.sleep(0)
+
+    application = create_app(
+        settings,
+        transport=MockLandscapeTransport(extended_landscape),
+        poll_interval=1.0,
+        sleep=fake_sleep,
+        clock=clock,
+    )
+    async with application.router.lifespan_context(application):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://test"
+        ) as client:
+            await make_user(application)
+            await sign_in(client)
+            for number, body in enumerate((APP_HOST, DB_HOST, APP2_HOST), start=1):
+                await client.post("/configuration/hosts", data=body)
+                await client.post(f"/configuration/hosts/{number}/discover")
+            data = {"name": "DEV", "instance_id": [str(i) for i in range(1, 6)]}
+            response = await client.post("/configuration/systems", data=data)
+            assert "system_created" in response.headers["location"]
+            yield client
+
+
+async def test_diagnostics_agents_are_grouped(extended_browser):
+    page = (await extended_browser.get("/configuration?tab=systems")).text
+    assert 'class="agent-group"' in page and "Diagnostics agents (1)" in page
+    assert "Diagnostics agent</td>" in page
+    # Central services need nothing, application servers need database and central services.
+    assert re.search(r"DEV/01</td>.*?<td class=\"mono\"></td>", page, re.S)
+    assert re.search(r"DEV/00 \(sapapp1\)</td>.*?<td class=\"mono\">HDV</td>", page, re.S)
+
+    system = (await extended_browser.get("/systems/1")).text
+    assert "Diagnostics agents (1)" in system
+    assert 'action="/instances/3/start"' in system  # the agent keeps its own operations
+    landscape = (await extended_browser.get("/landscape")).text
+    assert "+ 1 agents" in landscape and "DAA/98" not in landscape
+    assert "DEV/00 (sapapp1)" in landscape and "DEV/00 (sapapp2)" in landscape
+
+
+async def test_host_agent_version_is_shown(extended_browser):
+    hosts = (await extended_browser.get("/landscape?tab=hosts")).text
+    assert "Host agent" in hosts and hosts.count(">7.22 PL72</td>") == 3
+    assert "saphostexec 722 (EXT), patch 1611" in hosts
+    assert "7.22 PL72" in (await extended_browser.get("/hosts/1")).text
+    assert "7.22 PL72" in (await extended_browser.get("/configuration/hosts/1")).text
+
+
+# --- filters, tags, status refresh -----------------------------------------------------
+
+
+async def test_tags_forms(browser):
+    await add_hosts(browser)
+    saved = await browser.post("/configuration/systems/1/tags", data={"tags": "dev, SLA=1"})
+    assert saved.headers["location"] == "/configuration/systems/1?notice=tags_saved"
+    page = (await browser.get("/configuration/systems/1")).text
+    assert 'value="dev, sla=1"' in page
+    assert '<span class="tag">sla=1</span>' in (await browser.get("/systems/1")).text
+
+    invalid = await browser.post("/configuration/systems/1/tags", data={"tags": "bad tag"})
+    assert invalid.headers["location"] == "/configuration/systems/1?error=tag_invalid&e_tag=bad+tag"
+    assert "Invalid tag: bad tag" in (await browser.get(invalid.headers["location"])).text
+    twice = await browser.post("/configuration/hosts/1/tags", data={"tags": "a=1, a=2"})
+    assert twice.headers["location"].endswith("error=tag_duplicate&e_tag=a")
+
+    host = await browser.post("/configuration/hosts/2/tags", data={"tags": "db"})
+    assert host.headers["location"] == "/configuration/hosts/2?notice=tags_saved"
+    assert '<span class="tag">db</span>' in (await browser.get("/landscape?tab=hosts")).text
+
+
+async def test_landscape_filters(browser):
+    await add_hosts(browser)
+    await browser.post("/configuration/pools", data={"name": "xDV"})
+    await browser.post("/configuration/systems/1/pool", data={"pool_id": "1"})
+    await browser.post("/configuration/systems/1/tags", data={"tags": "dev, sla=1"})
+    await browser.post("/configuration/systems/2/tags", data={"tags": "sla=2"})
+    await browser.post("/configuration/hosts/2/tags", data={"tags": "db"})
+
+    async def shown(**params) -> set[str]:
+        page = (await browser.get("/landscape", params={"tab": "systems"} | params)).text
+        return {
+            name
+            for name in ("DEV", "HDV")
+            if re.search(rf'class="strong" href="/systems/\d+">{name}</a>', page)
+        }
+
+    assert await shown() == {"DEV", "HDV"}
+    assert await shown(name="d") == {"DEV", "HDV"}
+    assert await shown(name="hd") == {"HDV"}
+    assert await shown(pool="1") == {"DEV"}
+    assert await shown(pool=["1", "none"]) == {"DEV", "HDV"}
+    assert await shown(tag="sla") == {"DEV", "HDV"}
+    assert await shown(tag="sla=2") == {"HDV"}
+    assert await shown(tag=["dev", "sla=2"]) == {"DEV", "HDV"}
+    assert await shown(hosttag="db") == {"HDV"}
+    assert await shown(type="hana") == {"HDV"}
+    assert await shown(type=["scs", "hana"]) == {"DEV", "HDV"}
+    assert await shown(host="sapapp") == {"DEV"}
+    assert await shown(status="GRAY") == {"DEV", "HDV"}
+    assert await shown(status="GREEN") == set()
+    assert await shown(tag="sla", pool="1") == {"DEV"}  # all filters must match
+
+    page = (await browser.get("/landscape", params={"status": "GREEN"})).text
+    assert "Nothing matches the filters." in page
+    page = (await browser.get("/landscape", params={"tag": "sla"})).text
+    assert "Systems: 2, instances: 3" in page
+    assert 'name="tag" value="sla" checked' in page
+
+    hosts = (await browser.get("/landscape", params={"tab": "hosts", "tag": "db"})).text
+    assert ">sapdb1</a>" in hosts and ">sapapp1</a>" not in hosts
+    hosts = (await browser.get("/landscape", params={"tab": "hosts", "name": "app"})).text
+    assert ">sapapp1</a>" in hosts and ">sapdb1</a>" not in hosts
+
+
+async def test_choose_visible_filters(browser):
+    page = (await browser.get("/landscape")).text
+    assert 'name="name"' in page and 'name="hosttag"' not in page
+
+    response = await browser.post(
+        "/landscape/filters", data={"tab": "systems", "field": ["hosttag", "type", "bogus"]}
+    )
+    assert response.headers["location"] == "/landscape?tab=systems"
+    assert "lo_filters_systems" not in response.cookies  # stored per user now
+    page = (await browser.get("/landscape")).text
+    assert 'name="name"' not in page and "Host tags" in page and "Instance type" in page
+    # A filter with a value stays visible even if it is not chosen.
+    page = (await browser.get("/landscape", params={"name": "x"})).text
+    assert 'name="name" value="x"' in page
+    # The language switch keeps the filters.
+    assert "/language/de?next=" in page and "name%3Dx" in page
+
+
+async def test_refresh_button(browser, landscape):
+    await add_hosts(browser)
+    assert 'action="/systems/1/refresh"' in (await browser.get("/systems/1")).text
+    assert 'action="/systems/1/refresh"' in (await browser.get("/landscape")).text
+    landscape.start_instance(landscape.host("sapapp1").instance(0))
+
+    response = await browser.post("/systems/1/refresh")
+    assert response.headers["location"] == "/systems/1?notice=status_refreshed"
+    page = (await browser.get(response.headers["location"])).text
+    assert "Status refreshed." in page and "in transition" in page
+
+    back = await browser.post("/systems/1/refresh", data={"back": "landscape"})
+    assert back.headers["location"] == "/landscape?notice=status_refreshed"
+    assert (await browser.post("/systems/99/refresh")).status_code == 404

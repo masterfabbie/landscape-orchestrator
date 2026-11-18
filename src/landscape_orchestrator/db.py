@@ -102,10 +102,16 @@ def _run(connection: Any, action: str, revision: str = "head") -> None:
         command.upgrade(config, revision)
 
 
+# Tables that versions before Alembic added later with create_all; a database of such a
+# version may lack them. Their definition has not changed since the baseline.
+LEGACY_LATE_TABLES = ("host_agent_info", "host_tags", "system_tags")
+
+
 def _take_over_legacy(connection: Any) -> None:
-    # The last version before Alembic added tables at startup with create_all; add any that
-    # are still missing so the database matches the baseline, then record the baseline.
-    Base.metadata.create_all(connection)
+    # Add the late tables that are still missing so the database matches the baseline,
+    # then record the baseline and run the newer migrations.
+    tables = [Base.metadata.tables[name] for name in LEGACY_LATE_TABLES]
+    Base.metadata.create_all(connection, tables=tables)
     _run(connection, "stamp", BASELINE_REVISION)
     _run(connection, "upgrade")
 

@@ -5,9 +5,26 @@ import xml.etree.ElementTree as ET
 import pytest
 from fastapi.testclient import TestClient
 
+from landscape_orchestrator import users
 from landscape_orchestrator.mock.landscape import MockLandscape, default_landscape_config
 
 AUTH = ("devadm", "mock")
+PASSWORD = "correct horse battery"
+
+
+@pytest.fixture(autouse=True)
+def fast_password_hashing(monkeypatch):
+    """Cheaper scrypt parameters keep the tests fast; production uses the defaults."""
+    monkeypatch.setattr(users, "_SCRYPT_N", 2**8)
+
+
+async def make_user(app, username: str = "admin", role: str = "admin") -> str:
+    """Create a user with PASSWORD in the app's database; returns a personal API token."""
+    async with app.state.session_factory() as session:
+        user = await users.create_user(session, username, PASSWORD, role)
+        _, token = await users.create_token(session, user, "tests")
+        await session.commit()
+    return token
 
 
 class FakeClock:

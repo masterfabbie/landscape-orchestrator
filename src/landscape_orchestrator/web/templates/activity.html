@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "macros.html" as ui %}
+{% import "macros.html" as ui with context %}
 {% block title %}{{ t("activity.title") }} {{ activity.id }}{% endblock %}
 {% block content %}
 <div class="card-head">
@@ -15,7 +15,7 @@
     <dd>{{ t("target." ~ activity.target_type) }}
       {% if activity.system_id %}<a class="mono" href="/systems/{{ activity.system_id }}">{{ activity.target_label }}</a>{% else %}<span class="mono">{{ activity.target_label }}</span>{% endif %}
     </dd>
-    <dt>{{ t("field.requested") }}</dt><dd>{{ activity.requested_at | time }}</dd>
+    <dt>{{ t("field.requested") }}</dt><dd>{{ activity.requested_at | time }}{% if activity.requested_by %} · <span class="mono">{{ activity.requested_by }}</span>{% endif %}</dd>
     <dt>{{ t("field.finished") }}</dt><dd>{{ activity.finished_at | time }}</dd>
   </dl>
 </section>
