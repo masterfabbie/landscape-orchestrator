@@ -571,11 +571,16 @@ async def test_configuration_texts_in_german(browser):
 # --- landscape and operations ----------------------------------------------------------
 
 
+def system_rows(page: str) -> list[str]:
+    """The rows of the systems in the landscape tree (without their instance rows)."""
+    return [part.split("</tr>")[0] for part in page.split('<tr class="system-row">')[1:]]
+
+
 async def test_landscape_lists_systems_with_status(browser):
     await add_hosts(browser)
     page = (await browser.get("/landscape")).text
     assert ">DEV</a>" in page and ">HDV</a>" in page
-    assert page.count("badge-gray") == 2  # one status per system
+    assert [row.count("badge-gray") for row in system_rows(page)] == [1, 1]
     assert 'action="/systems/1/start"' in page
     hosts = (await browser.get("/landscape?tab=hosts")).text
     assert ">sapapp1</a>" in hosts and ">sapdb1</a>" in hosts
@@ -650,7 +655,7 @@ async def test_system_operation_with_dependency_and_conflict(browser, app):
     landscape = (await browser.get("/landscape")).text
     assert "Activity running" not in landscape
     assert "http-equiv" not in landscape
-    assert landscape.count("badge-green") == 2
+    assert [row.count("badge-green") for row in system_rows(landscape)] == [1, 1]
     assert "badge-running" in (await browser.get("/hosts/2")).text  # databases follow
     activity = (await browser.get("/activities/1")).text
     assert "Start order including dependencies: HDV, DEV" in activity
@@ -775,7 +780,8 @@ async def test_diagnostics_agents_are_grouped(extended_browser):
     assert "Diagnostics agents (1)" in system
     assert 'action="/instances/3/start"' in system  # the agent keeps its own operations
     landscape = (await extended_browser.get("/landscape")).text
-    assert "+ 1 agents" in landscape and "DAA/98" not in landscape
+    assert "Diagnostics agents (1)" in landscape
+    assert '<tr class="agent-row">' in landscape and "DAA/98" in landscape
     assert "DEV/00 (sapapp1)" in landscape and "DEV/00 (sapapp2)" in landscape
 
 
@@ -885,3 +891,50 @@ async def test_refresh_button(browser, landscape):
     back = await browser.post("/systems/1/refresh", data={"back": "landscape"})
     assert back.headers["location"] == "/landscape?notice=status_refreshed"
     assert (await browser.post("/systems/99/refresh")).status_code == 404
+
+
+
+# --- landscape tree and operations menu --------------------------------------------------
+
+
+async def test_landscape_tree(browser):
+    await add_hosts(browser)
+    page = (await browser.get("/landscape")).text
+    # Collapsed at first: the instances are in the page, hidden by CSS until opened.
+    assert page.count('class="tree-toggle toggle-system"') == 2
+    assert "data-forced" not in page
+    dev = page.split('<tbody class="tree-system">')[1]
+    rows = [r for r in dev.split("<tr")[1:]]
+    labels = [re.search(r'mono">([^<]+)</td>', r).group(1) for r in rows[1:]]
+    assert labels == ["DEV/01", "DEV/00"]  # start order
+    assert "Central services" in dev and "ABAP application server" in dev
+    assert dev.count('<details class="menu">') == 3  # system and both instances
+    assert 'action="/instances/2/stop"' in dev and 'action="/systems/1/refresh"' in dev
+    assert 'data-tree-all="open" hidden' in page  # shown by the script
+    assert '<script src="/static/ui.js" defer>' in page
+
+
+async def test_instance_type_filter_opens_and_narrows_the_tree(browser):
+    await add_hosts(browser)
+    page = (await browser.get("/landscape", params={"type": "abap"})).text
+    assert [">DEV</a>" in row for row in system_rows(page)] == [True]
+    assert "data-forced" in page  # opened by the filter
+    assert "DEV/00" in page and "DEV/01" not in page
+    assert "1 more instances do not match the instance type filter." in page
+
+
+async def test_operations_menu_is_disabled_while_running(browser, app):
+    await add_hosts(browser)
+    gate = hold_activities(app)
+    await browser.post("/systems/1/start")
+    page = (await browser.get("/landscape")).text
+    dev = system_rows(page)[0]
+    assert "An activity is running:" in dev and 'href="/activities/1"' in dev
+    assert "disabled" in dev
+    gate.set()
+    await app.state.runner.wait(1)
+
+
+async def test_ui_script_is_served(anonymous):
+    response = await anonymous.get("/static/ui.js")
+    assert response.status_code == 200 and "sessionStorage" in response.text

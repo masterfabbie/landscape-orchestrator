@@ -160,7 +160,15 @@ Wichtige Entwurfsentscheidungen:
 - **API-Tokens** sind persönlich, haben die Rechte ihres Benutzers, optional ein Ablaufdatum;
   gespeichert wird nur der SHA-256-Hash. Aktivitäten speichern `requested_by`.
 - **Discovery löscht nichts**, sie meldet fehlende Einträge nur.
-- **Die Oberfläche lädt keine externen Dateien** und nutzt kein JavaScript-Framework.
+- **Die Oberfläche lädt keine externen Dateien** und nutzt kein JavaScript-Framework. Alles
+  muss ohne JavaScript funktionieren. `static/ui.js` (vom Eigentümer erlaubt) ergänzt nur:
+  offene Systeme im Baum merken (sessionStorage), „Alle auf-/zuklappen“, Menüs schließen.
+- **Systembaum der Landscape:** je System ein `<tbody class="tree-system">`; Auf- und
+  Zuklappen per Checkbox und CSS `:has()`, ohne Server. Zugeklappt zu Beginn (Wunsch des
+  Eigentümers). Der Filter „Instanztyp“ klappt auf und zeigt nur passende Instanzen
+  (`TreeView` in `web/routes.py`), als Grundlage für Massenoperationen.
+- **Menü „Operationen“** (`operation_buttons` in `macros.html`, ein `<details class="menu">`)
+  statt einzelner Knöpfe; „Status aktualisieren“ bleibt ein eigener Knopf.
 - **Aufbau der Oberfläche:** Übersicht (Kennzahlen), Landscape (beobachten und bedienen:
   Systeme, Hosts), Activities (Aktivitäten, Protokolle), Configuration (einrichten: Hosts,
   Systeme, Pools), Administration (Benutzer; Plattform-Einstellungen folgen), „Mein Konto“

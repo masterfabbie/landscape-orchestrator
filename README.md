@@ -216,7 +216,7 @@ Die Oberfläche hat fünf Bereiche. **Landscape** dient zum Beobachten und Bedie
 | Bereich | Inhalt |
 |---|---|
 | Übersicht | Kennzahlen zu Systemen, Instanzen, Hosts und Aktivitäten der letzten 24 Stunden |
-| Landscape | Tab „Systeme“ mit Status, Pool, Tags, Abhängigkeiten und Knöpfen für Start, Stopp, Neustart und „Status aktualisieren“; Tab „Hosts“ mit Version des Host Agents und Tags. Beide Tabs mit Filtern. Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
+| Landscape | Tab „Systeme“ als aufklappbarer Baum (System → Instanzen → Diagnostics Agents) mit Status, Pool, Tags, Abhängigkeiten, Knopf „Status aktualisieren“ und Menü „Operationen“ (Start, Stopp, Neustart) je System und Instanz; Tab „Hosts“ mit Version des Host Agents und Tags. Beide Tabs mit Filtern. Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
 | Activities | Tab „Aktivitäten“ mit allen Operationen und Detailseite mit Protokoll; Tab „Protokolle“ mit den letzten 200 Protokolleinträgen |
 | Configuration | Tab „Hosts“: anlegen, Verbindung ändern, Discovery, Zugangsdaten, Tags, löschen. Tab „Systeme“: nicht zugeordnete Instanzen, Systeme anlegen und zuordnen, Systeme aufklappbar mit ihren Instanzen; Seite eines Systems mit Name, Instanzen, Pool, Abhängigkeiten, Zugangsdaten je SID, Löschen. Tab „Pools“: anlegen und löschen |
 | Administration | Versionsstand und aktuelle Einstellungen; Plattform-Einstellungen folgen |
@@ -245,6 +245,19 @@ Die Listen unter Landscape lassen sich filtern:
   speichern.
 - Unter „Filter anpassen“ wählt man, welche Filter angezeigt werden. Die Auswahl wird pro
   Benutzer gespeichert. Filter mit einem Wert werden immer angezeigt.
+
+### Systembaum und Menü „Operationen“
+
+- Systeme sind zunächst zugeklappt. Aufgeklappt zeigen sie ihre Instanzen in Startreihenfolge
+  mit Typ, Host, Status und „Hängt ab von“; Diagnostics Agents stehen in einer eigenen,
+  zuklappbaren Untergruppe. „Alle aufklappen“ und „Alle zuklappen“ gibt es über der Tabelle.
+- Welche Systeme offen sind, merkt sich der Browser für diesen Tab, damit das automatische
+  Neuladen während einer Aktivität nichts zuklappt.
+- Mit dem Filter „Instanztyp“ sind die passenden Systeme gleich aufgeklappt und zeigen **nur
+  die passenden Instanzen**; ein Hinweis nennt, wie viele ausgeblendet sind.
+- Start, Stopp und Neustart liegen im Menü „Operationen“ jeder Zeile (System, Instanz,
+  Diagnostics Agent), auch auf System- und Hostseite. Läuft eine Aktivität, sind die Einträge
+  ausgegraut und das Menü verweist auf sie. Das Menü sehen Operator, Configurator und Admin.
 
 ### Tags
 
@@ -304,8 +317,10 @@ lässt es sich nicht ändern.
   des Browsers. Protokollmeldungen der Aktivitäten werden auf Englisch aufgezeichnet.
 - **Aktualisierung:** Die Seite einer laufenden Aktivität lädt sich alle 2 Sekunden neu,
   Übersicht, Landscape und Systemseite alle 5 Sekunden, solange eine Aktivität läuft.
-- **Keine externen Dateien:** Die Oberfläche lädt nichts aus dem Internet und kommt bis auf
-  die Rückfrage vor Operationen ohne JavaScript aus.
+- **Keine externen Dateien:** Die Oberfläche lädt nichts aus dem Internet und nutzt kein
+  JavaScript-Framework. Ein kleines eigenes Skript (`static/ui.js`) merkt sich offene Systeme
+  im Baum und schließt Menüs beim Klick daneben; ohne JavaScript funktioniert alles, nur
+  ohne diese Annehmlichkeiten (die Rückfrage vor Operationen braucht JavaScript).
 - **Sitzung:** Ein signiertes Sitzungs-Cookie, 8 Stunden gültig, `HttpOnly` und
   `SameSite=Strict`. Wird `LO_SECRET_KEY` geändert, sind alle Sitzungen ungültig.
   Formulare von fremden Websites werden abgelehnt.

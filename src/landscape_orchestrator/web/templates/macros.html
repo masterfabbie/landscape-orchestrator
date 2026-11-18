@@ -2,17 +2,25 @@
 <span class="badge badge-{{ status | lower }}">{{ t(prefix ~ "." ~ status) }}</span>
 {% endmacro %}
 
+{# Menu "Operations" with start, stop and restart. ``disabled`` is the running activity, if
+   any; the entries are greyed out and the menu links to it. #}
 {% macro operation_buttons(action, t, disabled=false, system=false) %}
 {% if can("operator") %}
-<span class="buttons">
-  {% for name in ("start", "stop", "restart") %}
-  <form method="post" action="{{ action }}/{{ name }}" data-confirm="{{ t('op.confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
-    <button type="submit" class="{{ 'danger' if name != 'start' else '' }}" {% if disabled %}disabled{% endif %}>
-      {{ t("op." ~ name ~ ("_system" if system else "")) }}
-    </button>
-  </form>
-  {% endfor %}
-</span>
+<details class="menu">
+  <summary>{{ t("op.menu") }}</summary>
+  <div class="menu-items">
+    {% if disabled %}
+    <p class="menu-note">{{ t("op.busy") }}{% if disabled.id is defined %} <a href="/activities/{{ disabled.id }}">{{ t("activity.title") }} {{ disabled.id }}</a>{% endif %}</p>
+    {% endif %}
+    {% for name in ("start", "stop", "restart") %}
+    <form method="post" action="{{ action }}/{{ name }}" data-confirm="{{ t('op.confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+      <button type="submit" class="menu-item{{ ' danger' if name != 'start' else '' }}" {% if disabled %}disabled{% endif %}>
+        {{ t("op." ~ name ~ ("_system" if system else "")) }}
+      </button>
+    </form>
+    {% endfor %}
+  </div>
+</details>
 {% endif %}
 {% endmacro %}
 

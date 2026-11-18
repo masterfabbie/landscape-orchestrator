@@ -483,6 +483,32 @@ def _instance_type(instance: Instance) -> str | None:
     return key.removeprefix("itype.") if key else None
 
 
+@dataclass
+class TreeView:
+    """What the landscape tree shows of one system."""
+
+    instances: list[Instance]
+    agents: list[Instance]
+    # Instances left out because they do not match the instance type filter.
+    hidden: int
+    # Open from the start; set while the instance type filter is active.
+    expanded: bool
+
+
+def _tree_view(system: System, types: list[str] | None) -> TreeView:
+    ordered = sorted(system.instances, key=lambda i: (i.priority, i.label))
+    if types:
+        shown = [i for i in ordered if _instance_type(i) in types]
+    else:
+        shown = ordered
+    return TreeView(
+        instances=[i for i in shown if not i.is_agent],
+        agents=sorted((i for i in shown if i.is_agent), key=lambda i: i.label),
+        hidden=len(ordered) - len(shown),
+        expanded=bool(types),
+    )
+
+
 def _filter_setting(tab: str) -> str:
     return f"filters.{tab}"
 
@@ -520,6 +546,8 @@ async def landscape(
             "systems": systems,
             "filter_options": options,
             "instance_count": sum(len(s.instances) for s in systems),
+            "tree": {s.id: _tree_view(s, values.get("type")) for s in systems},
+            "depends": {s.id: depends_on_sids(s) for s in systems},
         }
     else:
         all_hosts = await _all_hosts(session)

@@ -244,3 +244,41 @@ details.multi[open] > .multi-options { display: flex; }
 .tag { display: inline-block; margin: 0 4px 2px 0; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; font-size: 0.85rem; font-family: ui-monospace, monospace; }
 button.secondary { background: transparent; color: var(--accent); border-color: var(--accent); }
 .token-value { word-break: break-all; user-select: all; margin: 6px 0 0; }
+
+/* Operations menu */
+details.menu { position: relative; display: inline-block; }
+details.menu > summary { list-style: none; cursor: pointer; display: inline-block; padding: 6px 12px; border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); white-space: nowrap; }
+details.menu > summary::-webkit-details-marker { display: none; }
+details.menu > summary::after { content: " ▾"; }
+details.menu[open] > summary { background: var(--accent); color: var(--accent-text); }
+.menu-items { position: absolute; right: 0; z-index: 20; min-width: 190px; margin-top: 4px; padding: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18); display: flex; flex-direction: column; gap: 2px; }
+.menu-items form { margin: 0; }
+button.menu-item { display: block; width: 100%; text-align: left; background: none; border: none; color: inherit; padding: 6px 10px; border-radius: 4px; }
+button.menu-item:hover:not(:disabled) { background: var(--bg); }
+button.menu-item.danger { color: var(--danger); }
+.menu-note { margin: 2px 6px 6px; font-size: 0.85rem; color: var(--muted); }
+td.actions { white-space: nowrap; }
+td.actions > * { vertical-align: middle; }
+
+/* Landscape tree */
+table.tree tr.instance-row, table.tree tr.agent-row { display: none; }
+table.tree tbody:has(.toggle-system:checked) tr.instance-row { display: table-row; }
+table.tree tbody:has(.toggle-system:checked):has(.toggle-agents:checked) tr.agent-row { display: table-row; }
+table.tree tbody.tree-system { border-top: 1px solid var(--border); }
+table.tree tr.instance-row td, table.tree tr.agent-row td { font-size: 0.92rem; }
+td.indent { padding-left: 2.2rem; }
+td.indent2 { padding-left: 4rem; }
+.tree-toggle-label { position: relative; display: inline-block; width: 1.2rem; cursor: pointer; }
+.tree-toggle-label input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.tree-toggle-label .caret::before { content: "▸"; display: inline-block; color: var(--muted); transition: transform 0.1s; }
+.tree-toggle-label input:checked + .caret::before { transform: rotate(90deg); }
+.tree-toggle-label input:focus-visible + .caret { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The menu must not be clipped by the scrolling table frame: on wide screens the tree needs
+   no scrolling, on narrow ones the menu opens inside the row instead of floating. */
+@media (min-width: 900px) {
+  .table-wrap:has(table.tree) { overflow: visible; }
+}
+@media (max-width: 899px) {
+  .menu-items { position: static; box-shadow: none; margin-top: 6px; }
+}
