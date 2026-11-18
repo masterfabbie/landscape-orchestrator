@@ -71,6 +71,7 @@
     <p class="muted">{{ t("landscape.counts", systems=systems | length, instances=instance_count) }}</p>
     {% if systems %}
     <span class="buttons">
+      {% if ops("INSTANCE" if filter_values.get("type") else "SYSTEM") %}<a class="button-link" href="/mass?{{ here.split("?", 1)[1] if "?" in here else "tab=systems" }}">{{ t("mass.button") }}</a>{% endif %}
       <button type="button" class="secondary" data-tree-all="open" hidden>{{ t("tree.expand_all") }}</button>
       <button type="button" class="secondary" data-tree-all="close" hidden>{{ t("tree.collapse_all") }}</button>
     </span>
@@ -139,11 +140,14 @@
   </section>
 {% else %}
   <section class="card">
-  <p class="muted">{{ t("landscape.host_count", hosts=hosts | length) }}</p>
+  <div class="card-head">
+    <p class="muted">{{ t("landscape.host_count", hosts=hosts | length) }}</p>
+    {% if hosts and ops("HOST") %}<span class="buttons"><a class="button-link" href="/mass?{{ here.split("?", 1)[1] if "?" in here else "tab=hosts" }}">{{ t("mass.button") }}</a></span>{% endif %}
+  </div>
   {% if hosts %}
   <div class="table-wrap">
   <table>
-    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("field.address") }}</th><th>{{ t("field.os") }}</th><th>{{ t("field.hostagent") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("field.tags") }}</th><th>{{ t("field.reachable") }}</th><th>{{ t("field.last_discovery") }}</th></tr></thead>
+    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("field.address") }}</th><th>{{ t("field.os") }}</th><th>{{ t("field.hostagent") }}</th><th>{{ t("field.instances") }}</th><th>{{ t("field.tags") }}</th><th>{{ t("field.reachable") }}</th><th>{{ t("field.last_discovery") }}</th><th>{{ t("field.actions") }}</th></tr></thead>
     <tbody>
     {% for host in hosts %}
       <tr>
@@ -155,6 +159,7 @@
         <td>{{ ui.tag_chips(host.tags) }}</td>
         <td>{{ ui.reach_badge(host, t) }}</td>
         <td class="muted">{{ host.last_discovery_at | time or t("hosts.never") }}</td>
+        <td class="actions">{{ ui.operation_buttons("/hosts/" ~ host.id, t, host_activities.get(host.id), target="HOST") }}</td>
       </tr>
     {% endfor %}
     </tbody>

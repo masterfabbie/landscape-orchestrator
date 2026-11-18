@@ -447,6 +447,62 @@ TEXTS: dict[str, tuple[str, str]] = {
     "op.restart_system": ("Restart system", "System neu starten"),
     "op.confirm": ("Run this operation?", "Diese Operation ausführen?"),
     "op.menu": ("Operations", "Operationen"),
+    "op.discover": ("Run discovery", "Discovery starten"),
+    "kind.DISCOVER": ("Discovery", "Discovery"),
+    "target.HOST": ("Host", "Host"),
+    "target.MASS": ("Mass operation", "Massenoperation"),
+    "activity.PARTIAL": ("partly failed", "teilweise fehlgeschlagen"),
+    "mass.button": ("Mass operation", "Massenoperation"),
+    "mass.title": ("Mass operation", "Massenoperation"),
+    "mass.settings": ("Operation", "Operation"),
+    "mass.parallel": ("At the same time", "Gleichzeitig"),
+    "mass.continue": ("Continue after failures", "Bei Fehlern weitermachen"),
+    "mass.stop": ("Stop at the first failure", "Beim ersten Fehler anhalten"),
+    "mass.run": ("Run mass operation", "Massenoperation ausführen"),
+    "mass.cancel": ("Cancel", "Abbrechen"),
+    "mass.targets_system": ("Systems", "Systeme"),
+    "mass.targets_instance": ("Instances", "Instanzen"),
+    "mass.targets_host": ("Hosts", "Hosts"),
+    "mass.hint_system": (
+        "Selected systems that depend on each other run in order: for a start or restart "
+        "the dependencies first, for a stop the dependent systems first.",
+        "Ausgewählte Systeme, die voneinander abhängen, laufen in Reihenfolge: beim Start "
+        "und Neustart zuerst die Abhängigkeiten, beim Stopp zuerst die abhängigen Systeme.",
+    ),
+    "mass.hint_instance": (
+        "Each instance is handled on its own, without the rest of its system.",
+        "Jede Instanz wird für sich bedient, ohne den Rest ihres Systems.",
+    ),
+    "mass.hint_host": (
+        "A discovery reads each host and updates the inventory.",
+        "Eine Discovery liest jeden Host aus und aktualisiert das Inventar.",
+    ),
+    "mass.busy": ("activity running", "Aktivität läuft"),
+    "mass.busy_hint": (
+        "Targets with a running activity wait for a sibling of this mass operation or are "
+        "skipped.",
+        "Ziele mit laufender Aktivität warten auf eine andere Teilaktivität dieser "
+        "Massenoperation oder werden übersprungen.",
+    ),
+    "mass.no_targets": (
+        "No targets match the current filters.",
+        "Zu den aktuellen Filtern gibt es keine Ziele.",
+    ),
+    "mass.no_operations": (
+        "Your role allows no mass operation on these targets.",
+        "Deine Rolle erlaubt keine Massenoperation auf diesen Zielen.",
+    ),
+    "mass.children": ("Targets", "Ziele"),
+    "mass.settings_summary": (
+        "{total} targets, {parallel} at the same time.",
+        "{total} Ziele, {parallel} gleichzeitig.",
+    ),
+    "mass.part_of": ("Part of mass operation {id}", "Teil der Massenoperation {id}"),
+    "error.mass_operation": (
+        "This operation cannot run as a mass operation on these targets.",
+        "Diese Operation lässt sich auf diesen Zielen nicht als Massenoperation ausführen.",
+    ),
+    "error.mass_no_targets": ("Select at least one target.", "Wähle mindestens ein Ziel aus."),
     "op.busy": ("An activity is running:", "Es läuft eine Aktivität:"),
     "tree.instance_one": ("1 instance", "1 Instanz"),
     "tree.instances": ("{count} instances", "{count} Instanzen"),

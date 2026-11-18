@@ -259,6 +259,38 @@ Die Listen unter Landscape lassen sich filtern:
   Diagnostics Agent), auch auf System- und Hostseite. Läuft eine Aktivität, sind die Einträge
   ausgegraut und das Menü verweist auf sie. Das Menü sehen Operator, Configurator und Admin.
 
+### Massenoperationen
+
+Der Knopf **„Massenoperation“** über der Systemliste bzw. Hostliste nimmt die aktuellen Filter
+mit und öffnet eine Vorschau:
+
+| Ansicht | Ziele |
+|---|---|
+| Systeme ohne Filter „Instanztyp“ | die gefilterten Systeme |
+| Systeme mit Filter „Instanztyp“ | die passenden Instanzen, z. B. alle ABAP-Anwendungsserver |
+| Hosts | die gefilterten Hosts (bisher: Discovery) |
+
+In der Vorschau wählt man die Ziele (alle vorausgewählt), die Operation, wie viele Ziele
+gleichzeitig laufen (Standard 5, höchstens 20) und ob bei einem Fehler weitergemacht (Standard)
+oder angehalten wird. Daraus entsteht eine **Sammelaktivität** mit einer Teilaktivität je Ziel:
+
+- Ausgewählte Systeme, die voneinander abhängen, laufen in Reihenfolge: beim Start und Neustart
+  zuerst die Abhängigkeiten, beim Stopp zuerst die abhängigen Systeme. Scheitert eine
+  Abhängigkeit, werden die Systeme übersprungen, die sie brauchen.
+- Brauchen zwei Ziele dasselbe System (z. B. ein gemeinsames Datenbanksystem), wartet das
+  zweite, bis das erste fertig ist. Ist ein Ziel durch eine Aktivität außerhalb der
+  Massenoperation belegt, wird es übersprungen.
+- Die Sammelaktivität zeigt die Teilaktivitäten mit Status und endet als „erfolgreich“,
+  „teilweise fehlgeschlagen“ oder „fehlgeschlagen“, mit einer Zusammenfassung wie
+  „10 succeeded, 1 failed, 1 skipped“.
+- Welche Operationen angeboten werden, steht im **Katalog der Operationen**, zusammen mit
+  Zielen und nötiger Rolle. Start, Stopp und Neustart brauchen Operator, die Discovery
+  Configurator. Später ergänzte eigene Operationen (geplant: Skripte, die der Host Agent über
+  `ExecuteOperation` ausführt) erscheinen dann automatisch in Menüs und Massenoperationen.
+
+**Host-Operationen:** Hosts haben jetzt ebenfalls ein Menü „Operationen“ (Landscape → Hosts und
+Hostseite). Bisher enthält es die Discovery, die dort als Aktivität mit Protokoll läuft.
+
 ### Tags
 
 Hosts und Systeme tragen Tags: ein Schlüssel mit optionalem Wert, z. B. `dev`,
@@ -382,7 +414,9 @@ keine Inventardaten.
 | POST | `/api/instances/{id}/start`, `/stop`, `/restart` | Operation für eine Instanz anstoßen; nur für Instanzen eines Systems, sonst HTTP 409 |
 | POST | `/api/systems/{id}/start`, `/stop`, `/restart` | Operation für ein ganzes System anstoßen |
 | GET | `/api/activities` | Aktivitäten, neueste zuerst (`?limit=`) |
-| GET | `/api/activities/{id}` | Aktivität mit Protokoll |
+| GET | `/api/activities/{id}` | Aktivität mit Protokoll; bei einer Massenoperation mit `children` |
+| GET | `/api/operations` | Katalog der Operationen, die der eigene Benutzer ausführen darf |
+| POST | `/api/mass-operations` | Massenoperation (`{"operation": "stop", "target_type": "SYSTEM", "target_ids": [1, 2], "parallel": 5, "stop_on_error": false}`); `target_type` ist `SYSTEM`, `INSTANCE` oder `HOST`; Antwort ist die Sammelaktivität (HTTP 202) |
 
 Beispiel mit der simulierten Landschaft (`LO_TOKEN` enthält ein persönliches API-Token):
 
@@ -489,7 +523,7 @@ curl -X POST -H "Authorization: Bearer $LO_TOKEN" http://127.0.0.1:8000/api/syst
 
 Einschränkungen:
 
-- Laufende Aktivitäten lassen sich noch nicht abbrechen.
+- Laufende Aktivitäten lassen sich noch nicht abbrechen, auch Massenoperationen nicht.
 - Abhängigkeiten werden nicht automatisch erkannt, sondern von Hand gepflegt.
 - Operationen für Datenbanken ohne SAP-Instanz (`StartDatabase` / `StopDatabase`) fehlen noch.
   Eine HANA-Datenbank wird über ihre Instanz gestartet und gestoppt.

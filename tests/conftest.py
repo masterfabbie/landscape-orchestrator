@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -75,6 +76,20 @@ def single_sid_landscape(clock: FakeClock) -> MockLandscape:
         for instance in host["instances"]:
             instance["sid"] = "DEV"
     return MockLandscape.from_dict(config, clock=clock)
+
+
+def hold_activities(app) -> asyncio.Event:
+    """Keep running activities at their next status poll until the event is set."""
+    runner = app.state.runner
+    gate = asyncio.Event()
+    original = runner._sleep
+
+    async def gated(seconds: float) -> None:
+        await gate.wait()
+        await original(seconds)
+
+    runner._sleep = gated
+    return gate
 
 
 def extended_config() -> dict:

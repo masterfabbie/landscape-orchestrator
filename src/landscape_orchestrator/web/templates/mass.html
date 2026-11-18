@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui with context %}
+{% block title %}{{ t("mass.title") }}{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ back }}">{{ t("nav.landscape") }}</a></p>
+<h1>{{ t("mass.title") }}</h1>
+{% if not targets %}
+<section class="card"><p>{{ t("mass.no_targets") }}</p></section>
+{% elif not operations %}
+<section class="card"><p>{{ t("mass.no_operations") }}</p></section>
+{% else %}
+<form method="post" action="/mass" class="stack">
+  <input type="hidden" name="target_type" value="{{ target_type }}">
+  <section class="card">
+    <h2>{{ t("mass.settings") }}</h2>
+    <div class="fields">
+      <label>{{ t("field.operation") }}
+        <select name="operation">
+          {% for operation in operations %}<option value="{{ operation.key }}">{{ t(operation.label_key(target_type)) }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>{{ t("mass.parallel") }} <input name="parallel" type="number" min="1" max="{{ max_parallel }}" value="5" required></label>
+    </div>
+    <div class="choices">
+      <label><input type="radio" name="on_error" value="continue" checked> {{ t("mass.continue") }}</label>
+      <label><input type="radio" name="on_error" value="stop"> {{ t("mass.stop") }}</label>
+    </div>
+    <p class="muted">{{ t("mass.hint_" ~ target_type | lower) }}</p>
+  </section>
+  <section class="card">
+    <h2>{{ t("mass.targets_" ~ target_type | lower) }} ({{ targets | length }})</h2>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>{{ t("unassigned.select") }}</th><th>{{ t("field.name") }}</th><th>{{ t("field.description") }}</th><th>{{ t("field.status") }}</th></tr></thead>
+      <tbody>
+      {% for target in targets %}
+        <tr>
+          <td><input type="checkbox" name="target_id" value="{{ target.id }}" checked aria-label="{{ target.label }}"></td>
+          <td class="mono">{{ target.label }}</td>
+          <td>{{ target.detail }}</td>
+          <td>{% if target.busy %}<a class="badge badge-running" href="/activities/{{ target.busy.id }}">{{ t("mass.busy") }}</a>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <p class="muted">{{ t("mass.busy_hint") }}</p>
+  </section>
+  <div class="row" data-confirm="{{ t('op.confirm') }}">
+    <button type="submit" onclick="return confirm(this.parentElement.dataset.confirm)">{{ t("mass.run") }}</button>
+    <a class="button-link" href="{{ back }}">{{ t("mass.cancel") }}</a>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

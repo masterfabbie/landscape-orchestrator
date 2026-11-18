@@ -6,6 +6,7 @@ without internet access. State is changed only by POST forms.
 
 from __future__ import annotations
 
+import json
 import secrets
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from .. import __version__
+from ..catalog import for_target
+from ..catalog import get as get_operation
 from ..connections import ClientFactory
 from ..crypto import SecretBox
 from ..dependencies import DependencyError, load_graph, set_dependencies, would_create_cycle
@@ -57,11 +60,13 @@ from ..models import (
 )
 from ..operations import (
     ACTIVE_STATUSES,
+    MAX_PARALLEL,
     NotAssignedError,
     OperationConflictError,
     OperationKind,
     OperationRunner,
     TargetNotFoundError,
+    TargetType,
 )
 from ..permissions import required_role
 from ..pools import UnknownPoolError, assign_pool
@@ -230,6 +235,8 @@ def render(request: Request, name: str, status_code: int = 200, **context: Any) 
         "t": t,
         "user": user,
         "can": lambda role: user is not None and has_role(user, Role(role)),
+        # Operations of the catalog this user may run on a target type, e.g. "SYSTEM".
+        "ops": lambda target: for_target(TargetType(target), user) if user else [],
         "language": language,
         "languages": LANGUAGES,
         "path": request.url.path,
@@ -340,9 +347,7 @@ async def setup(
     if password != password_repeat:
         return redirect("/setup", error="password_mismatch")
     try:
-        user = await create_user(
-            session, username, password, Role.ADMIN, display_name=display_name
-        )
+        user = await create_user(session, username, password, Role.ADMIN, display_name=display_name)
     except UserError as exc:
         await session.rollback()
         return redirect("/setup", error=exc.code)
@@ -453,23 +458,40 @@ async def overview(request: Request, session: DbSession) -> HTMLResponse:
         for host in hosts
     ]
     since = datetime.now(UTC) - timedelta(hours=24)
-    recent = list(
-        await session.scalars(select(Activity).where(Activity.requested_at >= since))
-    )
+    recent = list(await session.scalars(select(Activity).where(Activity.requested_at >= since)))
     active = await _active_by_system(session)
     return render(
         request,
         "overview.html",
         tiles=[
-            ("overview.systems", "/landscape", len(systems),
-             _count([system_status(s) for s in systems], STATUS_ORDER), "status"),
-            ("overview.instances", "/landscape", len(instances),
-             _count([i.last_status for i in instances], STATUS_ORDER), "status"),
-            ("overview.hosts", "/landscape?tab=hosts", len(hosts),
-             _count(host_states, ("GREEN", "RED", "UNKNOWN")), "reach"),
-            ("overview.activities_24h", "/activities", len(recent),
-             _count([a.status for a in recent], ("RUNNING", "PENDING", "SUCCEEDED", "FAILED")),
-             "activity"),
+            (
+                "overview.systems",
+                "/landscape",
+                len(systems),
+                _count([system_status(s) for s in systems], STATUS_ORDER),
+                "status",
+            ),
+            (
+                "overview.instances",
+                "/landscape",
+                len(instances),
+                _count([i.last_status for i in instances], STATUS_ORDER),
+                "status",
+            ),
+            (
+                "overview.hosts",
+                "/landscape?tab=hosts",
+                len(hosts),
+                _count(host_states, ("GREEN", "RED", "UNKNOWN")),
+                "reach",
+            ),
+            (
+                "overview.activities_24h",
+                "/activities",
+                len(recent),
+                _count([a.status for a in recent], ("RUNNING", "PENDING", "SUCCEEDED", "FAILED")),
+                "activity",
+            ),
         ],
         refresh=OVERVIEW_REFRESH_SECONDS if active else None,
     )
@@ -554,6 +576,7 @@ async def landscape(
         versions = sorted({h.hostagent_version for h in all_hosts if h.hostagent_version})
         context |= {
             "hosts": filter_hosts(all_hosts, values),
+            "host_activities": await _active_by_host(session),
             "filter_options": {
                 "reach": [(v, f"reach.{v}", True) for v in REACH_VALUES],
                 "agent": [(v, v, False) for v in versions],
@@ -600,11 +623,41 @@ async def _load_host(session: AsyncSession, host_id: int) -> Host:
     return host
 
 
+async def _active_by_host(session: AsyncSession) -> dict[int, Activity]:
+    """Running host operation per host, e.g. a discovery."""
+    rows = await session.scalars(
+        select(Activity).where(Activity.status.in_(ACTIVE_STATUSES), Activity.host_id.is_not(None))
+    )
+    return {activity.host_id: activity for activity in rows}
+
+
 @pages.get("/hosts/{host_id}")
 async def host_detail(request: Request, host_id: int, session: DbSession) -> HTMLResponse:
     host = await _load_host(session, host_id)
     active = await _active_by_system(session)
-    return render(request, "host.html", host=host, active=active)
+    host_activity = (await _active_by_host(session)).get(host.id)
+    return render(request, "host.html", host=host, active=active, host_activity=host_activity)
+
+
+@pages.post("/hosts/{host_id}/{operation}")
+async def operate_host(
+    host_id: int, operation: str, context: Context, session: DbSession, user: CurrentUser
+) -> Response:
+    """Run a host operation of the catalog, e.g. a discovery, as an activity."""
+    definition = get_operation(operation)
+    if definition is None or TargetType.HOST not in definition.targets:
+        raise HTTPException(404, "Unknown operation")
+    if not has_role(user, definition.role):
+        raise HTTPException(403, f"Requires the role {definition.role}")
+    try:
+        activity = await context.runner.submit_host(
+            session, host_id, definition.kind, requested_by=user.username
+        )
+    except TargetNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except OperationConflictError:
+        return redirect(f"/hosts/{host_id}", error="host_busy")
+    return redirect(f"/activities/{activity.id}")
 
 
 async def _load_system(session: AsyncSession, system_id: int) -> System:
@@ -702,9 +755,7 @@ LOG_ENTRIES_SHOWN = 200
 async def activities(request: Request, session: DbSession, tab: str | None = None) -> HTMLResponse:
     tab = _tab(tab, ("activities", "logs"))
     if tab == "activities":
-        rows = list(
-            await session.scalars(select(Activity).order_by(Activity.id.desc()).limit(100))
-        )
+        rows = list(await session.scalars(select(Activity).order_by(Activity.id.desc()).limit(100)))
         return render(request, "activities.html", tab=tab, activities=rows)
     entries = list(
         await session.scalars(
@@ -720,17 +771,138 @@ async def activities(request: Request, session: DbSession, tab: str | None = Non
 @pages.get("/activities/{activity_id}")
 async def activity_detail(request: Request, activity_id: int, session: DbSession) -> HTMLResponse:
     activity = await session.scalar(
-        select(Activity).where(Activity.id == activity_id).options(selectinload(Activity.entries))
+        select(Activity)
+        .where(Activity.id == activity_id)
+        .options(selectinload(Activity.entries), selectinload(Activity.children))
     )
     if activity is None:
         raise HTTPException(404, "Activity not found")
     running = activity.status in ACTIVE_STATUSES
+    options = json.loads(activity.options) if activity.options else {}
+    counts = _count([c.status for c in activity.children], ACTIVITY_STATUS_ORDER)
     return render(
         request,
         "activity.html",
         activity=activity,
+        options=options,
+        child_counts=counts,
         refresh=ACTIVITY_REFRESH_SECONDS if running else None,
     )
+
+
+ACTIVITY_STATUS_ORDER = ("RUNNING", "PENDING", "SUCCEEDED", "PARTIAL", "FAILED")
+
+
+# --- mass operations --------------------------------------------------------------------
+
+
+@dataclass
+class MassTarget:
+    id: int
+    label: str
+    detail: str
+    busy: Activity | None
+
+
+async def _mass_targets(
+    request: Request, session: AsyncSession, tab: str, values: dict[str, list[str]]
+) -> tuple[TargetType, list[MassTarget]]:
+    """The targets a mass operation offers for the current landscape filters.
+
+    Systems tab: the filtered systems, or with the instance type filter the matching
+    instances. Hosts tab: the filtered hosts.
+    """
+    language = _language(request)
+    if tab == "hosts":
+        busy = await _active_by_host(session)
+        hosts = filter_hosts(await _all_hosts(session), values)
+        return TargetType.HOST, [MassTarget(h.id, h.name, h.address, busy.get(h.id)) for h in hosts]
+    active = await _active_by_system(session)
+    systems = filter_systems(await _all_systems(session), values, system_status, _instance_type)
+    if values.get("type"):
+        targets = []
+        for system in systems:
+            view = _tree_view(system, values["type"])
+            for instance in view.instances + view.agents:
+                key = instance_type_key(instance.features)
+                kind = translate(language, key) if key else (instance.features or "")
+                detail = f"{system.name} · {kind} · {instance.host.name}"
+                targets.append(
+                    MassTarget(instance.id, instance.label, detail, active.get(system.id))
+                )
+        return TargetType.INSTANCE, targets
+    return TargetType.SYSTEM, [
+        MassTarget(
+            s.id,
+            s.name,
+            translate(language, "tree.instance_one")
+            if len(s.instances) == 1
+            else translate(language, "tree.instances", count=len(s.instances)),
+            active.get(s.id),
+        )
+        for s in systems
+    ]
+
+
+@pages.get("/mass")
+async def mass_form(
+    request: Request, session: DbSession, user: CurrentUser, tab: str | None = None
+) -> HTMLResponse:
+    """Preview of a mass operation: the filtered targets, the operation and its settings."""
+    tab = _tab(tab, ("systems", "hosts"))
+    query = {key: request.query_params.getlist(key) for key in request.query_params}
+    values = read_values(tab, query)
+    target_type, targets = await _mass_targets(request, session, tab, values)
+    back = "/landscape?" + urlencode(
+        [(k, v) for k, v in request.query_params.multi_items() if k == "tab" or k in FILTER_PARAMS]
+    )
+    return render(
+        request,
+        "mass.html",
+        tab=tab,
+        target_type=target_type.value,
+        targets=targets,
+        operations=for_target(target_type, user, mass=True),
+        max_parallel=MAX_PARALLEL,
+        back=back,
+    )
+
+
+@pages.post("/mass")
+async def mass_submit(
+    context: Context,
+    session: DbSession,
+    user: CurrentUser,
+    operation: Annotated[str, Form()] = "",
+    target_type: Annotated[str, Form()] = "",
+    target_id: Annotated[list[int], Form()] = [],  # noqa: B006 - FastAPI copies it
+    parallel: Annotated[int, Form()] = 5,
+    on_error: Annotated[str, Form()] = "continue",
+) -> Response:
+    definition = get_operation(operation)
+    try:
+        kind_of_target = TargetType(target_type)
+    except ValueError as exc:
+        raise HTTPException(422, "Unknown target type") from exc
+    if definition is None or kind_of_target not in definition.targets or not definition.mass:
+        return redirect("/landscape", error="mass_operation")
+    if not has_role(user, definition.role):
+        raise HTTPException(403, f"Requires the role {definition.role}")
+    if not target_id:
+        return redirect("/landscape", error="mass_no_targets")
+    try:
+        activity = await context.runner.submit_mass(
+            session,
+            definition.kind,
+            kind_of_target,
+            target_id,
+            parallel=parallel,
+            stop_on_error=on_error == "stop",
+            requested_by=user.username,
+        )
+    except (ValueError, TargetNotFoundError):
+        return redirect("/landscape", error="invalid_input")
+    return redirect(f"/activities/{activity.id}")
 
 
 # --- configuration ----------------------------------------------------------------------

@@ -6,6 +6,7 @@
 <div class="card-head">
   <h1>{{ t("field.host") }} {{ host.name }}</h1>
   {{ ui.reach_badge(host, t) }}
+  {{ ui.operation_buttons("/hosts/" ~ host.id, t, host_activity, target="HOST") }}
   {% if can("configurator") %}<span class="buttons"><a class="button-link" href="/configuration/hosts/{{ host.id }}">{{ t("action.configure") }}</a></span>{% endif %}
 </div>
 <section class="card">

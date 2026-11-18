@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import __version__
+from ..catalog import CATALOG
+from ..catalog import get as get_operation
 from ..connections import ClientFactory
 from ..crypto import SecretBox
 from ..db import create_engine, create_session_factory, upgrade_database
@@ -45,6 +47,7 @@ from ..operations import (
     OperationKind,
     OperationRunner,
     TargetNotFoundError,
+    TargetType,
 )
 from ..permissions import required_role
 from ..pools import UnknownPoolError, assign_pool
@@ -84,7 +87,9 @@ from .schemas import (
     InstanceIds,
     InstanceListOut,
     InstanceOut,
+    MassOperationIn,
     NewTokenOut,
+    OperationOut,
     PasswordReset,
     PoolAssignment,
     PoolCreate,
@@ -560,11 +565,57 @@ def create_app(
         activity = await session.scalar(
             select(Activity)
             .where(Activity.id == activity_id)
-            .options(selectinload(Activity.entries))
+            .options(selectinload(Activity.entries), selectinload(Activity.children))
         )
         if activity is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Activity not found")
         return activity
+
+    @api.get("/operations", response_model=list[OperationOut])
+    async def list_operations(user: CurrentUser) -> list[dict[str, object]]:
+        """The operations of the catalog this user may run."""
+        return [
+            {
+                "key": operation.key,
+                "targets": sorted(operation.targets),
+                "role": operation.role.value,
+                "mass": operation.mass,
+            }
+            for operation in CATALOG
+            if has_role(user, operation.role)
+        ]
+
+    @api.post(
+        "/mass-operations", response_model=ActivityOut, status_code=status.HTTP_202_ACCEPTED
+    )
+    async def create_mass_operation(
+        body: MassOperationIn,
+        session: Session,
+        user: CurrentUser,
+        timeout: Timeout = DEFAULT_TIMEOUT_SECONDS,
+    ) -> Activity:
+        """Run an operation on many targets; returns the parent activity with the children."""
+        definition = get_operation(body.operation)
+        target_type = TargetType(body.target_type)
+        if definition is None or target_type not in definition.targets or not definition.mass:
+            raise HTTPException(422, f"No mass operation {body.operation} on {target_type}")
+        if not has_role(user, definition.role):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires the role {definition.role}")
+        try:
+            return await runner.submit_mass(
+                session,
+                definition.kind,
+                target_type,
+                body.target_ids,
+                parallel=body.parallel,
+                stop_on_error=body.stop_on_error,
+                timeout_seconds=timeout,
+                requested_by=user.username,
+            )
+        except TargetNotFoundError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     # --- own account and users ------------------------------------------------------------
 

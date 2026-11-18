@@ -158,6 +158,9 @@ class ActivityOut(BaseModel):
     requested_by: str | None
     system_id: int | None
     instance_id: int | None
+    host_id: int | None
+    # The mass operation this activity belongs to.
+    parent_id: int | None
     status: str
     timeout_seconds: int
     error: str | None
@@ -168,6 +171,23 @@ class ActivityOut(BaseModel):
 
 class ActivityDetail(ActivityOut):
     entries: list[ActivityLogEntryOut]
+    # Children of a mass operation.
+    children: list[ActivityOut]
+
+
+class OperationOut(BaseModel):
+    key: str
+    targets: list[str]
+    role: str
+    mass: bool
+
+
+class MassOperationIn(BaseModel):
+    operation: str
+    target_type: Literal["SYSTEM", "INSTANCE", "HOST"]
+    target_ids: list[int] = Field(min_length=1, max_length=500)
+    parallel: int = Field(default=5, ge=1, le=20)
+    stop_on_error: bool = False
 
 
 class SystemCreate(BaseModel):

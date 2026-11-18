@@ -13,8 +13,16 @@ from __future__ import annotations
 
 from .users import Role
 
+# Operations of the catalog: the route needs at least an operator; the handler then checks
+# the role the chosen operation requires (catalog.py).
 OPERATION_ROUTES = frozenset(
-    {"/instances/{instance_id}/{operation}", "/systems/{system_id}/{operation}"}
+    {
+        "/instances/{instance_id}/{operation}",
+        "/systems/{system_id}/{operation}",
+        "/hosts/{host_id}/{operation}",
+        "/mass",
+        "/mass-operations",
+    }
 )
 
 
@@ -27,6 +35,8 @@ def required_role(method: str, path: str) -> Role:
         return Role.VIEWER
     if path.startswith("/configuration"):
         return Role.CONFIGURATOR
+    if path == "/mass":
+        return Role.OPERATOR
     if method in ("GET", "HEAD"):
         return Role.VIEWER
     if path.endswith("/refresh") or path == "/landscape/filters":

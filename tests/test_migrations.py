@@ -62,8 +62,34 @@ def test_models_match_migrations(tmp_path):
     engine = create_sync_engine(f"sqlite:///{path}")
     with engine.connect() as connection:
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+        actions = connection.exec_driver_sql("PRAGMA foreign_key_list(activities)").fetchall()
     engine.dispose()
-    assert diff == []
+    assert _without_inline_fk_ondelete(diff) == []
+    # The inline foreign keys of migration 0004 do have ON DELETE SET NULL.
+    assert {(row[3], row[6]) for row in actions} >= {
+        ("host_id", "SET NULL"),
+        ("parent_id", "SET NULL"),
+    }
+
+
+def _fk_key(constraint) -> tuple:
+    return (
+        constraint.table.name,
+        tuple(element.parent.name for element in constraint.elements),
+        tuple(element.target_fullname for element in constraint.elements),
+    )
+
+
+def _without_inline_fk_ondelete(diff: list) -> list:
+    """Drop remove/add pairs of the same foreign key that differ only in ON DELETE.
+
+    Migration 0004 adds foreign keys with ALTER TABLE ADD COLUMN ... REFERENCES; SQLAlchemy
+    does not read ON DELETE of such column constraints back from SQLite.
+    """
+    removed = {_fk_key(d[1]) for d in diff if d[0] == "remove_fk"}
+    added = {_fk_key(d[1]) for d in diff if d[0] == "add_fk"}
+    same = removed & added
+    return [d for d in diff if not (d[0] in ("remove_fk", "add_fk") and _fk_key(d[1]) in same)]
 
 
 def legacy_database(path) -> None:

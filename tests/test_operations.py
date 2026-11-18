@@ -5,7 +5,7 @@ import asyncio
 import httpx
 import pytest
 
-from conftest import make_user, stopped_config
+from conftest import hold_activities, make_user, stopped_config
 from landscape_orchestrator.api import create_app
 from landscape_orchestrator.crypto import generate_secret_key
 from landscape_orchestrator.mock.landscape import MockLandscape, Status
@@ -465,6 +465,7 @@ async def test_unassigned_instance_cannot_be_operated(app, api):
 
 async def test_system_cannot_change_while_active(app, api):
     dev = await system_id(api, "DEV")
+    gate = hold_activities(app)  # keeps the activity running while the changes are tried
     first = await api.post(f"/api/systems/{dev}/start")
     assert first.status_code == 202
 
@@ -472,6 +473,7 @@ async def test_system_cannot_change_while_active(app, api):
     assert removed.status_code == 409
     assert (await api.delete(f"/api/systems/{dev}")).status_code == 409
 
+    gate.set()
     await app.state.runner.wait(first.json()["id"])
     assert (await api.delete(f"/api/systems/{dev}")).status_code == 204
 

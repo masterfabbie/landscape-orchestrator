@@ -80,7 +80,8 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `status.py` | Status lesen ohne Aktivität: Instanzen eines Systems (Knopf „Status aktualisieren“) und Datenbanken |
 | `systems.py` | Systeme als Gruppen von Instanzen: anlegen, zuordnen, entfernen, löschen, Namens- und Zuordnungsvorschläge, abgeleitete „Hängt ab von“-SIDs |
 | `pools.py` | Zuordnung von Systemen zu Pools |
-| `operations.py` | Start, Stopp, Neustart als Hintergrund-Aktivitäten (`OperationRunner`) |
+| `operations.py` | Start, Stopp, Neustart, Discovery als Hintergrund-Aktivitäten, Massenoperationen (`OperationRunner`) |
+| `catalog.py` | Katalog der Operationen: Ziele, nötige Rolle, als Massenoperation erlaubt |
 | `api/` | REST-API unter `/api`, geschützt durch persönliche API-Tokens; `create_app` baut die Anwendung |
 | `web/` | servergerenderte Oberfläche (Jinja2), Anmeldung, Einrichtung, Konto, Übersetzungen |
 | `mock/` | simulierter Host Agent und sapstartsrv für Entwicklung und Tests |
@@ -168,7 +169,25 @@ Wichtige Entwurfsentscheidungen:
   Eigentümers). Der Filter „Instanztyp“ klappt auf und zeigt nur passende Instanzen
   (`TreeView` in `web/routes.py`), als Grundlage für Massenoperationen.
 - **Menü „Operationen“** (`operation_buttons` in `macros.html`, ein `<details class="menu">`)
-  statt einzelner Knöpfe; „Status aktualisieren“ bleibt ein eigener Knopf.
+  statt einzelner Knöpfe; „Status aktualisieren“ bleibt ein eigener Knopf. Die Einträge kommen
+  aus dem **Katalog** (`catalog.py`, im Template über `ops("SYSTEM")` usw., gefiltert nach
+  Rolle). Neue Operationen, auch spätere eigene (geplant: Host-Agent-Skripte über
+  `ExecuteOperation`, wie die kundendefinierten Operationen in LaMa), werden dort eingetragen
+  und erscheinen dann in Menüs, Massenoperationen und `/api/operations`. Routen für
+  Operationen brauchen mindestens Operator (`permissions.OPERATION_ROUTES`); die Rolle der
+  einzelnen Operation prüft der Handler.
+- **Massenoperationen** (Wunsch des Eigentümers: Systeme, Instanzen und Hosts, Standard 5
+  gleichzeitig, bei Fehlern weitermachen, keine zusätzliche Bestätigung): eine
+  Sammelaktivität (`target_type` MASS, Einstellungen als JSON in `activities.options`) mit
+  Teilaktivitäten (`parent_id`). `_run_mass` startet Kinder bis zur Parallelität, beachtet
+  Abhängigkeiten der ausgewählten Systeme, lässt bei Sperrkonflikt auf Geschwister warten und
+  überspringt Ziele, die von außen belegt sind. Endstatus SUCCEEDED, PARTIAL oder FAILED.
+- **Host-Operationen** (bisher nur Discovery) laufen als Aktivität mit `host_id`; je Host
+  höchstens eine gleichzeitig.
+- **Migration 0004** fügt Spalten mit Fremdschlüssel per `ALTER TABLE … REFERENCES` an, weil
+  Alembics Batch-Modus `activities` neu aufbauen würde und das Löschen der alten Tabelle bei
+  aktiven Fremdschlüsseln das Protokoll per `ON DELETE CASCADE` mitlöschen würde. Der
+  Vergleichstest ignoriert deshalb das nicht zurückgelesene `ON DELETE` dieser Spalten.
 - **Aufbau der Oberfläche:** Übersicht (Kennzahlen), Landscape (beobachten und bedienen:
   Systeme, Hosts), Activities (Aktivitäten, Protokolle), Configuration (einrichten: Hosts,
   Systeme, Pools), Administration (Benutzer; Plattform-Einstellungen folgen), „Mein Konto“
@@ -194,6 +213,9 @@ Wichtige Entwurfsentscheidungen:
   `single_sid_landscape` legt HANA in `DEV`; sie testet den simulierten `StartSystem`.
 - Benutzer für Tests legt `make_user(app, name, role)` aus `tests/conftest.py` an (Passwort
   `PASSWORD`, liefert ein API-Token). Eine autouse-Fixture senkt die scrypt-Kosten.
+- `hold_activities(app)` aus `tests/conftest.py` hält laufende Aktivitäten fest, bis das
+  zurückgegebene Event gesetzt ist. Tests, die eine noch laufende Aktivität brauchen, nutzen es;
+  ohne es kann die Aktivität mit der falschen Uhr schon fertig sein (wackelige Tests).
 - Zeit wird über eine falsche Uhr gesteuert (`FakeClock` in `tests/conftest.py`). Tests, die
   Operationen ausführen, übergeben `sleep` und `clock` an `create_app`.
 - Neue Funktionen brauchen Tests, auch für Fehlerfälle. Verhalten, das der Mock simulieren

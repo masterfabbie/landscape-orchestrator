@@ -26,6 +26,7 @@ from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
     column_property,
+    foreign,
     mapped_column,
     relationship,
 )
@@ -361,6 +362,14 @@ class Activity(Base):
     instance_id: Mapped[int | None] = mapped_column(
         ForeignKey("instances.id", ondelete="SET NULL")
     )
+    # Target of host operations, e.g. a discovery.
+    host_id: Mapped[int | None] = mapped_column(ForeignKey("hosts.id", ondelete="SET NULL"))
+    # The mass operation this activity belongs to.
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("activities.id", ondelete="SET NULL"), index=True
+    )
+    # Settings of a mass operation as JSON: operation, targets, parallel, stop_on_error.
+    options: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), index=True)
     # Username of whoever requested the activity.
     requested_by: Mapped[str | None] = mapped_column(String(64))
@@ -372,6 +381,11 @@ class Activity(Base):
 
     # All systems the activity may touch; used to keep activities from overlapping.
     systems: Mapped[list[System]] = relationship(secondary=activity_systems)
+    children: Mapped[list[Activity]] = relationship(
+        primaryjoin=lambda: Activity.id == foreign(Activity.parent_id),
+        order_by="Activity.id",
+        viewonly=True,
+    )
     entries: Mapped[list[ActivityLogEntry]] = relationship(
         back_populates="activity",
         cascade="all, delete-orphan",

@@ -14,6 +14,7 @@ target state is reached or the timeout expires.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -35,8 +36,8 @@ from .clients import (
 from .clients.sapcontrol import StateColor
 from .connections import ClientFactory
 from .crypto import SecretError
-from .dependencies import SystemPlan, load_graph, plan
-from .discovery import instance_status
+from .dependencies import SystemPlan, dependency_closure, load_graph, plan
+from .discovery import DiscoveryError, discover_host, instance_status
 from .models import (
     STATUS_UNKNOWN,
     Activity,
@@ -56,11 +57,15 @@ class OperationKind(StrEnum):
     START = "START"
     STOP = "STOP"
     RESTART = "RESTART"
+    DISCOVER = "DISCOVER"
 
 
 class TargetType(StrEnum):
     INSTANCE = "INSTANCE"
     SYSTEM = "SYSTEM"
+    HOST = "HOST"
+    # A mass operation: a parent activity whose children do the work.
+    MASS = "MASS"
 
 
 class ActivityStatus(StrEnum):
@@ -68,6 +73,12 @@ class ActivityStatus(StrEnum):
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+    # A mass operation in which some targets succeeded and others did not.
+    PARTIAL = "PARTIAL"
+
+
+MAX_PARALLEL = 20
+MAX_MASS_TARGETS = 500
 
 
 ACTIVE_STATUSES = (ActivityStatus.PENDING, ActivityStatus.RUNNING)
@@ -175,11 +186,11 @@ class OperationRunner:
         kind: OperationKind,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         requested_by: str | None = None,
+        *,
+        parent_id: int | None = None,
     ) -> Activity:
         instance = await session.scalar(
-            select(Instance)
-            .where(Instance.id == instance_id)
-            .options(selectinload(Instance.sid))
+            select(Instance).where(Instance.id == instance_id).options(selectinload(Instance.sid))
         )
         if instance is None:
             raise TargetNotFoundError("Instance not found")
@@ -195,6 +206,7 @@ class OperationRunner:
             timeout_seconds,
             {instance.system_id},
             requested_by,
+            parent_id=parent_id,
         )
 
     async def submit_system(
@@ -204,6 +216,8 @@ class OperationRunner:
         kind: OperationKind,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         requested_by: str | None = None,
+        *,
+        parent_id: int | None = None,
     ) -> Activity:
         system = await session.get(System, system_id)
         if system is None:
@@ -219,6 +233,7 @@ class OperationRunner:
             timeout_seconds,
             system_plan.involved,
             requested_by,
+            parent_id=parent_id,
         )
 
     @staticmethod
@@ -238,21 +253,24 @@ class OperationRunner:
         timeout_seconds: int,
         involved: set[int],
         requested_by: str | None = None,
+        *,
+        parent_id: int | None = None,
+        host_id: int | None = None,
     ) -> Activity:
         # One activity per system at a time: operations on a system and on its instances
         # would otherwise work against each other. A system operation also covers the
-        # systems it depends on.
+        # systems it depends on. Host operations are exclusive per host.
         async with self._submit_lock:
+            conflict = or_(
+                activity_systems.c.system_id.in_(involved),
+                Activity.system_id.in_(involved),
+            )
+            if host_id is not None:
+                conflict = Activity.host_id == host_id
             active = await session.scalar(
                 select(Activity)
                 .outerjoin(activity_systems)
-                .where(
-                    Activity.status.in_(ACTIVE_STATUSES),
-                    or_(
-                        activity_systems.c.system_id.in_(involved),
-                        Activity.system_id.in_(involved),
-                    ),
-                )
+                .where(Activity.status.in_(ACTIVE_STATUSES), conflict)
                 .limit(1)
             )
             if active is not None:
@@ -265,6 +283,8 @@ class OperationRunner:
                 target_label=label,
                 system_id=system_id,
                 instance_id=instance_id,
+                host_id=host_id,
+                parent_id=parent_id,
                 status=ActivityStatus.PENDING,
                 requested_by=requested_by,
                 timeout_seconds=timeout_seconds,
@@ -275,10 +295,100 @@ class OperationRunner:
             )
             session.add(activity)
             await session.commit()
-        activity_id = activity.id
+        self._start_task(activity.id)
+        return activity
+
+    def _start_task(self, activity_id: int) -> None:
         task = asyncio.create_task(self._run(activity_id), name=f"activity-{activity_id}")
         self._tasks[activity_id] = task
         task.add_done_callback(lambda _: self._tasks.pop(activity_id, None))
+
+    async def submit_host(
+        self,
+        session: AsyncSession,
+        host_id: int,
+        kind: OperationKind,
+        timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        requested_by: str | None = None,
+        *,
+        parent_id: int | None = None,
+    ) -> Activity:
+        """Run a host operation (so far only a discovery) as an activity."""
+        host = await session.get(Host, host_id)
+        if host is None:
+            raise TargetNotFoundError("Host not found")
+        if kind is not OperationKind.DISCOVER:
+            raise ValueError(f"{kind} is not a host operation")
+        return await self._submit(
+            session,
+            kind,
+            TargetType.HOST,
+            host.name,
+            None,
+            None,
+            timeout_seconds,
+            set(),
+            requested_by,
+            parent_id=parent_id,
+            host_id=host.id,
+        )
+
+    async def submit_mass(
+        self,
+        session: AsyncSession,
+        kind: OperationKind,
+        target_type: TargetType,
+        target_ids: list[int],
+        *,
+        parallel: int = 5,
+        stop_on_error: bool = False,
+        timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        requested_by: str | None = None,
+    ) -> Activity:
+        """Run ``kind`` on many targets as one parent activity with a child per target.
+
+        Up to ``parallel`` children run at the same time. Systems are ordered by their
+        dependencies: for a start or restart a selected system waits for the selected
+        systems it depends on, for a stop the dependents go first. A child that would
+        overlap with a running sibling (e.g. a shared database system) waits for it. With
+        ``stop_on_error`` no further children start after a failure.
+        """
+        ids = list(dict.fromkeys(target_ids))
+        if not ids:
+            raise TargetNotFoundError("No targets selected")
+        if len(ids) > MAX_MASS_TARGETS:
+            raise ValueError(f"At most {MAX_MASS_TARGETS} targets")
+        if not 1 <= parallel <= MAX_PARALLEL:
+            raise ValueError(f"parallel must be 1 to {MAX_PARALLEL}")
+        model = {TargetType.SYSTEM: System, TargetType.INSTANCE: Instance, TargetType.HOST: Host}
+        known = set(
+            await session.scalars(
+                select(model[target_type].id).where(model[target_type].id.in_(ids))
+            )
+        )
+        if missing := [i for i in ids if i not in known]:
+            raise TargetNotFoundError(f"Unknown targets: {missing}")
+        options = {
+            "target_type": target_type.value,
+            "targets": ids,
+            "parallel": parallel,
+            "stop_on_error": stop_on_error,
+        }
+        noun = {"SYSTEM": "systems", "INSTANCE": "instances", "HOST": "hosts"}[target_type]
+        activity = Activity(
+            kind=kind,
+            target_type=TargetType.MASS,
+            target_label=f"{len(ids)} {noun}",
+            status=ActivityStatus.PENDING,
+            requested_by=requested_by,
+            timeout_seconds=timeout_seconds,
+            requested_at=_now(),
+            options=json.dumps(options),
+        )
+        activity.systems = []
+        session.add(activity)
+        await session.commit()
+        self._start_task(activity.id)
         return activity
 
     # --- lifecycle ----------------------------------------------------------------------
@@ -321,6 +431,9 @@ class OperationRunner:
             activity.status = ActivityStatus.RUNNING
             activity.started_at = _now()
             await session.commit()
+            if activity.target_type == TargetType.MASS:
+                await self._run_mass(session, activity)
+                return
             error: str | None = None
             try:
                 await self._execute(session, activity)
@@ -347,6 +460,8 @@ class OperationRunner:
         keep showing them as running until the next discovery. Hosts that cannot be
         queried are skipped.
         """
+        if activity.target_type == TargetType.HOST:
+            return  # a discovery has just read the databases
         query = select(Instance).options(selectinload(Instance.host))
         if activity.instance_id is not None:
             query = query.where(Instance.id == activity.instance_id)
@@ -359,6 +474,167 @@ class OperationRunner:
             )
         hosts = {instance.host.id: instance.host for instance in await session.scalars(query)}
         await refresh_databases(session, hosts.values(), self._clients)
+        await session.commit()
+
+    # --- mass operations ----------------------------------------------------------------
+
+    async def _run_mass(self, session: AsyncSession, parent: Activity) -> None:
+        options = json.loads(parent.options or "{}")
+        target_type = TargetType(options["target_type"])
+        targets: list[int] = options["targets"]
+        parallel: int = options["parallel"]
+        stop_on_error: bool = options["stop_on_error"]
+        kind = OperationKind(parent.kind)
+        labels = await self._target_labels(session, target_type, targets)
+        prerequisites = await self._prerequisites(session, kind, target_type, targets)
+        await self._log(
+            session,
+            parent,
+            f"{kind} on {parent.target_label}, {parallel} at a time, "
+            + ("stop at the first failure" if stop_on_error else "continue after failures"),
+        )
+
+        pending = list(targets)
+        running: dict[int, int] = {}  # child activity id -> target id
+        results: dict[int, str] = {}  # target id -> status or SKIPPED
+        try:
+            while True:
+                failed = any(r == ActivityStatus.FAILED for r in results.values())
+                halted = stop_on_error and failed
+                launched = False
+                for target in list(pending):
+                    if halted or len(running) >= parallel:
+                        break
+                    needed = prerequisites.get(target, set())
+                    if any(results.get(n) not in (None, ActivityStatus.SUCCEEDED) for n in needed):
+                        pending.remove(target)
+                        results[target] = "SKIPPED"
+                        await self._log(
+                            session, parent, f"{labels[target]}: skipped, a dependency failed"
+                        )
+                        continue
+                    if not needed <= results.keys():
+                        continue  # waits for its dependencies
+                    try:
+                        child = await self._submit_child(session, kind, target_type, target, parent)
+                    except OperationConflictError as exc:
+                        if running:
+                            continue  # probably blocked by a sibling; try again later
+                        pending.remove(target)
+                        results[target] = "SKIPPED"
+                        await self._log(session, parent, f"{labels[target]}: skipped, {exc}")
+                        continue
+                    except (TargetNotFoundError, NotAssignedError) as exc:
+                        pending.remove(target)
+                        results[target] = ActivityStatus.FAILED
+                        await self._log(session, parent, f"{labels[target]}: {exc}")
+                        continue
+                    pending.remove(target)
+                    running[child.id] = target
+                    launched = True
+                    await self._log(
+                        session, parent, f"{labels[target]}: activity {child.id} started"
+                    )
+                if not running:
+                    if not launched:
+                        break
+                    continue
+                await self._wait_for_any(list(running))
+                for child_id in [c for c in running if c not in self._tasks]:
+                    target = running.pop(child_id)
+                    status = await session.scalar(
+                        select(Activity.status).where(Activity.id == child_id)
+                    )
+                    results[target] = status or ActivityStatus.FAILED
+                    await self._log(
+                        session, parent, f"{labels[target]}: activity {child_id} {status}"
+                    )
+        except asyncio.CancelledError:
+            await session.rollback()
+            await self._finish(session, parent, "Interrupted by server shutdown.")
+            raise
+
+        for target in pending:
+            results[target] = "SKIPPED"
+            await self._log(session, parent, f"{labels[target]}: not started")
+        await self._finish_mass(session, parent, results)
+
+    async def _submit_child(
+        self,
+        session: AsyncSession,
+        kind: OperationKind,
+        target_type: TargetType,
+        target: int,
+        parent: Activity,
+    ) -> Activity:
+        common = {"requested_by": parent.requested_by}
+        timeout = parent.timeout_seconds
+        if target_type == TargetType.HOST:
+            return await self.submit_host(
+                session, target, kind, timeout, parent_id=parent.id, **common
+            )
+        if target_type == TargetType.INSTANCE:
+            return await self.submit_instance(
+                session, target, kind, timeout, parent_id=parent.id, **common
+            )
+        return await self.submit_system(
+            session, target, kind, timeout, parent_id=parent.id, **common
+        )
+
+    async def _wait_for_any(self, activity_ids: list[int]) -> None:
+        tasks = [self._tasks[i] for i in activity_ids if i in self._tasks]
+        if tasks:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        # A task leaves self._tasks in its done callback, which runs on the next loop pass.
+        await asyncio.sleep(0)
+
+    @staticmethod
+    async def _target_labels(
+        session: AsyncSession, target_type: TargetType, targets: list[int]
+    ) -> dict[int, str]:
+        if target_type == TargetType.SYSTEM:
+            rows = await session.execute(
+                select(System.id, System.name).where(System.id.in_(targets))
+            )
+            return {i: f"System {name}" for i, name in rows}
+        if target_type == TargetType.HOST:
+            rows = await session.execute(select(Host.id, Host.name).where(Host.id.in_(targets)))
+            return {i: f"Host {name}" for i, name in rows}
+        instances = await session.scalars(
+            select(Instance).where(Instance.id.in_(targets)).options(selectinload(Instance.sid))
+        )
+        return {i.id: f"Instance {i.label}" for i in instances}
+
+    @staticmethod
+    async def _prerequisites(
+        session: AsyncSession, kind: OperationKind, target_type: TargetType, targets: list[int]
+    ) -> dict[int, set[int]]:
+        """target -> selected targets that must have succeeded before it may begin."""
+        if target_type != TargetType.SYSTEM:
+            return {}
+        graph = await load_graph(session)
+        selected = set(targets)
+        needs = {t: (dependency_closure(t, graph) - {t}) & selected for t in targets}
+        if kind == OperationKind.STOP:
+            # Dependents first: a system waits for the selected systems that need it.
+            return {t: {o for o in targets if t in needs[o]} for t in targets}
+        return needs
+
+    async def _finish_mass(
+        self, session: AsyncSession, parent: Activity, results: dict[int, str]
+    ) -> None:
+        succeeded = sum(1 for r in results.values() if r == ActivityStatus.SUCCEEDED)
+        failed = sum(1 for r in results.values() if r == ActivityStatus.FAILED)
+        skipped = len(results) - succeeded - failed
+        summary = f"{succeeded} succeeded, {failed} failed, {skipped} skipped"
+        parent.finished_at = _now()
+        if succeeded == len(results):
+            parent.status = ActivityStatus.SUCCEEDED
+            session.add(self._entry(parent, "INFO", f"Finished: {summary}"))
+        else:
+            parent.status = ActivityStatus.PARTIAL if succeeded else ActivityStatus.FAILED
+            parent.error = summary
+            session.add(self._entry(parent, "ERROR", f"Finished: {summary}"))
         await session.commit()
 
     async def _finish(self, session: AsyncSession, activity: Activity, error: str | None) -> None:
@@ -384,6 +660,9 @@ class OperationRunner:
 
     async def _execute(self, session: AsyncSession, activity: Activity) -> None:
         kind = OperationKind(activity.kind)
+        if activity.target_type == TargetType.HOST:
+            await self._discover(session, activity)
+            return
         phases = {
             OperationKind.START: (True,),
             OperationKind.STOP: (False,),
@@ -413,9 +692,7 @@ class OperationRunner:
             names = dict(
                 (
                     await session.execute(
-                        select(System.id, System.name).where(
-                            System.id.in_(system_plan.involved)
-                        )
+                        select(System.id, System.name).where(System.id.in_(system_plan.involved))
                     )
                 ).all()
             )
@@ -445,6 +722,32 @@ class OperationRunner:
                         )
                     name = names.get(system_id, f"#{system_id}")
                     await self._system_phase(session, activity, name, instances, start)
+
+    async def _discover(self, session: AsyncSession, activity: Activity) -> None:
+        host = await session.scalar(
+            select(Host)
+            .where(Host.id == activity.host_id)
+            .options(selectinload(Host.instances), selectinload(Host.databases))
+        )
+        if host is None:
+            raise OperationFailedError("The host no longer exists")
+        try:
+            result = await discover_host(session, host, self._clients)
+        except DiscoveryError as exc:
+            await session.commit()  # keep the "unreachable" marker on the host
+            raise OperationFailedError(f"The host agent could not be queried: {exc}") from exc
+        await session.commit()
+        await self._log(
+            session,
+            activity,
+            f"Discovery: {len(result.instances_added)} instances new, "
+            f"{len(result.instances_updated)} updated, {len(result.instances_missing)} missing; "
+            f"{len(result.databases_added)} databases new, "
+            f"{len(result.databases_updated)} updated, {len(result.databases_missing)} missing",
+        )
+        for warning in result.warnings:
+            session.add(self._entry(activity, "WARNING", warning))
+        await session.commit()
 
     @staticmethod
     async def _instances_by_system(
@@ -588,8 +891,7 @@ class OperationRunner:
                     break
                 if self._deadline_reached(deadline):
                     raise OperationFailedError(
-                        f"Timeout after {timeout} s: system {name} is {last}, "
-                        f"expected all {target}"
+                        f"Timeout after {timeout} s: system {name} is {last}, expected all {target}"
                     )
                 await self._sleep(self._poll_interval)
                 statuses = await self._read_statuses(instances)
