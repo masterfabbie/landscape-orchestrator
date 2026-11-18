@@ -144,6 +144,32 @@ class MockDatabase:
 
 
 @dataclass
+class MockCustomOperation:
+    """An operation configured in operations.d of the host agent.
+
+    ``command`` lists the parameters in the order of the command line. As on a real host
+    agent, parameters that are not passed are left out and the following ones move up.
+    ``PARAM-SLEEP`` sets the duration in seconds (default 2), ``PARAM-RC`` the exit code.
+    """
+
+    name: str
+    description: str
+    command: tuple[str, ...]
+
+
+@dataclass
+class MockOperationRun:
+    id: str
+    host: str
+    operation: MockCustomOperation
+    arguments: list[str]
+    started: float
+    duration: float
+    exit_code: int
+    cancelled: bool = False
+
+
+@dataclass
 class MockHost:
     name: str
     bind: str = "127.0.0.1"
@@ -172,8 +198,12 @@ class MockLandscape:
         stop_duration: float = 2.0,
         clock: Callable[[], float] = time.monotonic,
         strict_sapstartsrv_auth: bool = False,
+        custom_operations: list[MockCustomOperation] | None = None,
     ) -> None:
         self.hosts = hosts
+        # Configured in operations.d of every host, like a shared configuration.
+        self.custom_operations = {op.name: op for op in custom_operations or []}
+        self.operation_runs: dict[str, MockOperationRun] = {}
         self.users = users or {}
         # True: administrative sapstartsrv calls are allowed only to <sid>adm, as on real
         # systems; other known users get "Permission denied".
@@ -210,9 +240,7 @@ class MockLandscape:
                     )
                 )
             for db in host_data.get("databases", []):
-                host.databases.append(
-                    MockDatabase(db["name"], db["type"], db.get("instance_nr"))
-                )
+                host.databases.append(MockDatabase(db["name"], db["type"], db.get("instance_nr")))
             hosts.append(host)
         return cls(
             hosts,
@@ -221,7 +249,40 @@ class MockLandscape:
             stop_duration=data.get("stop_duration", 2.0),
             clock=clock,
             strict_sapstartsrv_auth=data.get("strict_sapstartsrv_auth", False),
+            custom_operations=[
+                MockCustomOperation(
+                    op["name"], op.get("description", op["name"]), tuple(op["command"])
+                )
+                for op in data.get("custom_operations", [])
+            ],
         )
+
+    def start_operation(
+        self, host: MockHost, operation: MockCustomOperation, arguments: dict[str, str]
+    ) -> MockOperationRun:
+        values = [arguments[key] for key in operation.command if arguments.get(key, "") != ""]
+        try:
+            duration = float(arguments.get("PARAM-SLEEP", "2"))
+        except ValueError:
+            duration = 2.0
+        try:
+            exit_code = int(arguments.get("PARAM-RC", "0"))
+        except ValueError:
+            exit_code = 0
+        run = MockOperationRun(
+            id=f"MOCK{len(self.operation_runs) + 1:028d}",
+            host=host.name,
+            operation=operation,
+            arguments=values,
+            started=self.clock(),
+            duration=duration,
+            exit_code=exit_code,
+        )
+        self.operation_runs[run.id] = run
+        return run
+
+    def operation_finished(self, run: MockOperationRun) -> bool:
+        return run.cancelled or self.clock() >= run.started + run.duration
 
     def host(self, name: str) -> MockHost:
         for host in self.hosts:
@@ -287,6 +348,21 @@ def default_landscape_config() -> dict[str, Any]:
         "start_duration": 3,
         "stop_duration": 2,
         "users": {"devadm": "mock", "sapadm": "mock"},
+        # Echoes its arguments like a test script; see MockCustomOperation.
+        "custom_operations": [
+            {
+                "name": "LO_TEST",
+                "description": "Test operation",
+                "command": [
+                    "SAPSYSTEMNAME",
+                    "SAPSYSTEM",
+                    "SERVICE_SUBTYPE",
+                    "PARAM-A",
+                    "PARAM-SLEEP",
+                    "PARAM-RC",
+                ],
+            }
+        ],
         "hosts": [
             {
                 "name": "sapapp1",

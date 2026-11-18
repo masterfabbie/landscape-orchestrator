@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from ..roles import instance_type_key
+
+__all__ = ["instance_type_key"]
+
 LANGUAGES = ("en", "de")
 DEFAULT_LANGUAGE = "en"
 
@@ -71,8 +75,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     "system.create_title": ("Create system", "System anlegen"),
     "system.create_hint": (
         "The name is suggested from the SID of the application instances and can be changed.",
-        "Der Name ist aus der SID der Anwendungsinstanzen vorgeschlagen und kann geändert "
-        "werden.",
+        "Der Name ist aus der SID der Anwendungsinstanzen vorgeschlagen und kann geändert werden.",
     ),
     "system.selected": ("Selected instances", "Ausgewählte Instanzen"),
     "system.remove_instance": ("Remove", "Entfernen"),
@@ -479,8 +482,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     ),
     "mass.busy": ("activity running", "Aktivität läuft"),
     "mass.busy_hint": (
-        "Targets with a running activity wait for a sibling of this mass operation or are "
-        "skipped.",
+        "Targets with a running activity wait for a sibling of this mass operation or are skipped.",
         "Ziele mit laufender Aktivität warten auf eine andere Teilaktivität dieser "
         "Massenoperation oder werden übersprungen.",
     ),
@@ -609,6 +611,133 @@ TEXTS: dict[str, tuple[str, str]] = {
         "This dependency would create a cycle.",
         "Diese Abhängigkeit würde einen Kreis bilden.",
     ),
+    # custom operations
+    "tab.operations": ("Operations", "Operationen"),
+    "kind.CUSTOM": ("Custom operation", "Eigene Operation"),
+    "activity.CANCELLED": ("cancelled", "abgebrochen"),
+    "activity.cancel": ("Cancel", "Abbrechen"),
+    "activity.cancel_confirm": (
+        "Cancel this activity? Start and stop only stop waiting; custom operations are "
+        "cancelled on the host.",
+        "Diese Aktivität abbrechen? Start und Stopp warten nur nicht mehr; eigene "
+        "Operationen werden auf dem Host abgebrochen.",
+    ),
+    "notice.activity_cancelled": (
+        "The activity was cancelled.",
+        "Die Aktivität wurde abgebrochen.",
+    ),
+    "error.not_active": ("The activity has already finished.", "Die Aktivität ist schon beendet."),
+    "custom.intro": (
+        "Custom operations run a script that is configured in operations.d of the host "
+        "agent. Only admins define them; each one has its own role for running it.",
+        "Eigene Operationen führen ein Skript aus, das im Host Agent unter operations.d "
+        "eingerichtet ist. Nur Admins legen sie an; jede hat eine eigene Rolle zum Ausführen.",
+    ),
+    "custom.empty": ("No custom operations yet.", "Noch keine eigenen Operationen."),
+    "custom.add": ("Add custom operation", "Eigene Operation anlegen"),
+    "custom.key": ("Key", "Schlüssel"),
+    "custom.name_hint": ("e.g. Copy kernel", "z. B. Kernel kopieren"),
+    "custom.agent_operation": ("Host agent operation", "Host-Agent-Operation"),
+    "custom.agent_hint": (
+        "Host agent operation is the Name: of the configuration file in operations.d. The "
+        "tool passes context parameters such as SAPSYSTEMNAME and the own parameters as "
+        "PARAM-<name>.",
+        "Host-Agent-Operation ist der Name: der Konfigurationsdatei in operations.d. Das "
+        "Tool übergibt Kontextparameter wie SAPSYSTEMNAME und die eigenen Parameter als "
+        "PARAM-<Name>.",
+    ),
+    "custom.ordering": ("Order on systems", "Reihenfolge bei Systemen"),
+    "custom.ordering.parallel": ("all instances at once", "alle Instanzen gleichzeitig"),
+    "custom.ordering.roles": (
+        "by roles like a start (database and central services first)",
+        "nach Rollen wie ein Start (Datenbank und zentrale Dienste zuerst)",
+    ),
+    "custom.ordering.sequential": ("one instance after the other", "eine Instanz nach der anderen"),
+    "custom.role": ("Role to run it", "Rolle zum Ausführen"),
+    "custom.timeout": ("Timeout (seconds)", "Zeitlimit (Sekunden)"),
+    "custom.instance_types": ("Instance types", "Instanztypen"),
+    "custom.instance_types_hint": (
+        "Only for instances and systems. None: all instances; diagnostics agents are then "
+        "left out on systems.",
+        "Nur für Instanzen und Systeme. Keiner: alle Instanzen; Diagnostics Agents bleiben "
+        "dann bei Systemen außen vor.",
+    ),
+    "custom.mass": ("Allowed as mass operation", "Als Massenoperation erlaubt"),
+    "custom.delete": ("Delete operation", "Operation löschen"),
+    "custom.delete_confirm": ("Delete this custom operation?", "Diese eigene Operation löschen?"),
+    "custom.operation": ("Custom operation", "Eigene Operation"),
+    "custom.parameters": ("Parameters", "Parameter"),
+    "custom.parameters_intro": (
+        "Passed to the host agent as PARAM-<name>, e.g. $[PARAM-KRNLREL] in Command:.",
+        "Werden dem Host Agent als PARAM-<Name> übergeben, z. B. $[PARAM-KRNLREL] in Command:.",
+    ),
+    "custom.parameters_hint": (
+        "An empty optional field is not passed; following positional arguments of the "
+        "script then move up.",
+        "Ein leeres optionales Feld wird nicht übergeben; folgende Positionsargumente des "
+        "Skripts rücken dann auf.",
+    ),
+    "custom.no_parameters": ("No parameters.", "Keine Parameter."),
+    "custom.parameter_add": ("Add parameter", "Parameter hinzufügen"),
+    "custom.parameter_delete": ("Delete parameter", "Parameter löschen"),
+    "custom.parameter_delete_confirm": ("Delete this parameter?", "Diesen Parameter löschen?"),
+    "custom.parameter_name": ("Name", "Name"),
+    "custom.parameter_label": ("Display name", "Anzeigename"),
+    "custom.parameter_type": ("Type", "Typ"),
+    "custom.type.STRING": ("Text", "Text"),
+    "custom.type.INTEGER": ("Integer", "Ganzzahl"),
+    "custom.type.BOOLEAN": ("Yes/no", "Ja/Nein"),
+    "custom.required": ("required", "Pflichtfeld"),
+    "custom.default": ("Default", "Standardwert"),
+    "custom.pattern": ("Pattern (regular expression)", "Muster (regulärer Ausdruck)"),
+    "custom.help": ("Help text", "Hilfetext"),
+    "custom.context": ("Context parameters", "Kontextparameter"),
+    "custom.context_intro": (
+        "Filled from the inventory and always passed. SERVICE_SUBTYPE is derived from the "
+        "instance type and the application servers of the system.",
+        "Aus dem Inventar gefüllt und immer übergeben. SERVICE_SUBTYPE wird aus dem "
+        "Instanztyp und den Anwendungsservern des Systems abgeleitet.",
+    ),
+    "custom.run": ("Run", "Ausführen"),
+    "mass.choose": ("Choose", "Auswählen"),
+    "notice.operation_saved": ("Operation saved.", "Operation gespeichert."),
+    "notice.operation_deleted": ("Operation deleted.", "Operation gelöscht."),
+    "notice.parameter_saved": ("Parameter saved.", "Parameter gespeichert."),
+    "notice.parameter_deleted": ("Parameter deleted.", "Parameter gelöscht."),
+    "error.operation_key": (
+        "Key: lowercase letters, digits and _, not the key of a built-in operation.",
+        "Schlüssel: Kleinbuchstaben, Ziffern und _, nicht der einer eingebauten Operation.",
+    ),
+    "error.operation_name": ("The operation needs a name.", "Die Operation braucht einen Namen."),
+    "error.operation_agent": (
+        "Host agent operation: letters, digits, '.', '_' and '-'.",
+        "Host-Agent-Operation: Buchstaben, Ziffern, '.', '_' und '-'.",
+    ),
+    "error.operation_key_taken": (
+        "An operation with this key already exists.",
+        "Es gibt schon eine Operation mit diesem Schlüssel.",
+    ),
+    "error.parameter_name": (
+        "Parameter name: letters, digits and _, e.g. KRNLREL.",
+        "Parametername: Buchstaben, Ziffern und _, z. B. KRNLREL.",
+    ),
+    "error.parameter_label": (
+        "The parameter needs a display name.",
+        "Der Parameter braucht einen Anzeigenamen.",
+    ),
+    "error.parameter_pattern": (
+        "The pattern is not a valid regular expression.",
+        "Das Muster ist kein gültiger regulärer Ausdruck.",
+    ),
+    "error.parameter_default": (
+        "The default value does not fit the type or pattern.",
+        "Der Standardwert passt nicht zu Typ oder Muster.",
+    ),
+    "error.parameter_taken": (
+        "A parameter with this name already exists.",
+        "Es gibt schon einen Parameter mit diesem Namen.",
+    ),
+    "error.parameter_values": ("Invalid parameters: {detail}", "Ungültige Parameter: {detail}"),
 }
 
 
@@ -629,23 +758,3 @@ def pick_language(cookie: str | None, accept_language: str | None) -> str:
         if first.startswith("de"):
             return "de"
     return DEFAULT_LANGUAGE
-
-
-def instance_type_key(features: str | None) -> str | None:
-    """Translation key of the instance type for a sapstartsrv feature list."""
-    names = set((features or "").split("|"))
-    if "SMDAGENT" in names:
-        return "itype.agent"
-    if "HDB" in names:
-        return "itype.hana"
-    if "MESSAGESERVER" in names or "ENQUE" in names:
-        return "itype.scs"
-    if "ENQREP" in names:
-        return "itype.ers"
-    if "ABAP" in names and "J2EE" in names:
-        return "itype.dual"
-    if "ABAP" in names:
-        return "itype.abap"
-    if "J2EE" in names:
-        return "itype.java"
-    return None

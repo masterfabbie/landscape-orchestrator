@@ -3,7 +3,7 @@
 {% block title %}{{ t("nav.configuration") }}{% endblock %}
 {% block content %}
 <h1>{{ t("nav.configuration") }}</h1>
-{{ ui.tabs([("hosts", "/configuration?tab=hosts", t("tab.hosts")), ("systems", "/configuration?tab=systems", t("tab.systems")), ("pools", "/configuration?tab=pools", t("tab.pools"))], tab, t("nav.configuration")) }}
+{{ ui.tabs([("hosts", "/configuration?tab=hosts", t("tab.hosts")), ("systems", "/configuration?tab=systems", t("tab.systems")), ("pools", "/configuration?tab=pools", t("tab.pools"))] + ([("operations", "/configuration?tab=operations", t("tab.operations"))] if can("admin") else []), tab, t("nav.configuration")) }}
 
 {% if tab == "hosts" %}
 <section class="card">
@@ -113,6 +113,36 @@
   {% else %}
   <p>{{ t("config.no_systems") }}</p>
   {% endif %}
+</section>
+
+{% elif tab == "operations" %}
+<section class="card">
+  <p class="muted">{{ t("custom.intro") }}</p>
+  {% if operations %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("custom.key") }}</th><th>{{ t("custom.agent_operation") }}</th><th>{{ t("field.target") }}</th><th>{{ t("custom.role") }}</th><th>{{ t("custom.parameters") }}</th></tr></thead>
+    <tbody>
+    {% for op in operations %}
+      <tr>
+        <td><a class="strong" href="/configuration/operations/{{ op.id }}">{{ op.name }}</a></td>
+        <td class="mono">{{ op.key }}</td>
+        <td class="mono">{{ op.agent_operation }}</td>
+        <td>{{ t("target." ~ op.target) }}</td>
+        <td>{{ t("role." ~ op.role) }}</td>
+        <td class="mono">{{ op.parameters | map(attribute="name") | join(", ") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>{{ t("custom.empty") }}</p>
+  {% endif %}
+</section>
+<section class="card">
+  <h2>{{ t("custom.add") }}</h2>
+  {{ ui.custom_operation_form("/configuration/operations", none, t, custom_targets, orderings, instance_types, roles) }}
 </section>
 
 {% else %}

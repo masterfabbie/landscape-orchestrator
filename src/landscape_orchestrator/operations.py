@@ -33,9 +33,11 @@ from .clients import (
     SoapError,
     SoapFaultError,
 )
+from .clients.hostagent import FAULT_TIMEOUT, OperationFault
 from .clients.sapcontrol import StateColor
 from .connections import ClientFactory
 from .crypto import SecretError
+from .customspec import CustomSpec, host_arguments, instance_arguments, spec_applies
 from .dependencies import SystemPlan, dependency_closure, load_graph, plan
 from .discovery import DiscoveryError, discover_host, instance_status
 from .models import (
@@ -52,12 +54,17 @@ from .status import refresh_databases
 
 logger = logging.getLogger(__name__)
 
+_LEVELS = {"error": "ERROR", "warning": "WARNING"}
+_BUILT_IN_INSTANCE_OPERATIONS = ("START", "STOP", "RESTART")
+
 
 class OperationKind(StrEnum):
     START = "START"
     STOP = "STOP"
     RESTART = "RESTART"
     DISCOVER = "DISCOVER"
+    # A custom operation: a script configured in the host agent's operations.d.
+    CUSTOM = "CUSTOM"
 
 
 class TargetType(StrEnum):
@@ -68,6 +75,12 @@ class TargetType(StrEnum):
     MASS = "MASS"
 
 
+def _cancel_note(activity: Activity) -> str:
+    if activity.kind in _BUILT_IN_INSTANCE_OPERATIONS:
+        return " Starts and stops already requested on the hosts keep running."
+    return ""
+
+
 class ActivityStatus(StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
@@ -75,6 +88,7 @@ class ActivityStatus(StrEnum):
     FAILED = "FAILED"
     # A mass operation in which some targets succeeded and others did not.
     PARTIAL = "PARTIAL"
+    CANCELLED = "CANCELLED"
 
 
 MAX_PARALLEL = 20
@@ -96,6 +110,10 @@ class TargetNotFoundError(Exception):
 
 class NotAssignedError(Exception):
     """The instance is not assigned to a system and cannot be operated."""
+
+
+class NotActiveError(Exception):
+    """The activity has already finished."""
 
 
 class OperationFailedError(Exception):
@@ -176,6 +194,8 @@ class OperationRunner:
         self._clock = clock
         self._tasks: dict[int, asyncio.Task[None]] = {}
         self._submit_lock = asyncio.Lock()
+        # Activities a user asked to cancel -> user name; their tasks are being cancelled.
+        self._cancel_requests: dict[int, str] = {}
 
     # --- submitting ---------------------------------------------------------------------
 
@@ -256,6 +276,7 @@ class OperationRunner:
         *,
         parent_id: int | None = None,
         host_id: int | None = None,
+        options: str | None = None,
     ) -> Activity:
         # One activity per system at a time: operations on a system and on its instances
         # would otherwise work against each other. A system operation also covers the
@@ -285,6 +306,7 @@ class OperationRunner:
                 instance_id=instance_id,
                 host_id=host_id,
                 parent_id=parent_id,
+                options=options,
                 status=ActivityStatus.PENDING,
                 requested_by=requested_by,
                 timeout_seconds=timeout_seconds,
@@ -333,6 +355,88 @@ class OperationRunner:
             host_id=host.id,
         )
 
+    async def submit_custom(
+        self,
+        session: AsyncSession,
+        spec: CustomSpec,
+        target_type: TargetType,
+        target_id: int,
+        parameters: dict[str, str],
+        timeout_seconds: int | None = None,
+        requested_by: str | None = None,
+        *,
+        parent_id: int | None = None,
+    ) -> Activity:
+        """Run a custom operation (a script in the host agent's operations.d) on a target.
+
+        ``parameters`` are the checked values, PARAM-<name> -> value (customops.py).
+        """
+        if TargetType(spec.target) != target_type:
+            raise ValueError(f"{spec.name} runs on {spec.target}, not on {target_type}")
+        system_id: int | None = None
+        instance_id: int | None = None
+        host_id: int | None = None
+        involved: set[int] = set()
+        if target_type == TargetType.INSTANCE:
+            instance = await session.scalar(
+                select(Instance).where(Instance.id == target_id).options(selectinload(Instance.sid))
+            )
+            if instance is None:
+                raise TargetNotFoundError("Instance not found")
+            if instance.system_id is None:
+                raise NotAssignedError(f"Instance {instance.label} is not assigned to a system")
+            label, system_id, instance_id = instance.label, instance.system_id, instance.id
+            involved = {instance.system_id}
+        elif target_type == TargetType.SYSTEM:
+            system = await session.get(System, target_id)
+            if system is None:
+                raise TargetNotFoundError("System not found")
+            label, system_id, involved = system.name, system.id, {system.id}
+        else:
+            host = await session.get(Host, target_id)
+            if host is None:
+                raise TargetNotFoundError("Host not found")
+            label, host_id = host.name, host.id
+        options = json.dumps({"custom": spec.to_dict(), "parameters": parameters})
+        return await self._submit(
+            session,
+            OperationKind.CUSTOM,
+            target_type,
+            label,
+            system_id,
+            instance_id,
+            timeout_seconds or spec.timeout_seconds,
+            involved,
+            requested_by,
+            parent_id=parent_id,
+            host_id=host_id,
+            options=options,
+        )
+
+    async def cancel(self, session: AsyncSession, activity_id: int, user: str) -> Activity:
+        """Cancel a running activity on behalf of ``user``.
+
+        Start, stop and restart stop waiting and request nothing more; what was already
+        requested on the hosts keeps running. Custom operations are cancelled on the host
+        agent (CancelOperation, O-HARD). A mass operation starts no further children and
+        cancels the running ones.
+        """
+        activity = await session.get(Activity, activity_id)
+        if activity is None:
+            raise TargetNotFoundError("Activity not found")
+        if activity.status not in ACTIVE_STATUSES:
+            raise NotActiveError(f"Activity {activity_id} has already finished")
+        self._cancel_requests[activity_id] = user
+        task = self._tasks.get(activity_id)
+        if task is not None:
+            task.cancel()
+            await asyncio.wait([task])
+        else:
+            self._cancel_requests.pop(activity_id, None)
+            await self._finish_cancelled(session, activity, f"Cancelled by {user}.")
+        session.expire_all()
+        return await session.get(Activity, activity_id)
+
     async def submit_mass(
         self,
         session: AsyncSession,
@@ -344,6 +448,8 @@ class OperationRunner:
         stop_on_error: bool = False,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         requested_by: str | None = None,
+        custom: CustomSpec | None = None,
+        parameters: dict[str, str] | None = None,
     ) -> Activity:
         """Run ``kind`` on many targets as one parent activity with a child per target.
 
@@ -374,11 +480,13 @@ class OperationRunner:
             "parallel": parallel,
             "stop_on_error": stop_on_error,
         }
+        if custom is not None:
+            options |= {"custom": custom.to_dict(), "parameters": parameters or {}}
         noun = {"SYSTEM": "systems", "INSTANCE": "instances", "HOST": "hosts"}[target_type]
         activity = Activity(
             kind=kind,
             target_type=TargetType.MASS,
-            target_label=f"{len(ids)} {noun}",
+            target_label=(f"{custom.name}: " if custom else "") + f"{len(ids)} {noun}",
             status=ActivityStatus.PENDING,
             requested_by=requested_by,
             timeout_seconds=timeout_seconds,
@@ -424,6 +532,25 @@ class OperationRunner:
     # --- running ------------------------------------------------------------------------
 
     async def _run(self, activity_id: int) -> None:
+        try:
+            await self._run_activity(activity_id)
+        except asyncio.CancelledError:
+            # The cancellation may have hit the session anywhere, even while it connected;
+            # the activity is finished in a fresh session.
+            user = self._cancel_requests.pop(activity_id, None)
+            async with self._session_factory() as session:
+                activity = await session.get(Activity, activity_id)
+                if activity is not None and activity.status in ACTIVE_STATUSES:
+                    if user is None:
+                        await self._finish(session, activity, "Interrupted by server shutdown.")
+                    else:
+                        await self._finish_cancelled(
+                            session, activity, f"Cancelled by {user}.{_cancel_note(activity)}"
+                        )
+            if user is None:
+                raise
+
+    async def _run_activity(self, activity_id: int) -> None:
         async with self._session_factory() as session:
             activity = await session.get(Activity, activity_id)
             if activity is None:
@@ -437,11 +564,6 @@ class OperationRunner:
             error: str | None = None
             try:
                 await self._execute(session, activity)
-            except asyncio.CancelledError:
-                # The cancellation may have hit a flush; start from a clean transaction.
-                await session.rollback()
-                await self._finish(session, activity, "Interrupted by server shutdown.")
-                raise
             except (OperationFailedError, SoapError, SecretError) as exc:
                 error = str(exc)
             except Exception as exc:  # noqa: BLE001 - an activity must never stay "running"
@@ -551,8 +673,28 @@ class OperationRunner:
                     )
         except asyncio.CancelledError:
             await session.rollback()
-            await self._finish(session, parent, "Interrupted by server shutdown.")
-            raise
+            user = self._cancel_requests.pop(parent.id, None)
+            if user is None:
+                await self._finish(session, parent, "Interrupted by server shutdown.")
+                raise
+            tasks = []
+            for child_id in running:
+                self._cancel_requests[child_id] = user
+                if (task := self._tasks.get(child_id)) is not None:
+                    task.cancel()
+                    tasks.append(task)
+            if tasks:
+                await asyncio.wait(tasks)
+            for child_id, target in running.items():
+                results[target] = (
+                    await session.scalar(select(Activity.status).where(Activity.id == child_id))
+                    or ActivityStatus.CANCELLED
+                )
+            for target in pending:
+                results[target] = "SKIPPED"
+            await self._log(session, parent, f"Cancelled by {user}")
+            await self._finish_mass(session, parent, results, cancelled_by=user)
+            return
 
         for target in pending:
             results[target] = "SKIPPED"
@@ -569,6 +711,18 @@ class OperationRunner:
     ) -> Activity:
         common = {"requested_by": parent.requested_by}
         timeout = parent.timeout_seconds
+        if kind is OperationKind.CUSTOM:
+            options = json.loads(parent.options or "{}")
+            return await self.submit_custom(
+                session,
+                CustomSpec.from_dict(options["custom"]),
+                target_type,
+                target,
+                options.get("parameters", {}),
+                timeout,
+                parent_id=parent.id,
+                **common,
+            )
         if target_type == TargetType.HOST:
             return await self.submit_host(
                 session, target, kind, timeout, parent_id=parent.id, **common
@@ -610,7 +764,7 @@ class OperationRunner:
         session: AsyncSession, kind: OperationKind, target_type: TargetType, targets: list[int]
     ) -> dict[int, set[int]]:
         """target -> selected targets that must have succeeded before it may begin."""
-        if target_type != TargetType.SYSTEM:
+        if target_type != TargetType.SYSTEM or kind is OperationKind.CUSTOM:
             return {}
         graph = await load_graph(session)
         selected = set(targets)
@@ -621,20 +775,40 @@ class OperationRunner:
         return needs
 
     async def _finish_mass(
-        self, session: AsyncSession, parent: Activity, results: dict[int, str]
+        self,
+        session: AsyncSession,
+        parent: Activity,
+        results: dict[int, str],
+        cancelled_by: str | None = None,
     ) -> None:
         succeeded = sum(1 for r in results.values() if r == ActivityStatus.SUCCEEDED)
         failed = sum(1 for r in results.values() if r == ActivityStatus.FAILED)
-        skipped = len(results) - succeeded - failed
+        cancelled = sum(1 for r in results.values() if r == ActivityStatus.CANCELLED)
+        skipped = len(results) - succeeded - failed - cancelled
         summary = f"{succeeded} succeeded, {failed} failed, {skipped} skipped"
+        if cancelled:
+            summary += f", {cancelled} cancelled"
         parent.finished_at = _now()
-        if succeeded == len(results):
+        if cancelled_by is not None:
+            parent.status = ActivityStatus.CANCELLED
+            parent.error = f"Cancelled by {cancelled_by}: {summary}"
+            session.add(self._entry(parent, "WARNING", f"Finished: {summary}"))
+        elif succeeded == len(results):
             parent.status = ActivityStatus.SUCCEEDED
             session.add(self._entry(parent, "INFO", f"Finished: {summary}"))
         else:
             parent.status = ActivityStatus.PARTIAL if succeeded else ActivityStatus.FAILED
             parent.error = summary
             session.add(self._entry(parent, "ERROR", f"Finished: {summary}"))
+        await session.commit()
+
+    async def _finish_cancelled(
+        self, session: AsyncSession, activity: Activity, message: str
+    ) -> None:
+        activity.finished_at = _now()
+        activity.status = ActivityStatus.CANCELLED
+        activity.error = message
+        session.add(self._entry(activity, "WARNING", message))
         await session.commit()
 
     async def _finish(self, session: AsyncSession, activity: Activity, error: str | None) -> None:
@@ -660,6 +834,9 @@ class OperationRunner:
 
     async def _execute(self, session: AsyncSession, activity: Activity) -> None:
         kind = OperationKind(activity.kind)
+        if kind is OperationKind.CUSTOM:
+            await self._execute_custom(session, activity)
+            return
         if activity.target_type == TargetType.HOST:
             await self._discover(session, activity)
             return
@@ -722,6 +899,186 @@ class OperationRunner:
                         )
                     name = names.get(system_id, f"#{system_id}")
                     await self._system_phase(session, activity, name, instances, start)
+
+    # --- custom operations --------------------------------------------------------------
+
+    async def _execute_custom(self, session: AsyncSession, activity: Activity) -> None:
+        """Run the script of a custom operation through the host agent and follow it.
+
+        For a system the operation runs on each matching instance, in steps given by the
+        ordering of the definition: all at once, by roles like a start, or one after another.
+        """
+        options = json.loads(activity.options or "{}")
+        spec = CustomSpec.from_dict(options["custom"])
+        values: dict[str, str] = options.get("parameters", {})
+        steps: list[list[tuple[str, Host, dict[str, str]]]]
+        if activity.target_type == TargetType.HOST:
+            host = await session.get(Host, activity.host_id)
+            if host is None:
+                raise OperationFailedError("The host no longer exists")
+            steps = [[("", host, host_arguments(host) | values)]]
+        else:
+            system = await session.scalar(
+                select(System)
+                .where(System.id == activity.system_id)
+                .options(
+                    selectinload(System.instances).selectinload(Instance.host),
+                    selectinload(System.instances).selectinload(Instance.sid),
+                )
+            )
+            if system is None:
+                raise OperationFailedError("The system no longer exists")
+            if activity.target_type == TargetType.INSTANCE:
+                instances = [i for i in system.instances if i.id == activity.instance_id]
+                if not instances:
+                    raise OperationFailedError("The instance is no longer part of the system")
+                groups = [instances]
+            else:
+                instances = [i for i in system.instances if spec_applies(spec, i, system=True)]
+                if not instances:
+                    raise OperationFailedError(
+                        f"System {system.name} has no instances this operation applies to"
+                    )
+                groups = self._custom_steps(spec.ordering, instances)
+            several = activity.target_type == TargetType.SYSTEM
+            steps = [
+                [
+                    (i.label if several else "", i.host, instance_arguments(i, system) | values)
+                    for i in group
+                ]
+                for group in groups
+            ]
+
+        await self._log(
+            session,
+            activity,
+            f"{spec.name}: host agent operation {spec.agent_operation}, parameters "
+            + (", ".join(f"{k}={v}" for k, v in values.items()) or "none"),
+        )
+        deadline = self._clock() + activity.timeout_seconds
+        lock = asyncio.Lock()
+        for step in steps:
+            outcomes = await asyncio.gather(
+                *(
+                    self._run_host_operation(
+                        session, activity, spec, label, host, arguments, deadline, lock
+                    )
+                    for label, host, arguments in step
+                ),
+                return_exceptions=True,
+            )
+            for outcome in outcomes:
+                if isinstance(outcome, BaseException) and not isinstance(outcome, Exception):
+                    raise outcome
+            errors = [str(o) for o in outcomes if isinstance(o, Exception)]
+            if errors:
+                raise OperationFailedError("; ".join(errors))
+
+    def _custom_steps(self, ordering: str, instances: list[Instance]) -> list[list[Instance]]:
+        if ordering == "sequential":
+            return [[i] for i in sorted(instances, key=lambda i: (i.priority, i.label))]
+        if ordering == "roles":
+            steps = []
+            for tracks in self._phases(instances, start=True):
+                steps.append([i for track in tracks for group in track for i in group])
+            return steps
+        return [instances]
+
+    async def _run_host_operation(
+        self,
+        session: AsyncSession,
+        activity: Activity,
+        spec: CustomSpec,
+        label: str,
+        host: Host,
+        arguments: dict[str, str],
+        deadline: float,
+        lock: asyncio.Lock,
+    ) -> None:
+        """Start the script on one host, copy its messages into the log until it ends.
+
+        Seen on a real host agent: GetOperationResults answers a running operation with fault
+        255 and the messages so far, a failed one (exit code other than 0) with fault 127.
+        """
+        prefix = f"{label}: " if label else ""
+        logged = 0
+
+        async def log(level: str, message: str) -> None:
+            async with lock:
+                session.add(self._entry(activity, level, prefix + message))
+                await session.commit()
+
+        async def log_new(entries: list[tuple[str, str]]) -> None:
+            nonlocal logged
+            # "Executing ... hook" only appears while the script runs.
+            lasting = [e for e in entries if "saphostcontrol: Executing" not in e[1]]
+            for key, value in lasting[logged:]:
+                await log(_LEVELS.get(key.lower(), "INFO"), value)
+            logged = max(logged, len(lasting))
+
+        try:
+            async with self._clients.hostagent(host) as agent:
+                started = await agent.execute_async(spec.agent_operation, arguments)
+        except SoapFaultError as exc:
+            raise OperationFailedError(
+                f"{prefix}ExecuteOperation {spec.agent_operation} on {host.name} was rejected: "
+                f"{exc.faultstring}. Is the operation configured in operations.d of this host?"
+            ) from exc
+        except SoapConnectionError as exc:
+            raise OperationFailedError(
+                f"{prefix}the host agent of {host.name} could not be reached ({exc})"
+            ) from exc
+        operation_id = started.operation_id
+        if not operation_id:
+            raise OperationFailedError(f"{prefix}the host agent returned no operation ID")
+        await log("INFO", f"Started on {host.name}, operation {operation_id}")
+
+        try:
+            while True:
+                async with self._clients.hostagent(host) as agent:
+                    finished = await agent.is_operation_finished(operation_id)
+                    try:
+                        result = await agent.get_operation_results(operation_id)
+                    except OperationFault as fault:
+                        await log_new(fault.result.entries)
+                        if fault.code == FAULT_TIMEOUT and not finished:
+                            pass  # still running
+                        elif fault.code == FAULT_TIMEOUT:
+                            continue  # finished in between; read the results again
+                        else:
+                            errors = [v for k, v in fault.result.entries if k.lower() == "error"]
+                            reason = errors[-1] if errors else fault.faultstring
+                            raise OperationFailedError(f"{prefix}{reason}") from fault
+                    else:
+                        await log_new(result.entries)
+                        if finished:
+                            return
+                if self._deadline_reached(deadline):
+                    await self._cancel_host_operation(host, operation_id, log, log_new)
+                    raise OperationFailedError(
+                        f"{prefix}Timeout after {activity.timeout_seconds} s; the operation "
+                        "was cancelled on the host"
+                    )
+                await self._sleep(self._poll_interval)
+        except asyncio.CancelledError:
+            if activity.id in self._cancel_requests:
+                await self._cancel_host_operation(host, operation_id, log, log_new)
+            else:
+                await log(
+                    "WARNING",
+                    f"Interrupted; operation {operation_id} may still run on {host.name}",
+                )
+            raise
+
+    async def _cancel_host_operation(self, host: Host, operation_id: str, log, log_new) -> None:
+        try:
+            async with self._clients.hostagent(host) as agent:
+                result = await agent.cancel_operation(operation_id)
+        except (SoapError, SecretError) as exc:
+            await log("ERROR", f"CancelOperation for {operation_id} failed: {exc}")
+            return
+        await log_new(result.entries)
+        await log("WARNING", f"Operation {operation_id} cancelled on {host.name}")
 
     async def _discover(self, session: AsyncSession, activity: Activity) -> None:
         host = await session.scalar(

@@ -3,8 +3,15 @@
 {% block title %}{{ t("activity.title") }} {{ activity.id }}{% endblock %}
 {% block content %}
 <div class="card-head">
-  <h1>{{ t("activity.title") }} {{ activity.id }}: {{ t("kind." ~ activity.kind) }} <span class="mono">{{ activity.target_label }}</span></h1>
-  {{ ui.status_badge(activity.status, t, "activity") }}
+  <h1>{{ t("activity.title") }} {{ activity.id }}: {{ options.custom.name if options.get("custom") else t("kind." ~ activity.kind) }} <span class="mono">{{ activity.target_label }}</span></h1>
+  <span class="buttons">
+    {{ ui.status_badge(activity.status, t, "activity") }}
+    {% if refresh and can("operator") %}
+    <form method="post" action="/activities/{{ activity.id }}/cancel" data-confirm="{{ t('activity.cancel_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+      <button type="submit" class="secondary">{{ t("activity.cancel") }}</button>
+    </form>
+    {% endif %}
+  </span>
 </div>
 {% if refresh %}<p class="muted" role="status">{{ t("activity.refreshing") }}</p>{% endif %}
 {% if activity.error %}<p class="flash error" role="alert">{{ activity.error }}</p>{% endif %}
@@ -17,6 +24,11 @@
     </dd>
     <dt>{{ t("field.requested") }}</dt><dd>{{ activity.requested_at | time }}{% if activity.requested_by %} · <span class="mono">{{ activity.requested_by }}</span>{% endif %}</dd>
     <dt>{{ t("field.finished") }}</dt><dd>{{ activity.finished_at | time }}</dd>
+    {% if options.get("custom") %}
+    <dt>{{ t("custom.operation") }}</dt><dd>{{ options.custom.name }} <span class="mono muted">{{ options.custom.agent_operation }}</span></dd>
+    <dt>{{ t("custom.parameters") }}</dt>
+    <dd class="mono">{% for name, value in (options.get("parameters") or {}).items() %}{{ name }}={{ value }}{% if not loop.last %}, {% endif %}{% else %}–{% endfor %}</dd>
+    {% endif %}
   </dl>
 </section>
 

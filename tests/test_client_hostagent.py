@@ -179,3 +179,40 @@ async def test_instance_with_virtual_hostname_needs_hostname(clock):
         clock.advance(3)
         running = await client.list_instances(InstanceStatus.RUNNING)
     assert sorted(i.hostname for i in running) == ["sapapp1", "sapdevci"]
+
+
+async def test_asynchronous_custom_operation(landscape, clock):
+    """As seen on a real host agent: results while running are fault 255 with the lines so
+    far, a failed script is fault 127, a cancelled operation is forgotten (fault -20)."""
+    from landscape_orchestrator.clients.hostagent import (
+        FAULT_COMMAND_FAILED,
+        FAULT_TIMEOUT,
+        FAULT_UNKNOWN_OPERATION,
+        OperationFault,
+    )
+
+    async with make_client(landscape) as client:
+        arguments = {"SAPSYSTEMNAME": "DEV", "PARAM-SLEEP": "5", "PARAM-RC": "3"}
+        operation_id = (await client.execute_async("LO_TEST", arguments)).operation_id
+        assert operation_id and not await client.is_operation_finished(operation_id)
+        with pytest.raises(OperationFault) as running:
+            await client.get_operation_results(operation_id)
+        assert running.value.code == FAULT_TIMEOUT
+        assert running.value.result.entries[-1][1].startswith("saphostcontrol: Executing")
+        clock.advance(5)
+        assert await client.is_operation_finished(operation_id)
+        with pytest.raises(OperationFault) as failed:
+            await client.get_operation_results(operation_id)
+        assert failed.value.code == FAULT_COMMAND_FAILED
+        assert failed.value.result.entries[-1] == (
+            "Error",
+            "saphostcontrol: Test operation hook failed (exit code = 3)",
+        )
+
+        started = await client.execute_async("LO_TEST", {"PARAM-SLEEP": "60", "PARAM-RC": "0"})
+        other = started.operation_id
+        result = await client.cancel_operation(other)
+        assert result.entries[-1][1].endswith("hook failed (exit code = 15)")
+        with pytest.raises(OperationFault) as gone:
+            await client.get_operation_results(other)
+        assert gone.value.code == FAULT_UNKNOWN_OPERATION

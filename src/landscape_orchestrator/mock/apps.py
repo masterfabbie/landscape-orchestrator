@@ -216,9 +216,7 @@ def create_sapcontrol_app(landscape: MockLandscape, host_name: str, nr: int) -> 
         # Real systems allow administrative calls only to <sid>adm (unless configured
         # otherwise); the mock does so when the landscape asks for it.
         administrators=lambda: (
-            frozenset({f"{instance.sid.lower()}adm"})
-            if landscape.strict_sapstartsrv_auth
-            else None
+            frozenset({f"{instance.sid.lower()}adm"}) if landscape.strict_sapstartsrv_auth else None
         ),
     )
     title = f"Mock sapstartsrv {instance.sid}/{nr:02d} on {host_name}"
@@ -227,7 +225,16 @@ def create_sapcontrol_app(landscape: MockLandscape, host_name: str, nr: int) -> 
 
 # --- SAPHostControl (host agent) ----------------------------------------------------------
 
-HOSTCONTROL_PROTECTED = frozenset({"StartInstance", "StopInstance", "ExecuteOperation"})
+HOSTCONTROL_PROTECTED = frozenset(
+    {
+        "StartInstance",
+        "StopInstance",
+        "ExecuteOperation",
+        "IsOperationFinished",
+        "GetOperationResults",
+        "CancelOperation",
+    }
+)
 
 # Output of the operation "versioninfo" of a real host agent 7.22, shortened. The real host
 # agent returned these lines as log messages; the message key used per line is an assumption.
@@ -408,14 +415,97 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
         return {
             "response": {
                 "mOperationID": "",
-                "mOperationResults": [
-                    {"mMessageKey": "description", "mMessageValue": description}
-                ],
+                "mOperationResults": [{"mMessageKey": "description", "mMessageValue": description}],
             }
         }
 
+    def _operation_fault(message: str, code: int, run=None, lines=None) -> SoapFault:
+        return SoapFault(
+            message,
+            detail=(
+                "urn:SAPHostControl",
+                "OperationException",
+                {
+                    "mFaultCode": code,
+                    "mMessage": message,
+                    "mOperationID": run.id if run else None,
+                    "mResponseMessages": lines or [],
+                },
+            ),
+        )
+
+    def _run_lines(run, final: bool) -> list[dict[str, str]]:
+        """Messages of a run, as a real host agent returns them for a test script."""
+        desc = run.operation.description
+        lines = [{"mMessageKey": "Info", "mMessageValue": f"{desc}: count={len(run.arguments)}"}]
+        lines += [
+            {"mMessageKey": "Info", "mMessageValue": f"{desc}: arg{i}=[{value}]"}
+            for i, value in enumerate(run.arguments, start=1)
+        ]
+        lines.append({"mMessageKey": "Warning", "mMessageValue": f"{desc}:  test warning"})
+        if not final:
+            lines.append(
+                {"mMessageKey": "Info", "mMessageValue": f"saphostcontrol: Executing {desc} hook"}
+            )
+        elif run.cancelled or run.exit_code:
+            code = 15 if run.cancelled else run.exit_code
+            lines.append({"mMessageKey": "Error", "mMessageValue": f"{desc}:  test error"})
+            lines.append(
+                {
+                    "mMessageKey": "Error",
+                    "mMessageValue": f"saphostcontrol: {desc} hook failed (exit code = {code})",
+                }
+            )
+        else:
+            lines.append(
+                {
+                    "mMessageKey": "Info",
+                    "mMessageValue": f"saphostcontrol: {desc} hook successfully executed",
+                }
+            )
+        return lines
+
+    def _run(params: dict[str, Any]):
+        run = landscape.operation_runs.get(params.get("aOperationID") or "")
+        if run is None or run.host != host.name:
+            raise _operation_fault("Operation ID not found", -20)
+        return run
+
+    def is_operation_finished(params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            run = _run(params)
+        except SoapFault as exc:
+            raise _operation_fault("Failed to determine operation status", -20) from exc
+        return {"IsFinished": landscape.operation_finished(run)}
+
+    def get_operation_results(params: dict[str, Any]) -> dict[str, Any]:
+        run = _run(params)
+        if not landscape.operation_finished(run):
+            raise _operation_fault("Timeout occurred", 255, run, _run_lines(run, final=False))
+        if run.exit_code or run.cancelled:
+            raise _operation_fault("Command execution failed.", 127, run, _run_lines(run, True))
+        return {"result": {"mOperationID": run.id, "mOperationResults": _run_lines(run, True)}}
+
+    def cancel_operation(params: dict[str, Any]) -> dict[str, Any]:
+        run = _run(params)
+        if landscape.operation_finished(run):
+            raise _operation_fault("Operation ID not found", -20)
+        run.cancelled = True
+        lines = _run_lines(run, final=True)
+        del landscape.operation_runs[run.id]  # a real host agent forgets cancelled operations
+        raise _operation_fault("Command execution failed.", 127, run, lines)
+
     def execute_operation(params: dict[str, Any]) -> dict[str, Any]:
         name = params.get("aOperation")
+        custom = landscape.custom_operations.get(name or "")
+        if custom is not None:
+            arguments = {
+                item.get("mKey"): item.get("mValue") or ""
+                for item in items(params.get("aArguments"))
+                if isinstance(item, dict)
+            }
+            run = landscape.start_operation(host, custom, arguments)
+            return {"result": {"mOperationID": run.id, "mOperationResults": []}}
         if name != "versioninfo":
             raise SoapFault(f"Operation '{name}' not found")
         lines = ["saphostcontrol: Executing 'Retrieve version info'", *HOSTAGENT_VERSION_LINES]
@@ -449,6 +539,9 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
             "StartInstance": start_instance,
             "StopInstance": stop_instance,
             "ExecuteOperation": execute_operation,
+            "IsOperationFinished": is_operation_finished,
+            "GetOperationResults": get_operation_results,
+            "CancelOperation": cancel_operation,
         },
         protected=HOSTCONTROL_PROTECTED,
     )

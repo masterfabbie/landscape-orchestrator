@@ -5,9 +5,9 @@
 {# Menu "Operations" with the operations of the catalog the user may run on the target type
    (SYSTEM, INSTANCE or HOST). ``disabled`` is the running activity, if any; the entries are
    greyed out and the menu links to it. #}
-{% macro operation_buttons(action, t, disabled=false, system=false, target=none) %}
+{% macro operation_buttons(action, t, disabled=false, system=false, target=none, instance=none) %}
 {% set target = target or ("SYSTEM" if system else "INSTANCE") %}
-{% set available = ops(target) %}
+{% set available = ops(target, instance) %}
 {% if available %}
 <details class="menu">
   <summary>{{ t("op.menu") }}</summary>
@@ -16,11 +16,17 @@
     <p class="menu-note">{{ t("op.busy") }}{% if disabled.id is defined %} <a href="/activities/{{ disabled.id }}">{{ t("activity.title") }} {{ disabled.id }}</a>{% endif %}</p>
     {% endif %}
     {% for operation in available %}
+    {% if operation.custom %}
+    {# Custom operations first ask for their parameters. #}
+    {% if disabled %}<span class="menu-item disabled" aria-disabled="true">{{ operation.custom.name }}</span>
+    {% else %}<a class="menu-item" href="/run{{ action }}/{{ operation.key }}">{{ operation.custom.name }}…</a>{% endif %}
+    {% else %}
     <form method="post" action="{{ action }}/{{ operation.key }}" data-confirm="{{ t('op.confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
       <button type="submit" class="menu-item{{ ' danger' if operation.danger else '' }}" {% if disabled %}disabled{% endif %}>
         {{ t(operation.label_key(target)) }}
       </button>
     </form>
+    {% endif %}
     {% endfor %}
   </div>
 </details>
@@ -67,7 +73,7 @@
       {% if show_host %}<td><a href="/hosts/{{ instance.host_id }}">{{ instance.host.name }}</a></td>{% endif %}
       <td>{{ status_badge(instance.last_status, t) }}</td>
       <td class="muted">{{ instance.status_checked_at | time }}</td>
-      <td>{% if instance.system_id %}{{ operation_buttons("/instances/" ~ instance.id, t, disabled) }}{% endif %}</td>
+      <td>{% if instance.system_id %}{{ operation_buttons("/instances/" ~ instance.id, t, disabled, instance=instance) }}{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
@@ -192,5 +198,82 @@
   <p class="muted">{{ t("tags.hint") }}</p>
   <label>{{ t("field.tags") }} <input name="tags" maxlength="2000" value="{{ owner.tags | map(attribute='text') | join(', ') }}" placeholder="dev, internetfacing, sla=1"></label>
   <div><button type="submit">{{ t("action.save") }}</button></div>
+</form>
+{% endmacro %}
+
+{# Input fields for the parameters of a custom operation, named param.<NAME>, prefilled
+   with the defaults. An empty optional field is not passed to the host agent. #}
+{% macro parameter_fields(operation, t) %}
+{% if operation.parameters %}
+<section class="card">
+  <h2>{{ t("custom.parameters") }}</h2>
+  <div class="fields">
+  {% for p in operation.parameters %}
+    {% if p.type == "BOOLEAN" %}
+    {# The hidden field sends "false" for an unchecked box; a checked box comes later and wins. #}
+    <input type="hidden" name="param.{{ p.name }}" value="false">
+    <label class="check"><input type="checkbox" name="param.{{ p.name }}" value="true" {% if p.default in ("true", "on", "1", "yes") %}checked{% endif %}> {{ p.label }} <span class="mono muted">{{ p.name }}</span></label>
+    {% else %}
+    <label>{{ p.label }}{% if p.required %} *{% endif %} <span class="mono muted">{{ p.name }}</span>
+      <input name="param.{{ p.name }}" value="{{ p.default or '' }}" maxlength="1024" {% if p.required %}required{% endif %}
+        {% if p.type == "INTEGER" %}inputmode="numeric" pattern="-?[0-9]+"{% elif p.pattern %}pattern="{{ p.pattern }}"{% endif %}
+        {% if p.help %}title="{{ p.help }}"{% endif %}>
+      {% if p.help %}<small class="muted">{{ p.help }}</small>{% endif %}
+    </label>
+    {% endif %}
+  {% endfor %}
+  </div>
+  <p class="muted">{{ t("custom.parameters_hint") }}</p>
+</section>
+{% endif %}
+{% endmacro %}
+
+{# Form of a custom operation; ``op`` is none for a new one. #}
+{% macro custom_operation_form(action, op, t, targets, orderings, instance_types, roles) %}
+<form method="post" action="{{ action }}" class="stack">
+  <div class="fields">
+    <label>{{ t("field.name") }} <input name="name" required maxlength="128" value="{{ op.name if op else '' }}" placeholder="{{ t('custom.name_hint') }}"></label>
+    <label>{{ t("custom.key") }} <input name="key" required maxlength="64" pattern="[a-z][a-z0-9_]*" value="{{ op.key if op else '' }}" placeholder="copy_kernel"></label>
+    <label>{{ t("custom.agent_operation") }} <input name="agent_operation" required maxlength="128" pattern="[A-Za-z0-9_.\-]+" value="{{ op.agent_operation if op else '' }}" class="mono"></label>
+    <label>{{ t("field.target") }}
+      <select name="target">{% for target in targets %}<option value="{{ target }}" {% if op and op.target == target %}selected{% endif %}>{{ t("target." ~ target) }}</option>{% endfor %}</select>
+    </label>
+    <label>{{ t("custom.ordering") }}
+      <select name="ordering">{% for o in orderings %}<option value="{{ o }}" {% if op and op.ordering == o %}selected{% endif %}>{{ t("custom.ordering." ~ o) }}</option>{% endfor %}</select>
+    </label>
+    <label>{{ t("custom.role") }}
+      <select name="role">{% for role in roles %}<option value="{{ role }}" {% if (op.role if op else "configurator") == role %}selected{% endif %}>{{ t("role." ~ role) }}</option>{% endfor %}</select>
+    </label>
+    <label>{{ t("custom.timeout") }} <input name="timeout_seconds" type="number" min="10" max="86400" required value="{{ op.timeout_seconds if op else 600 }}"></label>
+    <label>{{ t("field.description") }} <input name="description" maxlength="1000" value="{{ op.description or '' if op else '' }}"></label>
+  </div>
+  <fieldset>
+    <legend>{{ t("custom.instance_types") }}</legend>
+    {% set chosen = (op.instance_types.split(",") if op else []) %}
+    <div class="checks">
+    {% for type in instance_types %}<label><input type="checkbox" name="instance_type" value="{{ type }}" {% if type in chosen %}checked{% endif %}> {{ t("itype." ~ type) }}</label>{% endfor %}
+    </div>
+    <p class="muted">{{ t("custom.instance_types_hint") }}</p>
+  </fieldset>
+  <div class="checks"><label><input type="checkbox" name="mass" value="true" {% if not op or op.mass %}checked{% endif %}> {{ t("custom.mass") }}</label></div>
+  <p class="muted">{{ t("custom.agent_hint") }}</p>
+  <div><button type="submit">{{ t("action.save") }}</button></div>
+</form>
+{% endmacro %}
+
+{% macro parameter_form(action, p, t, types) %}
+<form method="post" action="{{ action }}" class="stack">
+  <div class="fields">
+    <label>{{ t("custom.parameter_name") }} <input name="name" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_]*" class="mono" value="{{ p.name if p else '' }}" placeholder="KRNLREL"></label>
+    <label>{{ t("custom.parameter_label") }} <input name="label" required maxlength="128" value="{{ p.label if p else '' }}"></label>
+    <label>{{ t("custom.parameter_type") }}
+      <select name="type">{% for type in types %}<option value="{{ type }}" {% if p and p.type == type %}selected{% endif %}>{{ t("custom.type." ~ type) }}</option>{% endfor %}</select>
+    </label>
+    <label>{{ t("custom.default") }} <input name="default" maxlength="255" value="{{ p.default or '' if p else '' }}"></label>
+    <label>{{ t("custom.pattern") }} <input name="pattern" maxlength="255" class="mono" value="{{ p.pattern or '' if p else '' }}" placeholder="[A-Za-z0-9._-]*"></label>
+    <label>{{ t("custom.help") }} <input name="help" maxlength="1000" value="{{ p.help or '' if p else '' }}"></label>
+  </div>
+  <div class="checks"><label><input type="checkbox" name="required" value="true" {% if p and p.required %}checked{% endif %}> {{ t("custom.required") }}</label></div>
+  <div><button type="submit">{{ t("action.save") if p else t("custom.parameter_add") }}</button></div>
 </form>
 {% endmacro %}

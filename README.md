@@ -18,6 +18,8 @@ Dies ist ein unabhängiges Projekt und kein SAP-Produkt.
 | Operationen (Start/Stopp/Neustart) mit Aktivitäten-Log | vorhanden; gegen ein echtes System bestätigt |
 | Abhängigkeiten zwischen Systemen | vorhanden; gegen ein echtes System bestätigt |
 | Web-Oberfläche (Deutsch und Englisch) | vorhanden |
+| Eigene Operationen (Skripte aus `operations.d` des Host Agents) | vorhanden; Verhalten des Host Agents gegen einen echten Host bestätigt |
+| Abbrechen von Aktivitäten | vorhanden |
 
 ### Teststand gegen echte Hosts
 
@@ -67,13 +69,29 @@ Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenban
 - **Diagnostics Agents** melden das Feature `SMDAGENT`.
 - Zentrale Dienste und Anwendungsserver eines Systems können auf verschiedenen Hosts dieselbe
   Instanznummer haben.
+- **Eigene Operationen asynchron** (geprüft mit einem Testskript, das seine Argumente ausgibt,
+  Konfiguration mit `Mode: async` und `ResultConverter: hook`):
+  - `ExecuteOperation` mit Timeout 0 kehrt sofort mit einer Operation-ID zurück.
+  - Argumente kommen als `KEY=value` an. Nicht übergebene Argumente fehlen in der Befehlszeile,
+    die folgenden rücken auf.
+  - `GetOperationResults` antwortet, solange das Skript läuft, mit dem Fault-Code 255
+    („Timeout occurred“) und den bisherigen Zeilen; die letzte lautet
+    „saphostcontrol: Executing <Description> hook“. `IsOperationFinished` meldet dann `false`.
+  - Erfolgreich endet die Ausgabe mit „saphostcontrol: <Description> hook successfully
+    executed“. Bei einem Exit-Code ungleich 0 kommt der Fault-Code 127 („Command execution
+    failed.“) mit allen Zeilen, zuletzt „… hook failed (exit code = N)“.
+  - Schlüssel der Meldungen sind `Info`, `Warning` und `Error`; Zeilen des Skripts mit
+    `[WARNING]:` werden zu `Warning`.
+  - `CancelOperation` beendet das Skript (Exit-Code 15) und antwortet mit Fault-Code 127 und
+    den Zeilen bis dahin. Danach kennt der Host Agent die Operation nicht mehr
+    (`GetOperationResults`: Fault-Code -20 „Operation ID not found“).
 
 Noch nicht gegen echte Hosts getestet:
 
 - HTTPS
 
-Nicht Teil der ersten Version: Verschieben von Instanzen (Adaptive Computing),
-kundendefinierte Operationen und Hooks.
+Nicht Teil der ersten Version: Verschieben von Instanzen (Adaptive Computing), Hooks,
+Operationsvorlagen (Ketten von Operationen) und zeitgesteuerte Ausführung.
 
 ## Entwicklung
 
@@ -285,11 +303,51 @@ oder angehalten wird. Daraus entsteht eine **Sammelaktivität** mit einer Teilak
   „10 succeeded, 1 failed, 1 skipped“.
 - Welche Operationen angeboten werden, steht im **Katalog der Operationen**, zusammen mit
   Zielen und nötiger Rolle. Start, Stopp und Neustart brauchen Operator, die Discovery
-  Configurator. Später ergänzte eigene Operationen (geplant: Skripte, die der Host Agent über
-  `ExecuteOperation` ausführt) erscheinen dann automatisch in Menüs und Massenoperationen.
+  Configurator. Eigene Operationen (siehe unten) erscheinen automatisch in Menüs und
+  Massenoperationen; ihre Parameter stehen dann in der Vorschau. Die Operation wählt man dort
+  zuerst und übernimmt sie mit „Auswählen“, damit die passenden Felder erscheinen.
 
 **Host-Operationen:** Hosts haben jetzt ebenfalls ein Menü „Operationen“ (Landscape → Hosts und
-Hostseite). Bisher enthält es die Discovery, die dort als Aktivität mit Protokoll läuft.
+Hostseite). Es enthält die Discovery, die dort als Aktivität mit Protokoll läuft, und eigene
+Operationen für Hosts.
+
+### Eigene Operationen
+
+Eigene Operationen führen ein Skript aus, das im Host Agent unter `operations.d` als
+Konfigurationsdatei eingerichtet ist (`Name:`, `Command:` mit Platzhaltern wie
+`$[SAPSYSTEMNAME]` oder `$[PARAM-KRNLREL]`, `Mode: async`, `ResultConverter: hook`), wie die
+kundendefinierten Operationen in LaMa. Das Tool ruft sie über `ExecuteOperation` asynchron
+auf und liest die Ausgabe laufend ins Protokoll.
+
+- **Anlegen** dürfen nur Admins: Configuration → Operationen. Je Operation: Name, Schlüssel
+  (für URLs und API), Host-Agent-Operation (der `Name:` der Konfigurationsdatei), Ziel
+  (Instanz, System oder Host), Instanztypen, Reihenfolge bei Systemen, Rolle zum Ausführen,
+  Zeitlimit und ob sie als Massenoperation erlaubt ist.
+- **Parameter** haben Name, Anzeigename, Typ (Text, Ganzzahl, Ja/Nein), Pflichtfeld,
+  Standardwert, Muster und Hilfetext. Sie werden als `PARAM-<Name>` übergeben. Ja/Nein wird
+  als `true`/`false` übergeben. Text muss dem Muster entsprechen; ohne eigenes Muster sind
+  nur Buchstaben, Ziffern, `.`, `_` und `-` erlaubt, weil der Wert in einer Befehlszeile
+  landet, die als root läuft.
+- **Leere optionale Parameter** werden wie in LaMa nicht übergeben. Folgende
+  Positionsargumente des Skripts rücken dann auf; das muss das Skript berücksichtigen (z. B.
+  optionale Parameter zuletzt). Das Formular ist mit den Standardwerten vorausgefüllt; fehlt
+  ein Parameter in einem API-Aufruf ganz, gilt sein Standardwert.
+- **Kontextparameter** übergibt das Tool immer, mit den Namen aus LaMa: für Instanzen und
+  Systeme `SAPSYSTEMNAME`, `SAPSYSTEM`, `SAPLOCALHOST`, `PHYSICAL_HOSTNAME`,
+  `SERVICE_CLASS` (`Instance`) und `SERVICE_SUBTYPE`; für Hosts `PHYSICAL_HOSTNAME`,
+  `RealHostName`, `OS_TYPE`, `OS_VERSION`, `CPUS`, `MEMAV`.
+- **`SERVICE_SUBTYPE`** (Annahme): Der Teil vor dem Schrägstrich kommt aus dem Instanztyp
+  (`Instance_Application_Server`, `Instance_SCS`, `Instance_ERS`, `Instance_System_HDB`,
+  `Instance_Diag_Agnt/SolMan`), der Teil danach (`ABAP`, `J2EE`, `Shared`) aus den
+  Anwendungsservern des Systems.
+- **Ausführen:** Im Menü „Operationen“ führen eigene Operationen auf ein Formular mit den
+  Parametern. Auf einem System laufen sie auf allen passenden Instanzen: gleichzeitig, nach
+  Rollen wie ein Start (Datenbank und zentrale Dienste vor den Anwendungsservern) oder
+  nacheinander. Ohne gewählte Instanztypen gilt die Operation für alle Instanzen, bei Systemen
+  ohne Diagnostics Agents.
+- **Ergebnis:** Die Zeilen des Skripts erscheinen im Protokoll, `Warning` und `Error` als
+  Warnung bzw. Fehler. Ein Exit-Code ungleich 0 lässt die Aktivität scheitern; die Meldung
+  nennt die letzte Fehlerzeile. Beim Zeitlimit bricht das Tool die Operation auf dem Host ab.
 
 ### Tags
 
@@ -415,8 +473,12 @@ keine Inventardaten.
 | POST | `/api/systems/{id}/start`, `/stop`, `/restart` | Operation für ein ganzes System anstoßen |
 | GET | `/api/activities` | Aktivitäten, neueste zuerst (`?limit=`) |
 | GET | `/api/activities/{id}` | Aktivität mit Protokoll; bei einer Massenoperation mit `children` |
-| GET | `/api/operations` | Katalog der Operationen, die der eigene Benutzer ausführen darf |
-| POST | `/api/mass-operations` | Massenoperation (`{"operation": "stop", "target_type": "SYSTEM", "target_ids": [1, 2], "parallel": 5, "stop_on_error": false}`); `target_type` ist `SYSTEM`, `INSTANCE` oder `HOST`; Antwort ist die Sammelaktivität (HTTP 202) |
+| GET | `/api/operations` | Katalog der Operationen, die der eigene Benutzer ausführen darf, eigene mit Parametern |
+| GET, POST | `/api/custom-operations` | eigene Operationen auflisten bzw. anlegen (nur Admin), mit `parameters` |
+| GET, PUT, DELETE | `/api/custom-operations/{id}` | eigene Operation lesen, ersetzen (samt Parametern) bzw. löschen (nur Admin) |
+| POST | `/api/instances/{id}/operations/{key}`, `/api/systems/{id}/operations/{key}`, `/api/hosts/{id}/operations/{key}` | eigene Operation ausführen (`{"parameters": {"KRNLREL": "793", "ONLYPREPARE": true}}`, `?timeout=` überschreibt das Zeitlimit) |
+| POST | `/api/activities/{id}/cancel` | laufende Aktivität abbrechen (Operator); HTTP 409, wenn sie schon beendet ist |
+| POST | `/api/mass-operations` | Massenoperation (`{"operation": "stop", "target_type": "SYSTEM", "target_ids": [1, 2], "parallel": 5, "stop_on_error": false}`); `target_type` ist `SYSTEM`, `INSTANCE` oder `HOST`; für eigene Operationen zusätzlich `parameters`; Antwort ist die Sammelaktivität (HTTP 202) |
 
 Beispiel mit der simulierten Landschaft (`LO_TOKEN` enthält ein persönliches API-Token):
 
@@ -510,8 +572,15 @@ curl -X POST -H "Authorization: Bearer $LO_TOKEN" http://127.0.0.1:8000/api/syst
   läuft dabei weiter; abgebrochen wird nur das Warten.
 - **Eine Aktivität pro System:** Solange eine Aktivität für ein System, eine seiner
   Instanzen oder ein System läuft, das davon abhängt, werden weitere mit HTTP 409 abgelehnt.
-- **Status der Aktivität:** `PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`. Das Protokoll hält
-  jede Statusänderung fest, und der Status im Inventar wird dabei aktualisiert.
+- **Status der Aktivität:** `PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`, `CANCELLED`, bei
+  Massenoperationen auch `PARTIAL`. Das Protokoll hält jede Statusänderung fest, und der
+  Status im Inventar wird dabei aktualisiert.
+- **Abbrechen** (Knopf „Abbrechen“ auf der Seite der Aktivität oder
+  `POST /api/activities/{id}/cancel`, ab Operator): Bei Start, Stopp und Neustart hört das
+  Tool nur auf zu warten und fordert nichts mehr an; was auf den Hosts schon angefordert ist,
+  läuft weiter. Eigene Operationen werden auf dem Host abgebrochen (`CancelOperation`). Eine
+  Massenoperation startet keine weiteren Teilaktivitäten und bricht die laufenden ab. Die
+  Aktivität endet mit `CANCELLED` und vermerkt, wer abgebrochen hat.
 - **Datenbanken:** Am Ende jeder Aktivität wird der Status der Datenbanken auf den
   beteiligten Hosts neu gelesen, damit er zum Zustand der Instanzen passt.
 - **Fehlermeldungen:** Lehnt ein Dienst einen Aufruf ab, nennt die Meldung den Aufruf, den
@@ -523,7 +592,7 @@ curl -X POST -H "Authorization: Bearer $LO_TOKEN" http://127.0.0.1:8000/api/syst
 
 Einschränkungen:
 
-- Laufende Aktivitäten lassen sich noch nicht abbrechen, auch Massenoperationen nicht.
+- Abbrechen hält Start und Stopp auf den Hosts nicht an, es beendet nur das Warten.
 - Abhängigkeiten werden nicht automatisch erkannt, sondern von Hand gepflegt.
 - Operationen für Datenbanken ohne SAP-Instanz (`StartDatabase` / `StopDatabase`) fehlen noch.
   Eine HANA-Datenbank wird über ihre Instanz gestartet und gestoppt.
@@ -547,7 +616,7 @@ async with SapControlClient("sapapp1", 0, auth=("devadm", "...")) as sap:
 
 | Client | Methoden |
 |---|---|
-| `HostAgentClient` | `list_instances`, `list_databases`, `get_database_status`, `get_computer_system`, `execute_operation`, `get_version`, `start_instance`, `stop_instance` |
+| `HostAgentClient` | `list_instances`, `list_databases`, `get_database_status`, `get_computer_system`, `execute_operation`, `execute_async`, `is_operation_finished`, `get_operation_results`, `cancel_operation`, `get_version`, `start_instance`, `stop_instance` |
 | `SapControlClient` | `get_process_list`, `get_system_instance_list`, `start`, `stop`, `restart_instance`, `start_system`, `stop_system`, `restart_system` |
 
 - Ports: Host Agent 1128 (HTTP) bzw. 1129 (HTTPS), sapstartsrv 5NN13 bzw. 5NN14. Mit `https=True`
@@ -566,7 +635,8 @@ Fehler sind Unterklassen von `SoapError`:
 | `AuthenticationRequiredError` | geschützte Methode ohne Anmeldedaten (HTTP 401) |
 | `InvalidCredentialsError` | Benutzer oder Passwort falsch |
 | `PermissionDeniedError` | Benutzer nicht berechtigt |
-| `SoapFaultError` | sonstiger Fehler des Dienstes, mit `faultstring` |
+| `SoapFaultError` | sonstiger Fehler des Dienstes, mit `faultstring` und `detail` |
+| `OperationFault` | Fehler einer Operation des Host Agents, mit Fault-Code (`code`) und den Meldungen bis dahin (`result`) |
 | `SoapProtocolError` | Antwort ist kein gültiges SOAP oder enthält unbekannte Werte |
 
 `start_instance` und `stop_instance` senden standardmäßig das Flag `O-INSTANCE`; ein echter
@@ -633,7 +703,7 @@ Mögliche Instanztypen (`kind`): `HDB`, `ERS`, `ASCS`, `SCS`, `ABAP`, `J2EE`, `S
 | Dienst | Methoden |
 |---|---|
 | SAPControl | GetProcessList, GetSystemInstanceList, Start, Stop, RestartInstance, StartSystem, StopSystem, RestartSystem |
-| SAPHostControl | ListInstances, ListDatabases, GetDatabaseStatus, GetComputerSystem, StartInstance, StopInstance, ExecuteOperation (nur `versioninfo`) |
+| SAPHostControl | ListInstances, ListDatabases, GetDatabaseStatus, GetComputerSystem, StartInstance, StopInstance, ExecuteOperation (`versioninfo` und eigene Operationen), IsOperationFinished, GetOperationResults, CancelOperation |
 
 Verhalten:
 
@@ -644,6 +714,10 @@ Verhalten:
   die Instanz ist danach `start_duration` bzw. `stop_duration` Sekunden lang gelb.
 - `StartSystem` startet nach Instanzpriorität (HDB, dann ASCS, dann Anwendungsserver),
   `StopSystem` in umgekehrter Reihenfolge.
+- Eigene Operationen stehen unter `custom_operations` (Name, Beschreibung, Befehl als Liste
+  von Argumentnamen). Die Standardlandschaft hat `LO_TEST`, das sich wie ein Testskript
+  verhält: Es gibt seine Argumente aus, läuft `PARAM-SLEEP` Sekunden (Standard 2) und endet
+  mit dem Exit-Code `PARAM-RC`. Faults und Meldungen entsprechen denen eines echten Host Agents.
 - Zustandsändernde Methoden verlangen HTTP Basic Auth. Ohne Anmeldedaten kommt HTTP 401,
   mit falschen ein SOAP Fault „Invalid Credentials“.
 

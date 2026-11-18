@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui with context %}
+{% block title %}{{ operation.name }}{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ back }}">{{ target_label }}</a></p>
+<h1>{{ operation.name }} <span class="mono">{{ target_label }}</span></h1>
+<form method="post" action="{{ action }}" class="stack">
+  <section class="card">
+    {% if operation.description %}<p>{{ operation.description }}</p>{% endif %}
+    <dl>
+      <dt>{{ t("field.target") }}</dt><dd>{{ t("target." ~ target_type) }} <span class="mono">{{ target_label }}</span></dd>
+      <dt>{{ t("custom.agent_operation") }}</dt><dd class="mono">{{ operation.agent_operation }}</dd>
+      {% if target_type == "SYSTEM" %}<dt>{{ t("custom.ordering") }}</dt><dd>{{ t("custom.ordering." ~ operation.ordering) }}</dd>{% endif %}
+      <dt>{{ t("custom.timeout") }}</dt><dd>{{ operation.timeout_seconds }} s</dd>
+    </dl>
+  </section>
+  {{ ui.parameter_fields(operation, t) }}
+  <div class="row" data-confirm="{{ t('op.confirm') }}">
+    <button type="submit" onclick="return confirm(this.parentElement.dataset.confirm)">{{ t("custom.run") }}</button>
+    <a class="button-link" href="{{ back }}">{{ t("mass.cancel") }}</a>
+  </div>
+</form>
+{% endblock %}

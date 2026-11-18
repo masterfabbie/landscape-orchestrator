@@ -10,7 +10,7 @@
   <td>{{ ui.status_badge(instance.last_status, t) }}</td>
   <td></td>
   <td class="mono">{{ depends[system.id].get(instance.id, []) | join(", ") }}</td>
-  <td class="actions">{{ ui.operation_buttons("/instances/" ~ instance.id, t, running) }}</td>
+  <td class="actions">{{ ui.operation_buttons("/instances/" ~ instance.id, t, running, instance=instance) }}</td>
 </tr>
 {% endmacro %}
 {% block content %}

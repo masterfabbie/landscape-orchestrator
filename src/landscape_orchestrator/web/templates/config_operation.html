@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui with context %}
+{% block title %}{{ operation.name }}{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/configuration?tab=operations">{{ t("nav.configuration") }}</a> / {{ t("tab.operations") }}</p>
+<div class="card-head">
+  <h1>{{ operation.name }} <span class="mono muted">{{ operation.key }}</span></h1>
+  <form method="post" action="/configuration/operations/{{ operation.id }}/delete" data-confirm="{{ t('custom.delete_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+    <button type="submit" class="danger">{{ t("custom.delete") }}</button>
+  </form>
+</div>
+
+<section class="card">
+  <h2>{{ t("system.general") }}</h2>
+  {{ ui.custom_operation_form("/configuration/operations/" ~ operation.id, operation, t, custom_targets, orderings, instance_types, roles) }}
+</section>
+
+<section class="card">
+  <h2>{{ t("custom.parameters") }}</h2>
+  <p class="muted">{{ t("custom.parameters_intro") }}</p>
+  {% for p in operation.parameters %}
+  <details class="system-row">
+    <summary><span class="mono strong">PARAM-{{ p.name }}</span> {{ p.label }} · {{ t("custom.type." ~ p.type) }}{% if p.required %} · {{ t("custom.required") }}{% endif %}{% if p.default %} · {{ t("custom.default") }}: <span class="mono">{{ p.default }}</span>{% endif %}</summary>
+    {{ ui.parameter_form("/configuration/operations/" ~ operation.id ~ "/parameters/" ~ p.id, p, t, parameter_types) }}
+    <form method="post" action="/configuration/operations/{{ operation.id }}/parameters/{{ p.id }}/delete" data-confirm="{{ t('custom.parameter_delete_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+      <button type="submit" class="danger">{{ t("custom.parameter_delete") }}</button>
+    </form>
+  </details>
+  {% else %}
+  <p>{{ t("custom.no_parameters") }}</p>
+  {% endfor %}
+  <h3>{{ t("custom.parameter_add") }}</h3>
+  {{ ui.parameter_form("/configuration/operations/" ~ operation.id ~ "/parameters", none, t, parameter_types) }}
+</section>
+
+<section class="card">
+  <h2>{{ t("custom.context") }}</h2>
+  <p class="muted">{{ t("custom.context_intro") }}</p>
+  <p class="mono">{{ context_parameters | join(", ") }}</p>
+</section>
+{% endblock %}

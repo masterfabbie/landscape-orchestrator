@@ -234,7 +234,12 @@ async def test_mass_operation_in_the_browser(app, api):
         assert 'name="target_type" value="SYSTEM"' in page
         assert 'name="target_id" value="1" checked' in page
         assert 'name="target_id" value="3"' not in page  # "C" does not contain "a"
-        assert '<option value="stop">Stop system</option>' in page
+        assert '<option value="stop" >Stop system</option>' in page
+        assert 'name="operation" value="start"' in page  # the first one is preselected
+        chosen = (
+            await browser.get("/mass", params={"tab": "systems", "operation": "stop"})
+        ).text
+        assert 'name="operation" value="stop"' in chosen
 
         instances = (await browser.get("/mass", params={"type": "abap"})).text
         assert 'name="target_type" value="INSTANCE"' in instances

@@ -36,7 +36,6 @@ from .roles import Role, instance_role
 STATUS_UNKNOWN = "UNKNOWN"
 
 
-
 class Base(DeclarativeBase):
     pass
 
@@ -359,9 +358,7 @@ class Activity(Base):
     system_id: Mapped[int | None] = mapped_column(
         ForeignKey("systems.id", ondelete="SET NULL"), index=True
     )
-    instance_id: Mapped[int | None] = mapped_column(
-        ForeignKey("instances.id", ondelete="SET NULL")
-    )
+    instance_id: Mapped[int | None] = mapped_column(ForeignKey("instances.id", ondelete="SET NULL"))
     # Target of host operations, e.g. a discovery.
     host_id: Mapped[int | None] = mapped_column(ForeignKey("hosts.id", ondelete="SET NULL"))
     # The mass operation this activity belongs to.
@@ -485,3 +482,60 @@ class UserSetting(Base):
     )
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
+
+
+class CustomOperation(Base):
+    """An operation defined in the tool that runs a script configured in the host agent's
+    operations.d, like a custom operation in LaMa's Automation Studio."""
+
+    __tablename__ = "custom_operations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Used in URLs and the API, e.g. "copy_kernel".
+    key: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str | None] = mapped_column(Text)
+    # "Name:" in the configuration file in operations.d.
+    agent_operation: Mapped[str] = mapped_column(String(128))
+    # INSTANCE, SYSTEM (every matching instance of the system) or HOST.
+    target: Mapped[str] = mapped_column(String(16))
+    # Instance types it applies to (TYPE_VALUES of filters.py), comma separated; empty: all.
+    instance_types: Mapped[str] = mapped_column(String(255), default="")
+    # For SYSTEM: "parallel", "roles" (like a system start) or "sequential".
+    ordering: Mapped[str] = mapped_column(String(16), default="parallel")
+    role: Mapped[str] = mapped_column(String(16))
+    mass: Mapped[bool] = mapped_column(Boolean, default=True)
+    timeout_seconds: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    parameters: Mapped[list[CustomOperationParameter]] = relationship(
+        back_populates="operation",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="CustomOperationParameter.position",
+        lazy="selectin",
+    )
+
+
+class CustomOperationParameter(Base):
+    """A parameter of a custom operation; passed to the host agent as PARAM-<name>."""
+
+    __tablename__ = "custom_operation_parameters"
+    __table_args__ = (UniqueConstraint("operation_id", "name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    operation_id: Mapped[int] = mapped_column(
+        ForeignKey("custom_operations.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(64))
+    label: Mapped[str] = mapped_column(String(128))
+    # STRING, INTEGER or BOOLEAN.
+    type: Mapped[str] = mapped_column(String(16))
+    required: Mapped[bool] = mapped_column(Boolean, default=False)
+    default: Mapped[str | None] = mapped_column(String(255))
+    # Regular expression a string value must match completely; empty: the safe default.
+    pattern: Mapped[str | None] = mapped_column(String(255))
+    help: Mapped[str | None] = mapped_column(Text)
+
+    operation: Mapped[CustomOperation] = relationship(back_populates="parameters")

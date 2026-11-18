@@ -25,10 +25,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from .. import __version__
-from ..catalog import for_target
-from ..catalog import get as get_operation
+from ..catalog import Catalog, OperationDef
 from ..connections import ClientFactory
 from ..crypto import SecretBox
+from ..customops import (
+    ORDERINGS,
+    PARAMETER_TYPES,
+    CustomOperationError,
+    ParameterError,
+    parameter_values,
+    save_operation,
+    save_parameter,
+)
 from ..dependencies import DependencyError, load_graph, set_dependencies, would_create_cycle
 from ..discovery import DiscoveryError, discover_host
 from ..filters import FIELDS as FILTER_FIELDS
@@ -49,6 +57,8 @@ from ..models import (
     Activity,
     ActivityLogEntry,
     ApiToken,
+    CustomOperation,
+    CustomOperationParameter,
     Host,
     HostTag,
     Instance,
@@ -61,6 +71,7 @@ from ..models import (
 from ..operations import (
     ACTIVE_STATUSES,
     MAX_PARALLEL,
+    NotActiveError,
     NotAssignedError,
     OperationConflictError,
     OperationKind,
@@ -125,6 +136,7 @@ class AppContext:
     clients: ClientFactory
     session_factory: async_sessionmaker[AsyncSession]
     runner: OperationRunner
+    catalog: Catalog
 
 
 class LoginRequiredError(Exception):
@@ -236,7 +248,11 @@ def render(request: Request, name: str, status_code: int = 200, **context: Any) 
         "user": user,
         "can": lambda role: user is not None and has_role(user, Role(role)),
         # Operations of the catalog this user may run on a target type, e.g. "SYSTEM".
-        "ops": lambda target: for_target(TargetType(target), user) if user else [],
+        "ops": lambda target, instance=None: (
+            get_context(request).catalog.for_target(TargetType(target), user, instance=instance)
+            if user
+            else []
+        ),
         "language": language,
         "languages": LANGUAGES,
         "path": request.url.path,
@@ -644,8 +660,8 @@ async def operate_host(
     host_id: int, operation: str, context: Context, session: DbSession, user: CurrentUser
 ) -> Response:
     """Run a host operation of the catalog, e.g. a discovery, as an activity."""
-    definition = get_operation(operation)
-    if definition is None or TargetType.HOST not in definition.targets:
+    definition = context.catalog.get(operation)
+    if definition is None or definition.custom or TargetType.HOST not in definition.targets:
         raise HTTPException(404, "Unknown operation")
     if not has_role(user, definition.role):
         raise HTTPException(403, f"Requires the role {definition.role}")
@@ -746,6 +762,136 @@ async def operate_instance(
     return redirect(f"/activities/{activity.id}")
 
 
+# --- custom operations: run ------------------------------------------------------------
+
+RUN_KINDS = {
+    "instances": TargetType.INSTANCE,
+    "systems": TargetType.SYSTEM,
+    "hosts": TargetType.HOST,
+}
+PARAMETER_PREFIX = "param."
+
+
+async def _form_parameters(request: Request) -> dict[str, str]:
+    """Parameter values from fields named ``param.<NAME>``; unchecked boxes are missing."""
+    form = await request.form()
+    return {
+        str(key)[len(PARAMETER_PREFIX) :]: str(value)
+        for key, value in form.multi_items()
+        if str(key).startswith(PARAMETER_PREFIX)
+    }
+
+
+async def _run_target(
+    request: Request, session: AsyncSession, user: User, kind: str, target_id: int, key: str
+) -> tuple[OperationDef, TargetType, str, str]:
+    """The custom operation, the target type, the target's label and its page."""
+    target_type = RUN_KINDS.get(kind)
+    definition = get_context(request).catalog.get(key)
+    if (
+        target_type is None
+        or definition is None
+        or definition.custom is None
+        or target_type not in definition.targets
+    ):
+        raise HTTPException(404, "Unknown operation")
+    if not has_role(user, definition.role):
+        raise HTTPException(403, f"Requires the role {definition.role}")
+    if target_type == TargetType.INSTANCE:
+        instance = await session.scalar(
+            select(Instance)
+            .where(Instance.id == target_id)
+            .options(selectinload(Instance.host), selectinload(Instance.sid))
+        )
+        if instance is None:
+            raise HTTPException(404, "Instance not found")
+        if not definition.applies_to(instance):
+            raise HTTPException(404, "The operation does not apply to this instance")
+        page = (
+            f"/systems/{instance.system_id}" if instance.system_id else f"/hosts/{instance.host_id}"
+        )
+        return definition, target_type, instance.label, page
+    if target_type == TargetType.SYSTEM:
+        system = await session.get(System, target_id)
+        if system is None:
+            raise HTTPException(404, "System not found")
+        return definition, target_type, system.name, f"/systems/{target_id}"
+    host = await session.get(Host, target_id)
+    if host is None:
+        raise HTTPException(404, "Host not found")
+    return definition, target_type, host.name, f"/hosts/{target_id}"
+
+
+@pages.get("/run/{kind}/{target_id}/{key}")
+async def run_form(
+    request: Request, kind: str, target_id: int, key: str, session: DbSession, user: CurrentUser
+) -> HTMLResponse:
+    """Parameters of a custom operation before it runs; prefilled with the defaults."""
+    definition, target_type, label, page = await _run_target(
+        request, session, user, kind, target_id, key
+    )
+    return render(
+        request,
+        "run.html",
+        operation=definition.custom,
+        target_type=target_type.value,
+        target_label=label,
+        back=page,
+        action=f"/run/{kind}/{target_id}/{key}",
+    )
+
+
+@pages.post("/run/{kind}/{target_id}/{key}")
+async def run_submit(
+    request: Request,
+    kind: str,
+    target_id: int,
+    key: str,
+    context: Context,
+    session: DbSession,
+    user: CurrentUser,
+) -> Response:
+    definition, target_type, _, page = await _run_target(
+        request, session, user, kind, target_id, key
+    )
+    assert definition.custom is not None
+    try:
+        values = parameter_values(definition.custom, await _form_parameters(request))
+    except ParameterError as exc:
+        return redirect(
+            f"/run/{kind}/{target_id}/{key}", error="parameter_values", e_detail=str(exc)
+        )
+    try:
+        activity = await context.runner.submit_custom(
+            session,
+            definition.custom,
+            target_type,
+            target_id,
+            values,
+            requested_by=user.username,
+        )
+    except NotAssignedError:
+        return redirect(page, error="not_assigned")
+    except TargetNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except OperationConflictError:
+        return redirect(page, error="conflict")
+    return redirect(f"/activities/{activity.id}")
+
+
+@pages.post("/activities/{activity_id}/cancel")
+async def cancel_activity(
+    activity_id: int, context: Context, session: DbSession, user: CurrentUser
+) -> Response:
+    try:
+        await context.runner.cancel(session, activity_id, user.username)
+    except TargetNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except NotActiveError:
+        return redirect(f"/activities/{activity_id}", error="not_active")
+    return redirect(f"/activities/{activity_id}", notice="activity_cancelled")
+
+
 # --- activities -------------------------------------------------------------------------
 
 LOG_ENTRIES_SHOWN = 200
@@ -790,7 +936,14 @@ async def activity_detail(request: Request, activity_id: int, session: DbSession
     )
 
 
-ACTIVITY_STATUS_ORDER = ("RUNNING", "PENDING", "SUCCEEDED", "PARTIAL", "FAILED")
+ACTIVITY_STATUS_ORDER = (
+    "RUNNING",
+    "PENDING",
+    "SUCCEEDED",
+    "PARTIAL",
+    "FAILED",
+    "CANCELLED",
+)
 
 
 # --- mass operations --------------------------------------------------------------------
@@ -846,13 +999,22 @@ async def _mass_targets(
 
 @pages.get("/mass")
 async def mass_form(
-    request: Request, session: DbSession, user: CurrentUser, tab: str | None = None
+    request: Request,
+    session: DbSession,
+    user: CurrentUser,
+    tab: str | None = None,
+    operation: str | None = None,
 ) -> HTMLResponse:
     """Preview of a mass operation: the filtered targets, the operation and its settings."""
     tab = _tab(tab, ("systems", "hosts"))
     query = {key: request.query_params.getlist(key) for key in request.query_params}
     values = read_values(tab, query)
     target_type, targets = await _mass_targets(request, session, tab, values)
+    operations = get_context(request).catalog.for_target(target_type, user, mass=True)
+    # A custom operation needs its parameters; the operation is chosen first (GET form).
+    selected = next((op for op in operations if op.key == operation), None)
+    if selected is None and operations:
+        selected = operations[0]
     back = "/landscape?" + urlencode(
         [(k, v) for k, v in request.query_params.multi_items() if k == "tab" or k in FILTER_PARAMS]
     )
@@ -862,14 +1024,18 @@ async def mass_form(
         tab=tab,
         target_type=target_type.value,
         targets=targets,
-        operations=for_target(target_type, user, mass=True),
+        operations=operations,
+        selected=selected,
+        selected_key=selected.key if selected else "",
         max_parallel=MAX_PARALLEL,
         back=back,
+        query_items=[(k, v) for k, v in request.query_params.multi_items() if k != "operation"],
     )
 
 
 @pages.post("/mass")
 async def mass_submit(
+    request: Request,
     context: Context,
     session: DbSession,
     user: CurrentUser,
@@ -879,7 +1045,7 @@ async def mass_submit(
     parallel: Annotated[int, Form()] = 5,
     on_error: Annotated[str, Form()] = "continue",
 ) -> Response:
-    definition = get_operation(operation)
+    definition = context.catalog.get(operation)
     try:
         kind_of_target = TargetType(target_type)
     except ValueError as exc:
@@ -890,6 +1056,12 @@ async def mass_submit(
         raise HTTPException(403, f"Requires the role {definition.role}")
     if not target_id:
         return redirect("/landscape", error="mass_no_targets")
+    values = None
+    if definition.custom is not None:
+        try:
+            values = parameter_values(definition.custom, await _form_parameters(request))
+        except ParameterError as exc:
+            return redirect("/landscape", error="parameter_values", e_detail=str(exc))
     try:
         activity = await context.runner.submit_mass(
             session,
@@ -899,6 +1071,9 @@ async def mass_submit(
             parallel=parallel,
             stop_on_error=on_error == "stop",
             requested_by=user.username,
+            custom=definition.custom,
+            parameters=values,
+            **({"timeout_seconds": definition.custom.timeout_seconds} if definition.custom else {}),
         )
     except (ValueError, TargetNotFoundError):
         return redirect("/landscape", error="invalid_input")
@@ -912,9 +1087,20 @@ async def mass_submit(
 async def configuration(
     request: Request, session: DbSession, tab: str | None = None
 ) -> HTMLResponse:
-    tab = _tab(tab, ("hosts", "systems", "pools"))
+    tab = _tab(tab, ("hosts", "systems", "pools", "operations"))
     context: dict[str, Any] = {"tab": tab}
-    if tab == "hosts":
+    if tab == "operations":
+        # Custom operations are defined by admins only.
+        user = request.state.user
+        if not has_role(user, Role.ADMIN):
+            raise HTTPException(403, "Requires the role admin")
+        context |= {
+            "operations": list(
+                await session.scalars(select(CustomOperation).order_by(CustomOperation.key))
+            ),
+            **_operation_choices(),
+        }
+    elif tab == "hosts":
         context["hosts"] = await _all_hosts(session)
     elif tab == "systems":
         systems = await _all_systems(session)
@@ -927,6 +1113,207 @@ async def configuration(
     else:
         context["pools"] = await _all_pools(session)
     return render(request, "configuration.html", **context)
+
+
+# --- configuration: custom operations ---------------------------------------------------
+
+OPERATIONS_TAB = "/configuration?tab=operations"
+# Context parameters the tool passes along with the own ones (see customspec.py).
+INSTANCE_CONTEXT = (
+    "SAPSYSTEMNAME",
+    "SAPSYSTEM",
+    "SAPLOCALHOST",
+    "PHYSICAL_HOSTNAME",
+    "SERVICE_CLASS",
+    "SERVICE_SUBTYPE",
+)
+HOST_CONTEXT = ("PHYSICAL_HOSTNAME", "RealHostName", "OS_TYPE", "OS_VERSION", "CPUS", "MEMAV")
+
+
+def _operation_choices() -> dict[str, Any]:
+    return {
+        "custom_targets": ("INSTANCE", "SYSTEM", "HOST"),
+        "orderings": ORDERINGS,
+        "parameter_types": PARAMETER_TYPES,
+        "instance_types": TYPE_VALUES,
+        "roles": [role.value for role in ROLE_ORDER],
+    }
+
+
+async def _load_custom(session: AsyncSession, operation_id: int) -> CustomOperation:
+    operation = await session.get(CustomOperation, operation_id)
+    if operation is None:
+        raise HTTPException(404, "Custom operation not found")
+    return operation
+
+
+class OperationForm:
+    """Fields of the form for a custom operation."""
+
+    def __init__(
+        self,
+        key: Annotated[str, Form()] = "",
+        name: Annotated[str, Form()] = "",
+        description: Annotated[str, Form()] = "",
+        agent_operation: Annotated[str, Form()] = "",
+        target: Annotated[str, Form()] = "INSTANCE",
+        instance_type: Annotated[list[str], Form()] = [],  # noqa: B006 - FastAPI copies it
+        ordering: Annotated[str, Form()] = "parallel",
+        role: Annotated[str, Form()] = "configurator",
+        mass: Annotated[bool, Form()] = False,
+        timeout_seconds: Annotated[int, Form()] = 600,
+    ) -> None:
+        self.values = {
+            "key": key,
+            "name": name,
+            "description": description,
+            "agent_operation": agent_operation,
+            "target": target,
+            "instance_types": instance_type,
+            "ordering": ordering,
+            "role": role,
+            "mass": mass,
+            "timeout_seconds": timeout_seconds,
+        }
+
+
+class ParameterForm:
+    def __init__(
+        self,
+        name: Annotated[str, Form()] = "",
+        label: Annotated[str, Form()] = "",
+        type: Annotated[str, Form()] = "STRING",
+        required: Annotated[bool, Form()] = False,
+        default: Annotated[str, Form()] = "",
+        pattern: Annotated[str, Form()] = "",
+        help: Annotated[str, Form()] = "",
+    ) -> None:
+        self.values = {
+            "name": name,
+            "label": label,
+            "type": type,
+            "required": required,
+            "default": default,
+            "pattern": pattern,
+            "help": help,
+        }
+
+
+@pages.post("/configuration/operations")
+async def create_custom_operation(
+    context: Context, session: DbSession, form: Annotated[OperationForm, Depends()]
+) -> Response:
+    try:
+        operation = await save_operation(session, None, **form.values)
+    except CustomOperationError as exc:
+        await session.rollback()
+        return redirect(OPERATIONS_TAB, error=exc.code)
+    await session.commit()
+    await context.catalog.reload(session)
+    return redirect(f"/configuration/operations/{operation.id}", notice="operation_saved")
+
+
+@pages.get("/configuration/operations/{operation_id}")
+async def custom_operation_detail(
+    request: Request, operation_id: int, session: DbSession
+) -> HTMLResponse:
+    operation = await _load_custom(session, operation_id)
+    context = INSTANCE_CONTEXT if operation.target != "HOST" else HOST_CONTEXT
+    return render(
+        request,
+        "config_operation.html",
+        operation=operation,
+        context_parameters=context,
+        **_operation_choices(),
+    )
+
+
+@pages.post("/configuration/operations/{operation_id}")
+async def update_custom_operation(
+    operation_id: int,
+    context: Context,
+    session: DbSession,
+    form: Annotated[OperationForm, Depends()],
+) -> Response:
+    page = f"/configuration/operations/{operation_id}"
+    operation = await _load_custom(session, operation_id)
+    try:
+        await save_operation(session, operation, **form.values)
+    except CustomOperationError as exc:
+        await session.rollback()
+        return redirect(page, error=exc.code)
+    await session.commit()
+    await context.catalog.reload(session)
+    return redirect(page, notice="operation_saved")
+
+
+@pages.post("/configuration/operations/{operation_id}/delete")
+async def delete_custom_operation(
+    operation_id: int, context: Context, session: DbSession
+) -> Response:
+    await session.delete(await _load_custom(session, operation_id))
+    await session.commit()
+    await context.catalog.reload(session)
+    return redirect(OPERATIONS_TAB, notice="operation_deleted")
+
+
+async def _save_parameter(
+    context: AppContext,
+    session: AsyncSession,
+    operation_id: int,
+    parameter_id: int | None,
+    form: ParameterForm,
+) -> Response:
+    page = f"/configuration/operations/{operation_id}"
+    operation = await _load_custom(session, operation_id)
+    parameter = None
+    if parameter_id is not None:
+        parameter = await session.get(CustomOperationParameter, parameter_id)
+        if parameter is None or parameter.operation_id != operation_id:
+            raise HTTPException(404, "Parameter not found")
+    try:
+        await save_parameter(session, operation, parameter, **form.values)
+    except CustomOperationError as exc:
+        await session.rollback()
+        return redirect(page, error=exc.code)
+    await session.commit()
+    await context.catalog.reload(session)
+    return redirect(page, notice="parameter_saved")
+
+
+@pages.post("/configuration/operations/{operation_id}/parameters")
+async def add_custom_parameter(
+    operation_id: int,
+    context: Context,
+    session: DbSession,
+    form: Annotated[ParameterForm, Depends()],
+) -> Response:
+    return await _save_parameter(context, session, operation_id, None, form)
+
+
+@pages.post("/configuration/operations/{operation_id}/parameters/{parameter_id}")
+async def update_custom_parameter(
+    operation_id: int,
+    parameter_id: int,
+    context: Context,
+    session: DbSession,
+    form: Annotated[ParameterForm, Depends()],
+) -> Response:
+    return await _save_parameter(context, session, operation_id, parameter_id, form)
+
+
+@pages.post("/configuration/operations/{operation_id}/parameters/{parameter_id}/delete")
+async def delete_custom_parameter(
+    operation_id: int, parameter_id: int, context: Context, session: DbSession
+) -> Response:
+    parameter = await session.get(CustomOperationParameter, parameter_id)
+    if parameter is None or parameter.operation_id != operation_id:
+        raise HTTPException(404, "Parameter not found")
+    await session.delete(parameter)
+    await session.commit()
+    session.expire_all()
+    await context.catalog.reload(session)
+    return redirect(f"/configuration/operations/{operation_id}", notice="parameter_deleted")
 
 
 def _optional_int(value: str, minimum: int, maximum: int) -> int | None:

@@ -25,11 +25,14 @@ class SoapFault(Exception):
         faultstring: str,
         faultcode: str = "SOAP-ENV:Server",
         http_status: int = 500,
+        detail: tuple[str, str, dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(faultstring)
         self.faultstring = faultstring
         self.faultcode = faultcode
         self.http_status = http_status
+        # (namespace, element name, content) of the fault detail, e.g. OperationException.
+        self.detail = detail
 
 
 def parse_request(body: bytes) -> tuple[str, dict[str, Any]]:
@@ -51,4 +54,7 @@ def build_fault(fault: SoapFault) -> bytes:
     element = ET.Element(f"{{{SOAP_ENV}}}Fault")
     ET.SubElement(element, "faultcode").text = fault.faultcode
     ET.SubElement(element, "faultstring").text = fault.faultstring
+    if fault.detail is not None:
+        namespace, name, content = fault.detail
+        ET.SubElement(element, "detail").append(build_element(namespace, name, content))
     return envelope(element)

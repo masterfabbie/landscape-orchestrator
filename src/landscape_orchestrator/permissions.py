@@ -22,6 +22,11 @@ OPERATION_ROUTES = frozenset(
         "/hosts/{host_id}/{operation}",
         "/mass",
         "/mass-operations",
+        "/instances/{instance_id}/operations/{key}",
+        "/systems/{system_id}/operations/{key}",
+        "/hosts/{host_id}/operations/{key}",
+        "/run/{kind}/{target_id}/{key}",
+        "/activities/{activity_id}/cancel",
     }
 )
 
@@ -29,13 +34,15 @@ OPERATION_ROUTES = frozenset(
 def required_role(method: str, path: str) -> Role:
     """``path`` is the route template, e.g. "/systems/{system_id}/{operation}", without the
     "/api" prefix for API routes."""
-    if path.startswith(("/administration", "/users")):
+    if path.startswith(("/administration", "/users", "/custom-operations")):
+        return Role.ADMIN
+    if path.startswith("/configuration/operations"):
         return Role.ADMIN
     if path.startswith(("/account", "/me")):
         return Role.VIEWER
     if path.startswith("/configuration"):
         return Role.CONFIGURATOR
-    if path == "/mass":
+    if path in ("/mass", "/run/{kind}/{target_id}/{key}"):
         return Role.OPERATOR
     if method in ("GET", "HEAD"):
         return Role.VIEWER

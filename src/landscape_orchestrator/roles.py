@@ -33,3 +33,23 @@ def instance_role(features: str | None) -> Role:
     if names & {"MESSAGESERVER", "ENQUE", "ENQREP"}:
         return Role.CENTRAL
     return Role.APPLICATION
+
+
+def instance_type_key(features: str | None) -> str | None:
+    """Translation key of the instance type for a sapstartsrv feature list."""
+    names = set((features or "").split("|"))
+    if "SMDAGENT" in names:
+        return "itype.agent"
+    if "HDB" in names:
+        return "itype.hana"
+    if "MESSAGESERVER" in names or "ENQUE" in names:
+        return "itype.scs"
+    if "ENQREP" in names:
+        return "itype.ers"
+    if "ABAP" in names and "J2EE" in names:
+        return "itype.dual"
+    if "ABAP" in names:
+        return "itype.abap"
+    if "J2EE" in names:
+        return "itype.java"
+    return None

@@ -175,11 +175,56 @@ class ActivityDetail(ActivityOut):
     children: list[ActivityOut]
 
 
+class ParameterDef(BaseModel):
+    """A parameter of a custom operation; passed to the host agent as PARAM-<name>."""
+
+    name: str = Field(pattern=r"^[A-Z0-9][A-Z0-9_]{0,63}$")
+    label: str = Field(min_length=1, max_length=128)
+    type: Literal["STRING", "INTEGER", "BOOLEAN"] = "STRING"
+    required: bool = False
+    default: str | None = Field(default=None, max_length=255)
+    # Regular expression a string must match completely; empty: [A-Za-z0-9._-]*
+    pattern: str | None = Field(default=None, max_length=255)
+    help: str | None = None
+
+
 class OperationOut(BaseModel):
     key: str
+    name: str | None = None
     targets: list[str]
     role: str
     mass: bool
+    custom: bool = False
+    parameters: list[ParameterDef] = []
+
+
+class CustomOperationIn(BaseModel):
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = None
+    # "Name:" of the configuration file in operations.d of the host agent.
+    agent_operation: str = Field(min_length=1, max_length=128)
+    target: Literal["INSTANCE", "SYSTEM", "HOST"]
+    instance_types: list[str] = []
+    ordering: Literal["parallel", "roles", "sequential"] = "parallel"
+    role: Literal["viewer", "operator", "configurator", "admin"] = "configurator"
+    mass: bool = True
+    timeout_seconds: int = Field(default=600, ge=10, le=86400)
+    parameters: list[ParameterDef] = Field(default=[], max_length=50)
+
+
+class CustomOperationOut(CustomOperationIn):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    key: str
+    instance_types: list[str]
+    parameters: list[ParameterDef]
+
+
+class RunIn(BaseModel):
+    # Values of the parameters by name, e.g. {"KRNLREL": "793", "ONLYPREPARE": true}.
+    parameters: dict[str, str | int | bool] = {}
 
 
 class MassOperationIn(BaseModel):
@@ -188,6 +233,8 @@ class MassOperationIn(BaseModel):
     target_ids: list[int] = Field(min_length=1, max_length=500)
     parallel: int = Field(default=5, ge=1, le=20)
     stop_on_error: bool = False
+    # For custom operations: parameter values by name.
+    parameters: dict[str, str | int | bool] = {}
 
 
 class SystemCreate(BaseModel):

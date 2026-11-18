@@ -25,11 +25,20 @@ class SoapProtocolError(SoapError):
 class SoapFaultError(SoapError):
     """The service reported an error as a SOAP fault."""
 
-    def __init__(self, faultstring: str, faultcode: str = "", http_status: int = 500) -> None:
+    def __init__(
+        self,
+        faultstring: str,
+        faultcode: str = "",
+        http_status: int = 500,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(faultstring)
         self.faultstring = faultstring
         self.faultcode = faultcode
         self.http_status = http_status
+        # Content of the first element of <detail>, e.g. the OperationException of the host
+        # agent with mFaultCode, mMessage, mOperationID and mResponseMessages.
+        self.detail = detail or {}
 
 
 class AuthenticationRequiredError(SoapFaultError):
@@ -126,7 +135,12 @@ class SoapClient:
             cls: type[SoapFaultError] = AuthenticationRequiredError
         else:
             cls = _FAULT_CLASSES.get(faultstring.lower(), SoapFaultError)
-        return cls(faultstring or "Unknown SOAP fault", faultcode, http_status)
+        detail: dict[str, Any] = {}
+        container = fault.find("detail")
+        if container is not None and len(container):
+            value = to_value(container[0])
+            detail = value if isinstance(value, dict) else {}
+        return cls(faultstring or "Unknown SOAP fault", faultcode, http_status, detail)
 
 
 def as_dict(value: Any) -> dict[str, Any]:

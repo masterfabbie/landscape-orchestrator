@@ -74,14 +74,16 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `connections.py` | baut Clients für Inventareinträge samt Zugangsdaten |
 | `discovery.py` | liest einen Host aus und aktualisiert das Inventar |
 | `dependencies.py` | Abhängigkeiten zwischen Systemen, Reihenfolge von Start und Stopp |
-| `roles.py` | Rolle einer Instanz aus ihren Features: Datenbank, zentrale Dienste, Anwendungsserver, Diagnostics Agent |
+| `roles.py` | Rolle einer Instanz aus ihren Features: Datenbank, zentrale Dienste, Anwendungsserver, Diagnostics Agent; Instanztyp für Filter (`instance_type_key`) |
 | `tags.py` | Tags von Hosts und Systemen (Schlüssel mit optionalem Wert): prüfen, ersetzen, vergleichen |
 | `filters.py` | Filter der Landscape-Listen (Werte aus der Adresse, sichtbare Filter) |
 | `status.py` | Status lesen ohne Aktivität: Instanzen eines Systems (Knopf „Status aktualisieren“) und Datenbanken |
 | `systems.py` | Systeme als Gruppen von Instanzen: anlegen, zuordnen, entfernen, löschen, Namens- und Zuordnungsvorschläge, abgeleitete „Hängt ab von“-SIDs |
 | `pools.py` | Zuordnung von Systemen zu Pools |
 | `operations.py` | Start, Stopp, Neustart, Discovery als Hintergrund-Aktivitäten, Massenoperationen (`OperationRunner`) |
-| `catalog.py` | Katalog der Operationen: Ziele, nötige Rolle, als Massenoperation erlaubt |
+| `catalog.py` | Katalog der Operationen: eingebaute und eigene (`Catalog`, je App eine Instanz, neu geladen nach Änderungen), Ziele, nötige Rolle, als Massenoperation erlaubt |
+| `customspec.py` | Beschreibung einer eigenen Operation (`CustomSpec`, als JSON in der Aktivität), Kontextparameter, `SERVICE_SUBTYPE` |
+| `customops.py` | eigene Operationen und Parameter anlegen und prüfen, Parameterwerte prüfen (`parameter_values`) |
 | `api/` | REST-API unter `/api`, geschützt durch persönliche API-Tokens; `create_app` baut die Anwendung |
 | `web/` | servergerenderte Oberfläche (Jinja2), Anmeldung, Einrichtung, Konto, Übersetzungen |
 | `mock/` | simulierter Host Agent und sapstartsrv für Entwicklung und Tests |
@@ -133,7 +135,10 @@ Wichtige Entwurfsentscheidungen:
   sind fortlaufend nummeriert (`0001`, `0002`, …). `render_as_batch` ist an, weil SQLite
   Spalten nur durch Neuaufbau der Tabelle ändern kann; bei solchen Migrationen auf die
   Fremdschlüssel achten (`PRAGMA foreign_keys` ist an). Der Test
-  `test_models_match_migrations` schlägt fehl, wenn eine Migration fehlt.
+  `test_models_match_migrations` schlägt fehl, wenn eine Migration fehlt. Autogenerate schlägt
+  dabei jedes Mal vor, die Fremdschlüssel von `activities` aus Migration 0004 neu aufzubauen;
+  das ist nur die Lücke beim Zurücklesen (siehe Migration 0004) und muss aus der erzeugten
+  Datei entfernt werden.
 - **Verbindungsdaten eines Hosts** lassen sich ändern (`hosts.update_connection`), nicht aber
   während einer Aktivität, die eine Instanz oder ein System auf dem Host betrifft. Geprüft wird
   die neue Verbindung erst durch die nächste Discovery.
@@ -171,11 +176,33 @@ Wichtige Entwurfsentscheidungen:
 - **Menü „Operationen“** (`operation_buttons` in `macros.html`, ein `<details class="menu">`)
   statt einzelner Knöpfe; „Status aktualisieren“ bleibt ein eigener Knopf. Die Einträge kommen
   aus dem **Katalog** (`catalog.py`, im Template über `ops("SYSTEM")` usw., gefiltert nach
-  Rolle). Neue Operationen, auch spätere eigene (geplant: Host-Agent-Skripte über
-  `ExecuteOperation`, wie die kundendefinierten Operationen in LaMa), werden dort eingetragen
-  und erscheinen dann in Menüs, Massenoperationen und `/api/operations`. Routen für
+  Rolle und, bei Instanzen, nach Instanztyp: `ops("INSTANCE", instance)`). Neue eingebaute
+  Operationen werden dort eingetragen; eigene kommen aus der Datenbank. Beide erscheinen in
+  Menüs, Massenoperationen und `/api/operations`. Routen für
   Operationen brauchen mindestens Operator (`permissions.OPERATION_ROUTES`); die Rolle der
   einzelnen Operation prüft der Handler.
+- **Eigene Operationen** (Wunsch des Eigentümers, angelehnt an die kundendefinierten
+  Operationen in LaMa): Skripte aus `operations.d` des Host Agents, aufgerufen mit
+  `ExecuteOperation` asynchron (Timeout 0), dann `IsOperationFinished` und
+  `GetOperationResults` im Takt der Statusabfrage; neue Zeilen kommen ins Protokoll (die
+  Übergangszeile „saphostcontrol: Executing … hook“ nicht). Fault 255 heißt „läuft noch“,
+  Fault 127 „Skript fehlgeschlagen“ (mit allen Zeilen im Detail `OperationException`),
+  -20 „unbekannte Operation“. Nur Admins legen sie an (Tabellen `custom_operations`,
+  `custom_operation_parameters`, Migration 0005); jede hat eine eigene Rolle zum Ausführen.
+  Die Aktivität (`kind` CUSTOM) speichert die Beschreibung der Operation und die Werte in
+  `options`, damit spätere Änderungen laufende Aktivitäten nicht berühren. Parameter: Text,
+  Ganzzahl, Ja/Nein; leere optionale Werte werden wie in LaMa nicht übergeben (Wunsch des
+  Eigentümers: Aufrücken der Positionsargumente ist Sache des Skripts), fehlende bekommen
+  den Standardwert. Text ohne eigenes Muster nur `[A-Za-z0-9._-]*`. `SERVICE_SUBTYPE` wird
+  aus dem Instanztyp und den Anwendungsservern des Systems abgeleitet (Annahme). Im Menü
+  führen eigene Operationen auf ein Formular (`/run/{instances|systems|hosts}/{id}/{key}`).
+  Eingebaute Schlüssel (`start`, `stop`, `restart`, `discover`) sind für eigene gesperrt.
+- **Abbrechen** (`OperationRunner.cancel`, Wunsch des Eigentümers): Start, Stopp und Neustart
+  hören nur auf zu warten; eigene Operationen werden per `CancelOperation` (O-HARD) auf dem
+  Host abgebrochen, ebenso beim Zeitlimit; Massenoperationen brechen laufende Kinder ab und
+  überspringen wartende. Endstatus CANCELLED. Ein Abbruch kann die Sitzung der Aktivität
+  mitten in einem Datenbankzugriff treffen; deshalb schließt `_run` die Aktivität in einer
+  frischen Sitzung ab. Ohne Abbruchwunsch (Serverende) bleibt es bei „Interrupted“.
 - **Massenoperationen** (Wunsch des Eigentümers: Systeme, Instanzen und Hosts, Standard 5
   gleichzeitig, bei Fehlern weitermachen, keine zusätzliche Bestätigung): eine
   Sammelaktivität (`target_type` MASS, Einstellungen als JSON in `activities.options`) mit
@@ -218,6 +245,8 @@ Wichtige Entwurfsentscheidungen:
   ohne es kann die Aktivität mit der falschen Uhr schon fertig sein (wackelige Tests).
 - Zeit wird über eine falsche Uhr gesteuert (`FakeClock` in `tests/conftest.py`). Tests, die
   Operationen ausführen, übergeben `sleep` und `clock` an `create_app`.
+- Eigene Operationen testet `tests/test_custom.py` mit den Fixtures von `test_mass.py` und der
+  simulierten Operation `LO_TEST` (`PARAM-SLEEP` Laufzeit, `PARAM-RC` Exit-Code).
 - Neue Funktionen brauchen Tests, auch für Fehlerfälle. Verhalten, das der Mock simulieren
   soll, wird zuerst im Mock ergänzt.
 
@@ -264,13 +293,24 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
   Instanz an SID, Nummer und SAPLOCALHOST; das Tool sendet deshalb `mHostname` (Hostname aus
   `ListInstances`), und der Mock verlangt ihn wie der echte Host Agent. Mit `mHostname`
   funktionieren Start, Stopp und Neustart eines über zwei Hosts verteilten Systems.
-- Noch nicht gegen echte Systeme getestet: HTTPS.
+- **Eigene Operationen** (Testskript mit `Mode: async`, `ResultConverter: hook`):
+  `ExecuteOperation` asynchron liefert sofort eine Operation-ID; Argumente kommen als
+  `KEY=value`, fehlende fallen weg und folgende rücken auf. `GetOperationResults` während des
+  Laufs: Fault 255 „Timeout occurred“ mit den bisherigen Zeilen (zuletzt „saphostcontrol:
+  Executing <Description> hook“); `IsOperationFinished` „noch nicht fertig“. Erfolg endet mit
+  „… hook successfully executed“; Exit-Code ≠ 0 gibt Fault 127 „Command execution failed.“
+  mit „… hook failed (exit code = N)“. Schlüssel `Info`, `Warning`, `Error`. `CancelOperation`
+  beendet das Skript (Exit-Code 15, Antwort Fault 127); danach `IsOperationFinished` „Failed
+  to determine operation status“ und `GetOperationResults` Fault -20 „Operation ID not found“.
+- Noch nicht gegen echte Systeme getestet: HTTPS; eigene Operationen aus dem Tool heraus.
 
 ## Offene Annahmen, die ein Test mit einer echten Instanz klären muss
 
 1. **Flag `O-INSTANCE`:** Geklärt, ein echter Host Agent akzeptiert es.
-2. **Operation-ID:** Der Client ruft Start und Stopp mit Timeout 0 (asynchron) auf und wertet
-   die zurückgegebene Operation-ID nicht aus. `GetOperationResults` ist nicht umgesetzt.
+2. **Operation-ID:** Geklärt für eigene Operationen: `ExecuteOperation` mit Timeout 0 liefert
+   sofort eine Operation-ID, `IsOperationFinished`, `GetOperationResults` und
+   `CancelOperation` funktionieren damit (Faults 255, 127, -20 wie im Mock). Start und Stopp
+   werten ihre Operation-ID weiterhin nicht aus, sie verfolgen den Status der Prozesse.
 3. **Zielzustand:** Geklärt für Dialoginstanz, zentrale Dienste und HANA-Instanz (alle
    Prozesse grün bzw. grau).
 4. **Geschützte Methoden am sapstartsrv:** Geklärt: Lesen geht mit `sapadm`, `StopSystem`
@@ -292,7 +332,11 @@ Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 - nur lokale Benutzer, kein LDAP oder SSO
 - Änderungen an der Konfiguration werden nicht protokolliert, nur Aktivitäten
 - Migrationen nur vorwärts; zurück geht es über die Sicherungskopie
-- Aktivitäten lassen sich nicht abbrechen
+- Abbrechen von Start und Stopp beendet nur das Warten
+- keine Operationsvorlagen (Ketten von Operationen) und keine zeitgesteuerte Ausführung
+- keine eingebaute Operation „Instanz-Agent neu starten und registrieren“
+- keine Kernel-Repositories (Ablage der Kernel-Versionen für Kernel-Tausch-Skripte)
+- keine Hooks und kein HTTP-Provider für eigene Operationen
 - keine eigenen Datenbank-Operationen (`StartDatabase`, `StopDatabase`)
 - jede SID nur einmal
 - Abhängigkeiten zwischen Systemen werden nicht automatisch erkannt

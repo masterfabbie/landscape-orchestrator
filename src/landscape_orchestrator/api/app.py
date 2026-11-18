@@ -20,10 +20,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import __version__
-from ..catalog import CATALOG
-from ..catalog import get as get_operation
+from ..catalog import Catalog
 from ..connections import ClientFactory
 from ..crypto import SecretBox
+from ..customops import (
+    CustomOperationError,
+    ParameterError,
+    parameter_values,
+    save_operation,
+    save_parameter,
+)
 from ..db import create_engine, create_session_factory, upgrade_database
 from ..dependencies import DependencyError, set_dependencies
 from ..discovery import DiscoveryError, discover_host
@@ -31,6 +37,7 @@ from ..hosts import Connection, HostChangeError, update_connection
 from ..models import (
     Activity,
     ApiToken,
+    CustomOperation,
     Host,
     HostTag,
     Instance,
@@ -42,6 +49,7 @@ from ..models import (
 )
 from ..operations import (
     DEFAULT_TIMEOUT_SECONDS,
+    NotActiveError,
     NotAssignedError,
     OperationConflictError,
     OperationKind,
@@ -78,6 +86,8 @@ from .schemas import (
     ActivityDetail,
     ActivityOut,
     Credentials,
+    CustomOperationIn,
+    CustomOperationOut,
     DependenciesIn,
     DiscoveryOut,
     HostCreate,
@@ -95,6 +105,7 @@ from .schemas import (
     PoolCreate,
     PoolOut,
     RefreshOut,
+    RunIn,
     SidOut,
     SystemCreate,
     SystemOut,
@@ -142,6 +153,7 @@ def create_app(
     clients = ClientFactory(secret_box, transport=transport)
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
+    catalog = Catalog()
     runner = OperationRunner(
         session_factory, clients, poll_interval=poll_interval, sleep=sleep, clock=clock
     )
@@ -151,6 +163,7 @@ def create_app(
         await upgrade_database(engine, settings.database_url)
         await runner.recover_interrupted()
         async with session_factory() as session:
+            await catalog.reload(session)
             if await user_count(session) == 0:
                 # One-time code for creating the first admin on the page /setup.
                 code = "-".join(secrets.token_hex(3).upper() for _ in range(3))
@@ -422,9 +435,7 @@ def create_app(
         return await load_system(session, system_id)
 
     @api.patch("/systems/{system_id}", response_model=SystemOut)
-    async def update_system_route(
-        system_id: int, body: SystemUpdate, session: Session
-    ) -> System:
+    async def update_system_route(system_id: int, body: SystemUpdate, session: Session) -> System:
         await change(session, update_system(session, system_id, body.name, body.description))
         return await load_system(session, system_id)
 
@@ -435,9 +446,7 @@ def create_app(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @api.post("/systems/{system_id}/instances", response_model=SystemOut)
-    async def assign_instances_route(
-        system_id: int, body: InstanceIds, session: Session
-    ) -> System:
+    async def assign_instances_route(system_id: int, body: InstanceIds, session: Session) -> System:
         await change(session, assign_instances(session, system_id, body.instance_ids))
         return await load_system(session, system_id)
 
@@ -549,9 +558,7 @@ def create_app(
     ) -> Activity:
         """Start, stop or restart a whole system in the order of the start priorities."""
         kind = OperationKind(operation.upper())
-        return await submit(
-            runner.submit_system(session, system_id, kind, timeout, user.username)
-        )
+        return await submit(runner.submit_system(session, system_id, kind, timeout, user.username))
 
     @api.get("/activities", response_model=list[ActivityOut])
     async def list_activities(
@@ -573,34 +580,245 @@ def create_app(
 
     @api.get("/operations", response_model=list[OperationOut])
     async def list_operations(user: CurrentUser) -> list[dict[str, object]]:
-        """The operations of the catalog this user may run."""
+        """The operations of the catalog this user may run, custom ones with parameters."""
         return [
             {
                 "key": operation.key,
+                "name": operation.custom.name if operation.custom else None,
                 "targets": sorted(operation.targets),
                 "role": operation.role.value,
                 "mass": operation.mass,
+                "custom": operation.custom is not None,
+                "parameters": [p.__dict__ for p in operation.custom.parameters]
+                if operation.custom
+                else [],
             }
-            for operation in CATALOG
+            for operation in catalog.all()
             if has_role(user, operation.role)
         ]
 
+    # --- custom operations ----------------------------------------------------------------
+
+    def custom_out(operation: CustomOperation) -> dict[str, object]:
+        return {
+            "id": operation.id,
+            "key": operation.key,
+            "name": operation.name,
+            "description": operation.description,
+            "agent_operation": operation.agent_operation,
+            "target": operation.target,
+            "instance_types": [t for t in operation.instance_types.split(",") if t],
+            "ordering": operation.ordering,
+            "role": operation.role,
+            "mass": operation.mass,
+            "timeout_seconds": operation.timeout_seconds,
+            "parameters": [
+                {
+                    "name": p.name,
+                    "label": p.label,
+                    "type": p.type,
+                    "required": p.required,
+                    "default": p.default,
+                    "pattern": p.pattern,
+                    "help": p.help,
+                }
+                for p in operation.parameters
+            ],
+        }
+
+    async def save_custom(
+        session: AsyncSession, operation: CustomOperation | None, body: CustomOperationIn
+    ) -> CustomOperation:
+        try:
+            operation = await save_operation(
+                session,
+                operation,
+                key=body.key,
+                name=body.name,
+                description=body.description,
+                agent_operation=body.agent_operation,
+                target=body.target,
+                instance_types=body.instance_types,
+                ordering=body.ordering,
+                role=body.role,
+                mass=body.mass,
+                timeout_seconds=body.timeout_seconds,
+            )
+            # The parameters are replaced as a whole, in the given order.
+            operation.parameters.clear()
+            await session.flush()
+            for parameter in body.parameters:
+                await save_parameter(session, operation, None, **parameter.model_dump())
+        except CustomOperationError as exc:
+            await session.rollback()
+            code = 409 if exc.code == "operation_key_taken" else 422
+            raise HTTPException(code, str(exc)) from exc
+        await session.commit()
+        await catalog.reload(session)
+        return operation
+
+    async def load_custom(session: AsyncSession, operation_id: int) -> CustomOperation:
+        operation = await session.get(CustomOperation, operation_id)
+        if operation is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Custom operation not found")
+        return operation
+
+    @api.get("/custom-operations", response_model=list[CustomOperationOut])
+    async def list_custom_operations(session: Session) -> list[dict[str, object]]:
+        rows = await session.scalars(select(CustomOperation).order_by(CustomOperation.key))
+        return [custom_out(op) for op in rows]
+
     @api.post(
-        "/mass-operations", response_model=ActivityOut, status_code=status.HTTP_202_ACCEPTED
+        "/custom-operations",
+        response_model=CustomOperationOut,
+        status_code=status.HTTP_201_CREATED,
     )
+    async def create_custom_operation(
+        body: CustomOperationIn, session: Session
+    ) -> dict[str, object]:
+        """Define a custom operation (admin). It runs the script configured under
+        ``agent_operation`` in operations.d of the host agent."""
+        return custom_out(await save_custom(session, None, body))
+
+    @api.get("/custom-operations/{operation_id}", response_model=CustomOperationOut)
+    async def get_custom_operation(operation_id: int, session: Session) -> dict[str, object]:
+        return custom_out(await load_custom(session, operation_id))
+
+    @api.put("/custom-operations/{operation_id}", response_model=CustomOperationOut)
+    async def update_custom_operation(
+        operation_id: int, body: CustomOperationIn, session: Session
+    ) -> dict[str, object]:
+        operation = await load_custom(session, operation_id)
+        return custom_out(await save_custom(session, operation, body))
+
+    @api.delete("/custom-operations/{operation_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_custom_operation(operation_id: int, session: Session) -> Response:
+        await session.delete(await load_custom(session, operation_id))
+        await session.commit()
+        await catalog.reload(session)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    async def run_custom(
+        session: AsyncSession,
+        user: User,
+        target_type: TargetType,
+        target_id: int,
+        key: str,
+        body: RunIn,
+        timeout: int | None,
+    ) -> Activity:
+        definition = catalog.get(key)
+        if definition is None or definition.custom is None or target_type not in definition.targets:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"No custom operation {key} here")
+        if not has_role(user, definition.role):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires the role {definition.role}")
+        if target_type == TargetType.INSTANCE:
+            instance = await session.scalar(select(Instance).where(Instance.id == target_id))
+            if instance is not None and not definition.applies_to(instance):
+                raise HTTPException(
+                    422, f"{definition.custom.name} does not apply to this instance"
+                )
+        try:
+            values = parameter_values(definition.custom, body.parameters)
+        except ParameterError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return await submit(
+            runner.submit_custom(
+                session,
+                definition.custom,
+                target_type,
+                target_id,
+                values,
+                timeout,
+                user.username,
+            )
+        )
+
+    CustomTimeout = Annotated[int | None, Query(ge=10, le=86400)]
+
+    @api.post(
+        "/instances/{instance_id}/operations/{key}",
+        response_model=ActivityOut,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def run_on_instance(
+        instance_id: int,
+        key: str,
+        session: Session,
+        user: CurrentUser,
+        body: RunIn = RunIn(),  # noqa: B008
+        timeout: CustomTimeout = None,
+    ) -> Activity:
+        """Run a custom operation on an instance."""
+        return await run_custom(session, user, TargetType.INSTANCE, instance_id, key, body, timeout)
+
+    @api.post(
+        "/systems/{system_id}/operations/{key}",
+        response_model=ActivityOut,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def run_on_system(
+        system_id: int,
+        key: str,
+        session: Session,
+        user: CurrentUser,
+        body: RunIn = RunIn(),  # noqa: B008
+        timeout: CustomTimeout = None,
+    ) -> Activity:
+        """Run a custom operation on the matching instances of a system."""
+        return await run_custom(session, user, TargetType.SYSTEM, system_id, key, body, timeout)
+
+    @api.post(
+        "/hosts/{host_id}/operations/{key}",
+        response_model=ActivityOut,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def run_on_host(
+        host_id: int,
+        key: str,
+        session: Session,
+        user: CurrentUser,
+        body: RunIn = RunIn(),  # noqa: B008
+        timeout: CustomTimeout = None,
+    ) -> Activity:
+        """Run a custom operation on a host."""
+        return await run_custom(session, user, TargetType.HOST, host_id, key, body, timeout)
+
+    @api.post("/activities/{activity_id}/cancel", response_model=ActivityDetail)
+    async def cancel_activity(activity_id: int, session: Session, user: CurrentUser) -> Activity:
+        """Cancel a running activity. Start and stop only stop waiting; custom operations are
+        cancelled on the host agent; a mass operation cancels its running children."""
+        try:
+            await runner.cancel(session, activity_id, user.username)
+            return await get_activity(activity_id, session)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        except NotActiveError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+    @api.post("/mass-operations", response_model=ActivityOut, status_code=status.HTTP_202_ACCEPTED)
     async def create_mass_operation(
         body: MassOperationIn,
         session: Session,
         user: CurrentUser,
-        timeout: Timeout = DEFAULT_TIMEOUT_SECONDS,
+        timeout: CustomTimeout = None,
     ) -> Activity:
         """Run an operation on many targets; returns the parent activity with the children."""
-        definition = get_operation(body.operation)
+        definition = catalog.get(body.operation)
         target_type = TargetType(body.target_type)
         if definition is None or target_type not in definition.targets or not definition.mass:
             raise HTTPException(422, f"No mass operation {body.operation} on {target_type}")
         if not has_role(user, definition.role):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires the role {definition.role}")
+        values = None
+        if definition.custom is not None:
+            try:
+                values = parameter_values(definition.custom, body.parameters)
+            except ParameterError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        default_timeout = (
+            definition.custom.timeout_seconds if definition.custom else DEFAULT_TIMEOUT_SECONDS
+        )
         try:
             return await runner.submit_mass(
                 session,
@@ -609,8 +827,10 @@ def create_app(
                 body.target_ids,
                 parallel=body.parallel,
                 stop_on_error=body.stop_on_error,
-                timeout_seconds=timeout,
+                timeout_seconds=timeout or default_timeout,
                 requested_by=user.username,
+                custom=definition.custom,
+                parameters=values,
             )
         except TargetNotFoundError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
@@ -709,8 +929,9 @@ def create_app(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     app.state.runner = runner
+    app.state.catalog = catalog
     app.state.setup_code = None
     app.state.session_factory = session_factory
     app.mount("/api", api)
-    register_web(app, AppContext(settings, secret_box, clients, session_factory, runner))
+    register_web(app, AppContext(settings, secret_box, clients, session_factory, runner, catalog))
     return app

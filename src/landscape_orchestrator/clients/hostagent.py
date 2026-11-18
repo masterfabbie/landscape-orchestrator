@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from ..soapxml import SAPHOSTCONTROL_NS, items
-from .base import SoapClient, SoapProtocolError, as_dict
+from .base import SoapClient, SoapFaultError, SoapProtocolError, as_dict
 
 HOSTAGENT_HTTP_PORT = 1128
 HOSTAGENT_HTTPS_PORT = 1129
@@ -119,6 +119,36 @@ class OperationResult:
     entries: list[tuple[str, str]] = field(default_factory=list)
 
 
+# Fault codes of the host agent's OperationException, as seen on a real host agent.
+FAULT_TIMEOUT = 255  # GetOperationResults: the operation is still running
+FAULT_COMMAND_FAILED = 127  # the command ended with an exit code other than 0, or was cancelled
+FAULT_UNKNOWN_OPERATION = -20  # "Operation ID not found"
+
+
+class OperationFault(SoapFaultError):
+    """A fault with the host agent's OperationException: fault code and messages."""
+
+    def __init__(self, fault: SoapFaultError, code: int | None, result: OperationResult) -> None:
+        super().__init__(fault.faultstring, fault.faultcode, fault.http_status, fault.detail)
+        self.code = code
+        self.result = result
+
+    @classmethod
+    def from_fault(cls, fault: SoapFaultError) -> OperationFault:
+        detail = fault.detail
+        try:
+            code = int(detail.get("mFaultCode"))
+        except (TypeError, ValueError):
+            code = None
+        result = _operation_result(
+            {
+                "mOperationID": detail.get("mOperationID"),
+                "mOperationResults": detail.get("mResponseMessages"),
+            }
+        )
+        return cls(fault, code, result)
+
+
 @dataclass(frozen=True)
 class HostAgentVersion:
     release: str
@@ -159,9 +189,7 @@ def parse_version_info(result: OperationResult) -> HostAgentVersion | None:
 
 
 def _property_dict(value: Any) -> dict[str, str]:
-    return {
-        item.get("mKey", ""): item.get("mValue", "") for item in map(as_dict, items(value))
-    }
+    return {item.get("mKey", ""): item.get("mValue", "") for item in map(as_dict, items(value))}
 
 
 def _property_list(values: dict[str, str | None]) -> list[dict[str, str]]:
@@ -324,6 +352,60 @@ class HostAgentClient(SoapClient):
                 "aOptions": {"mTimeout": timeout, "mOptions": [], "mSoftTimeout": 0},
             },
         )
+        return _operation_result(result.get("result"))
+
+    async def execute_async(
+        self, name: str, arguments: dict[str, str] | None = None
+    ) -> OperationResult:
+        """Start a named operation without waiting; the result carries the operation ID."""
+        return await self.execute_operation(name, arguments, timeout=0)
+
+    async def is_operation_finished(self, operation_id: str) -> bool:
+        result = await self.call("IsOperationFinished", {"aOperationID": operation_id})
+        return str(result.get("IsFinished", "")).lower() == "true"
+
+    async def get_operation_results(
+        self, operation_id: str, *, timeout: int = 0
+    ) -> OperationResult:
+        """Messages of an operation.
+
+        A real host agent answers for an operation that is still running with the fault code
+        255 ("Timeout occurred") and the messages so far, and for one that ended with an
+        exit code other than 0 with fault code 127 and all messages. Both raise
+        :class:`OperationFault` with the messages.
+        """
+        try:
+            result = await self.call(
+                "GetOperationResults",
+                {
+                    "aOperationID": operation_id,
+                    "aOptions": {"mTimeout": timeout, "mOptions": [], "mSoftTimeout": 0},
+                },
+            )
+        except SoapFaultError as exc:
+            raise OperationFault.from_fault(exc) from exc
+        return _operation_result(result.get("result"))
+
+    async def cancel_operation(self, operation_id: str, *, hard: bool = True) -> OperationResult:
+        """Cancel a running operation; O-HARD ends the process.
+
+        A real host agent answered a successful cancel of a script with fault code 127 and
+        the messages up to the cancel ("exit code = 15"). That is returned, not raised.
+        """
+        try:
+            result = await self.call(
+                "CancelOperation",
+                {
+                    "aOperationID": operation_id,
+                    "aType": "O-HARD" if hard else "O-SOFT",
+                    "aOptions": {"mTimeout": 0, "mOptions": [], "mSoftTimeout": 0},
+                },
+            )
+        except SoapFaultError as exc:
+            fault = OperationFault.from_fault(exc)
+            if fault.code == FAULT_COMMAND_FAILED:
+                return fault.result
+            raise fault from exc
         return _operation_result(result.get("result"))
 
     async def get_version(self) -> HostAgentVersion | None:
