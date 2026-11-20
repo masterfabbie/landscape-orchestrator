@@ -112,11 +112,74 @@ class CimObject:
 
 
 @dataclass(frozen=True)
+class LogMessage:
+    """One line of an operation: severity (Info, Warning, Error), source and text.
+
+    Source is the description of the operation for lines of the script and
+    "saphostcontrol" for lines of the host agent itself.
+    """
+
+    severity: str
+    source: str
+    text: str
+
+    @property
+    def display(self) -> str:
+        if self.source == "saphostcontrol":
+            return f"saphostcontrol: {self.text}"
+        return self.text
+
+
+LOG_PREFIX = "LogMsg/"
+
+
+def log_messages(entries: list[tuple[str, str]]) -> list[LogMessage]:
+    """Group the messages of an operation into lines.
+
+    A real host agent returns each line of a script as four messages with the keys
+    LogMsg/TimeStamp, LogMsg/Severity, LogMsg/Source and LogMsg/Text. A line starts at
+    LogMsg/TimeStamp or when a key repeats. Other messages become a line of their own with
+    the key as severity.
+    """
+    lines: list[LogMessage] = []
+    current: dict[str, str] | None = None
+
+    def close() -> None:
+        if current is not None:
+            lines.append(
+                LogMessage(
+                    current.get("Severity", "Info") or "Info",
+                    current.get("Source", ""),
+                    current.get("Text", ""),
+                )
+            )
+
+    for key, value in entries:
+        if not key.startswith(LOG_PREFIX):
+            close()
+            current = None
+            lines.append(LogMessage(key or "Info", "", value))
+            continue
+        name = key[len(LOG_PREFIX) :]
+        if current is None or name == "TimeStamp" or name in current:
+            close()
+            current = {}
+        current[name] = value
+    close()
+    return lines
+
+
+@dataclass(frozen=True)
 class OperationResult:
     operation_id: str
     messages: dict[str, str]
     # All messages in order; keys may repeat, e.g. for log lines.
     entries: list[tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def log(self) -> list[LogMessage]:
+        """The messages grouped into lines (see :func:`log_messages`)."""
+        return log_messages(self.entries)
 
 
 # Fault codes of the host agent's OperationException, as seen on a real host agent.

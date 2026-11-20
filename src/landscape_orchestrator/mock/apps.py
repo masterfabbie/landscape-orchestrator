@@ -434,35 +434,30 @@ def create_hostagent_app(landscape: MockLandscape, host_name: str) -> FastAPI:
             ),
         )
 
+    def _line(severity: str, source: str, text: str) -> list[dict[str, str]]:
+        """One line as a real host agent returns it: four messages LogMsg/*."""
+        return [
+            {"mMessageKey": "LogMsg/TimeStamp", "mMessageValue": ""},
+            {"mMessageKey": "LogMsg/Severity", "mMessageValue": severity},
+            {"mMessageKey": "LogMsg/Source", "mMessageValue": source},
+            {"mMessageKey": "LogMsg/Text", "mMessageValue": text},
+        ]
+
     def _run_lines(run, final: bool) -> list[dict[str, str]]:
         """Messages of a run, as a real host agent returns them for a test script."""
         desc = run.operation.description
-        lines = [{"mMessageKey": "Info", "mMessageValue": f"{desc}: count={len(run.arguments)}"}]
-        lines += [
-            {"mMessageKey": "Info", "mMessageValue": f"{desc}: arg{i}=[{value}]"}
-            for i, value in enumerate(run.arguments, start=1)
-        ]
-        lines.append({"mMessageKey": "Warning", "mMessageValue": f"{desc}:  test warning"})
+        lines = _line("Info", desc, f"count={len(run.arguments)}")
+        for i, value in enumerate(run.arguments, start=1):
+            lines += _line("Info", desc, f"arg{i}=[{value}]")
+        lines += _line("Warning", desc, " test warning")
         if not final:
-            lines.append(
-                {"mMessageKey": "Info", "mMessageValue": f"saphostcontrol: Executing {desc} hook"}
-            )
+            lines += _line("Info", "saphostcontrol", f"Executing {desc} hook")
         elif run.cancelled or run.exit_code:
             code = 15 if run.cancelled else run.exit_code
-            lines.append({"mMessageKey": "Error", "mMessageValue": f"{desc}:  test error"})
-            lines.append(
-                {
-                    "mMessageKey": "Error",
-                    "mMessageValue": f"saphostcontrol: {desc} hook failed (exit code = {code})",
-                }
-            )
+            lines += _line("Error", desc, " test error")
+            lines += _line("Error", "saphostcontrol", f"{desc} hook failed (exit code = {code})")
         else:
-            lines.append(
-                {
-                    "mMessageKey": "Info",
-                    "mMessageValue": f"saphostcontrol: {desc} hook successfully executed",
-                }
-            )
+            lines += _line("Info", "saphostcontrol", f"{desc} hook successfully executed")
         return lines
 
     def _run(params: dict[str, Any]):

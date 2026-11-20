@@ -13,6 +13,7 @@ from ..soapxml import (
     items,
     local,
     parse_envelope,
+    response_name,
     to_value,
 )
 
@@ -47,7 +48,7 @@ def parse_request(body: bytes) -> tuple[str, dict[str, Any]]:
 
 def build_response(prefix: str, namespace: str, method: str, payload: dict[str, Any]) -> bytes:
     ET.register_namespace(prefix, namespace)
-    return envelope(build_element(namespace, f"{method}Response", payload))
+    return envelope(build_element(namespace, response_name(method), payload))
 
 
 def build_fault(fault: SoapFault) -> bytes:

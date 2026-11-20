@@ -12,6 +12,7 @@ from landscape_orchestrator.clients import (
 from landscape_orchestrator.clients.hostagent import (
     DatabaseStatus,
     InstanceStatus,
+    LogMessage,
     OperationResult,
     parse_version_info,
 )
@@ -198,21 +199,59 @@ async def test_asynchronous_custom_operation(landscape, clock):
         with pytest.raises(OperationFault) as running:
             await client.get_operation_results(operation_id)
         assert running.value.code == FAULT_TIMEOUT
-        assert running.value.result.entries[-1][1].startswith("saphostcontrol: Executing")
+        assert running.value.result.log[-1].display.startswith("saphostcontrol: Executing")
         clock.advance(5)
         assert await client.is_operation_finished(operation_id)
         with pytest.raises(OperationFault) as failed:
             await client.get_operation_results(operation_id)
         assert failed.value.code == FAULT_COMMAND_FAILED
-        assert failed.value.result.entries[-1] == (
-            "Error",
-            "saphostcontrol: Test operation hook failed (exit code = 3)",
+        assert failed.value.result.log[-1] == LogMessage(
+            "Error", "saphostcontrol", "Test operation hook failed (exit code = 3)"
         )
 
         started = await client.execute_async("LO_TEST", {"PARAM-SLEEP": "60", "PARAM-RC": "0"})
         other = started.operation_id
         result = await client.cancel_operation(other)
-        assert result.entries[-1][1].endswith("hook failed (exit code = 15)")
+        assert result.log[-1].text.endswith("hook failed (exit code = 15)")
         with pytest.raises(OperationFault) as gone:
             await client.get_operation_results(other)
         assert gone.value.code == FAULT_UNKNOWN_OPERATION
+
+
+def test_log_messages_are_grouped():
+    """A real host agent sends each line as LogMsg/TimeStamp, /Severity, /Source, /Text."""
+    from landscape_orchestrator.clients.hostagent import log_messages
+
+    def line(severity, source, text):
+        return [
+            ("LogMsg/TimeStamp", ""),
+            ("LogMsg/Severity", severity),
+            ("LogMsg/Source", source),
+            ("LogMsg/Text", text),
+        ]
+
+    entries = [
+        *line("Info", "Sync", "BEGIN"),
+        *line("Warning", "Sync", "careful"),
+        ("Info", "a line without LogMsg"),
+        ("LogMsg/Severity", "Info"),  # a line without time stamp
+        ("LogMsg/Source", "saphostcontrol"),
+        ("LogMsg/Text", "Sync hook successfully executed"),
+    ]
+    lines = log_messages(entries)
+    assert [line.text for line in lines] == [
+        "BEGIN",
+        "careful",
+        "a line without LogMsg",
+        "Sync hook successfully executed",
+    ]
+    assert lines[1].severity == "Warning"
+    assert lines[3].display == "saphostcontrol: Sync hook successfully executed"
+
+
+async def test_get_operation_results_answers_get_operation_response(landscape):
+    """The WSDL and a real host agent name the response GetOperationResponse."""
+    from landscape_orchestrator.mock.soap import build_response
+
+    body = build_response("SAPHostControl", "urn:SAPHostControl", "GetOperationResults", {})
+    assert b"GetOperationResponse" in body and b"GetOperationResultsResponse" not in body

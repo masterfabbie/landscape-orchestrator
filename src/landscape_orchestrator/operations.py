@@ -17,7 +17,9 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from enum import StrEnum
 
@@ -33,7 +35,7 @@ from .clients import (
     SoapError,
     SoapFaultError,
 )
-from .clients.hostagent import FAULT_TIMEOUT, OperationFault
+from .clients.hostagent import FAULT_TIMEOUT, OperationFault, OperationResult
 from .clients.sapcontrol import StateColor
 from .connections import ClientFactory
 from .crypto import SecretError
@@ -73,6 +75,10 @@ class TargetType(StrEnum):
     HOST = "HOST"
     # A mass operation: a parent activity whose children do the work.
     MASS = "MASS"
+
+
+# The activity a task works for; also set in the tasks of asyncio.gather within it.
+_CURRENT_ACTIVITY: ContextVar[int | None] = ContextVar("current_activity", default=None)
 
 
 def _cancel_note(activity: Activity) -> str:
@@ -196,6 +202,11 @@ class OperationRunner:
         self._submit_lock = asyncio.Lock()
         # Activities a user asked to cancel -> user name; their tasks are being cancelled.
         self._cancel_requests: dict[int, str] = {}
+        # Tasks waiting in _pause or _wait_for_any: only there may a user's cancel interrupt
+        # them. Interrupted in the middle of a database call, an aiosqlite connection can stay
+        # locked, and the end of the activity could not be written.
+        self._at_safe_point: dict[int, set[asyncio.Task[object]]] = {}
+        self._shutting_down = False
 
     # --- submitting ---------------------------------------------------------------------
 
@@ -426,10 +437,11 @@ class OperationRunner:
             raise TargetNotFoundError("Activity not found")
         if activity.status not in ACTIVE_STATUSES:
             raise NotActiveError(f"Activity {activity_id} has already finished")
-        self._cancel_requests[activity_id] = user
-        task = self._tasks.get(activity_id)
+        # End the read transaction first: while it is open, SQLite does not let the
+        # cancelled activity write its end, and both would wait for each other.
+        await session.rollback()
+        task = self._request_cancel(activity_id, user)
         if task is not None:
-            task.cancel()
             await asyncio.wait([task])
         else:
             self._cancel_requests.pop(activity_id, None)
@@ -522,18 +534,29 @@ class OperationRunner:
             await session.commit()
             return result.rowcount
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, grace_seconds: float = 5.0) -> None:
+        """Stop all activities: at their next safe point, the rest after ``grace_seconds``."""
+        self._shutting_down = True
         tasks = list(self._tasks.values())
-        for task in tasks:
+        for waiting in list(self._at_safe_point.values()):
+            for task in list(waiting):
+                task.cancel()
+        if not tasks:
+            return
+        _, pending = await asyncio.wait(tasks, timeout=grace_seconds)
+        for task in pending:
             task.cancel()
-        if tasks:
-            await asyncio.wait(tasks)
+        if pending:
+            await asyncio.wait(pending)
 
     # --- running ------------------------------------------------------------------------
 
     async def _run(self, activity_id: int) -> None:
+        _CURRENT_ACTIVITY.set(activity_id)
         try:
             await self._run_activity(activity_id)
+            # A cancel that came too late: the activity ended before its next safe point.
+            self._cancel_requests.pop(activity_id, None)
         except asyncio.CancelledError:
             # The cancellation may have hit the session anywhere, even while it connected;
             # the activity is finished in a fresh session.
@@ -679,9 +702,7 @@ class OperationRunner:
                 raise
             tasks = []
             for child_id in running:
-                self._cancel_requests[child_id] = user
-                if (task := self._tasks.get(child_id)) is not None:
-                    task.cancel()
+                if (task := self._request_cancel(child_id, user)) is not None:
                     tasks.append(task)
             if tasks:
                 await asyncio.wait(tasks)
@@ -735,10 +756,41 @@ class OperationRunner:
             session, target, kind, timeout, parent_id=parent.id, **common
         )
 
+    def _request_cancel(self, activity_id: int, user: str) -> asyncio.Task[None] | None:
+        """Ask a running activity to stop; it stops at its next safe point."""
+        self._cancel_requests[activity_id] = user
+        for waiting in list(self._at_safe_point.get(activity_id, ())):
+            waiting.cancel()
+        return self._tasks.get(activity_id)
+
+    @asynccontextmanager
+    async def _safe_point(self) -> AsyncIterator[None]:
+        """A wait during which a cancel by a user or the shutdown may interrupt the activity."""
+        task = asyncio.current_task()
+        activity_id = _CURRENT_ACTIVITY.get()
+        if activity_id is None or task is None:
+            yield
+            return
+        if self._shutting_down or activity_id in self._cancel_requests:
+            raise asyncio.CancelledError
+        waiting = self._at_safe_point.setdefault(activity_id, set())
+        waiting.add(task)
+        try:
+            yield
+        finally:
+            waiting.discard(task)
+            if not waiting:
+                self._at_safe_point.pop(activity_id, None)
+
+    async def _pause(self, seconds: float) -> None:
+        async with self._safe_point():
+            await self._sleep(seconds)
+
     async def _wait_for_any(self, activity_ids: list[int]) -> None:
         tasks = [self._tasks[i] for i in activity_ids if i in self._tasks]
         if tasks:
-            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            async with self._safe_point():
+                await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         # A task leaves self._tasks in its done callback, which runs on the next loop pass.
         await asyncio.sleep(0)
 
@@ -1008,12 +1060,16 @@ class OperationRunner:
                 session.add(self._entry(activity, level, prefix + message))
                 await session.commit()
 
-        async def log_new(entries: list[tuple[str, str]]) -> None:
+        async def log_new(result: OperationResult) -> None:
             nonlocal logged
-            # "Executing ... hook" only appears while the script runs.
-            lasting = [e for e in entries if "saphostcontrol: Executing" not in e[1]]
-            for key, value in lasting[logged:]:
-                await log(_LEVELS.get(key.lower(), "INFO"), value)
+            # "Executing ... hook" of saphostcontrol only appears while the script runs.
+            lasting = [
+                line
+                for line in result.log
+                if not (line.source == "saphostcontrol" and line.text.startswith("Executing"))
+            ]
+            for line in lasting[logged:]:
+                await log(_LEVELS.get(line.severity.lower(), "INFO"), line.display)
             logged = max(logged, len(lasting))
 
         try:
@@ -1040,17 +1096,21 @@ class OperationRunner:
                     try:
                         result = await agent.get_operation_results(operation_id)
                     except OperationFault as fault:
-                        await log_new(fault.result.entries)
+                        await log_new(fault.result)
                         if fault.code == FAULT_TIMEOUT and not finished:
                             pass  # still running
                         elif fault.code == FAULT_TIMEOUT:
                             continue  # finished in between; read the results again
                         else:
-                            errors = [v for k, v in fault.result.entries if k.lower() == "error"]
+                            errors = [
+                                line.display
+                                for line in fault.result.log
+                                if line.severity.lower() == "error"
+                            ]
                             reason = errors[-1] if errors else fault.faultstring
                             raise OperationFailedError(f"{prefix}{reason}") from fault
                     else:
-                        await log_new(result.entries)
+                        await log_new(result)
                         if finished:
                             return
                 if self._deadline_reached(deadline):
@@ -1059,7 +1119,7 @@ class OperationRunner:
                         f"{prefix}Timeout after {activity.timeout_seconds} s; the operation "
                         "was cancelled on the host"
                     )
-                await self._sleep(self._poll_interval)
+                await self._pause(self._poll_interval)
         except asyncio.CancelledError:
             if activity.id in self._cancel_requests:
                 await self._cancel_host_operation(host, operation_id, log, log_new)
@@ -1077,7 +1137,7 @@ class OperationRunner:
         except (SoapError, SecretError) as exc:
             await log("ERROR", f"CancelOperation for {operation_id} failed: {exc}")
             return
-        await log_new(result.entries)
+        await log_new(result)
         await log("WARNING", f"Operation {operation_id} cancelled on {host.name}")
 
     async def _discover(self, session: AsyncSession, activity: Activity) -> None:
@@ -1155,7 +1215,7 @@ class OperationRunner:
                     f"Timeout after {activity.timeout_seconds} s: instance is {status}, "
                     f"expected {target}"
                 )
-            await self._sleep(self._poll_interval)
+            await self._pause(self._poll_interval)
 
     async def _read_instance_status(self, instance: Instance) -> str:
         """Status from sapstartsrv; UNKNOWN while it cannot be reached."""
@@ -1250,7 +1310,7 @@ class OperationRunner:
                     raise OperationFailedError(
                         f"Timeout after {timeout} s: system {name} is {last}, expected all {target}"
                     )
-                await self._sleep(self._poll_interval)
+                await self._pause(self._poll_interval)
                 statuses = await self._read_statuses(instances)
                 summary = self._summary(instances, statuses)
                 if summary != last:

@@ -7,7 +7,16 @@ from typing import Any, Self
 
 import httpx
 
-from ..soapxml import SOAP_ENV, XmlError, build_element, envelope, local, parse_envelope, to_value
+from ..soapxml import (
+    SOAP_ENV,
+    XmlError,
+    build_element,
+    envelope,
+    local,
+    parse_envelope,
+    response_name,
+    to_value,
+)
 
 
 class SoapError(Exception):
@@ -120,9 +129,10 @@ class SoapClient:
 
         if result.tag == f"{{{SOAP_ENV}}}Fault":
             raise self._fault(result, response.status_code)
-        if local(result.tag) != f"{method}Response":
+        expected = response_name(method)
+        if local(result.tag) != expected:
             raise SoapProtocolError(
-                f"{self.base_url}: expected {method}Response, got {local(result.tag)}"
+                f"{self.base_url}: expected {expected}, got {local(result.tag)}"
             )
         value = to_value(result)
         return value if isinstance(value, dict) else {}

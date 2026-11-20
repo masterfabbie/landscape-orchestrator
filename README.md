@@ -80,8 +80,11 @@ Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenban
   - Erfolgreich endet die Ausgabe mit „saphostcontrol: <Description> hook successfully
     executed“. Bei einem Exit-Code ungleich 0 kommt der Fault-Code 127 („Command execution
     failed.“) mit allen Zeilen, zuletzt „… hook failed (exit code = N)“.
-  - Schlüssel der Meldungen sind `Info`, `Warning` und `Error`; Zeilen des Skripts mit
-    `[WARNING]:` werden zu `Warning`.
+  - Die Antwort von `GetOperationResults` heißt wie in der WSDL `GetOperationResponse`.
+  - Jede Zeile kommt als vier Meldungen: `LogMsg/TimeStamp`, `LogMsg/Severity` (`Info`,
+    `Warning`, `Error`), `LogMsg/Source` (Beschreibung der Operation oder `saphostcontrol`)
+    und `LogMsg/Text`. Das Tool fasst sie zu einer Zeile zusammen und zeigt den Text im
+    Protokoll der Aktivität. Zeilen des Skripts mit `[WARNING]:` werden zu `Warning`.
   - `CancelOperation` beendet das Skript (Exit-Code 15) und antwortet mit Fault-Code 127 und
     den Zeilen bis dahin. Danach kennt der Host Agent die Operation nicht mehr
     (`GetOperationResults`: Fault-Code -20 „Operation ID not found“).

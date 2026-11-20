@@ -26,6 +26,15 @@ class XmlError(ValueError):
     """The data is not a usable SOAP envelope."""
 
 
+# Response elements whose name is not "<method>Response" (from the WSDL of the host agent:
+# GetOperationResults answers with GetOperationResponse, confirmed with a real host agent).
+RESPONSE_ELEMENTS = {"GetOperationResults": "GetOperationResponse"}
+
+
+def response_name(method: str) -> str:
+    return RESPONSE_ELEMENTS.get(method, f"{method}Response")
+
+
 def local(tag: str) -> str:
     """Element name without its namespace."""
     return tag.rsplit("}", 1)[-1]

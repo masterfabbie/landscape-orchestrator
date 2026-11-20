@@ -200,9 +200,16 @@ Wichtige Entwurfsentscheidungen:
 - **Abbrechen** (`OperationRunner.cancel`, Wunsch des Eigentümers): Start, Stopp und Neustart
   hören nur auf zu warten; eigene Operationen werden per `CancelOperation` (O-HARD) auf dem
   Host abgebrochen, ebenso beim Zeitlimit; Massenoperationen brechen laufende Kinder ab und
-  überspringen wartende. Endstatus CANCELLED. Ein Abbruch kann die Sitzung der Aktivität
-  mitten in einem Datenbankzugriff treffen; deshalb schließt `_run` die Aktivität in einer
-  frischen Sitzung ab. Ohne Abbruchwunsch (Serverende) bleibt es bei „Interrupted“.
+  überspringen wartende. Endstatus CANCELLED. Ein Abbruch des Benutzers unterbricht eine
+  Aktivität nur an **sicheren Stellen** (`_pause` statt `_sleep`, `_wait_for_any`), nie mitten
+  in einem Datenbankzugriff: Sonst bleibt die aiosqlite-Verbindung gesperrt und das Ende der
+  Aktivität lässt sich nicht schreiben („database is locked“). Welche Aufgaben zu einer
+  Aktivität gehören, auch die von `asyncio.gather`, steht in der Kontextvariablen
+  `_CURRENT_ACTIVITY`. Neue Wartestellen in Aktivitäten nutzen `_pause`. `cancel` beendet
+  vor dem Warten die Lesetransaktion der Anfrage, sonst blockieren sich beide. `_run` schließt
+  die Aktivität in einer frischen Sitzung ab. Beim Herunterfahren (`shutdown`) halten
+  Aktivitäten ebenfalls an der nächsten sicheren Stelle an („Interrupted“); was nach
+  5 Sekunden noch läuft, wird hart abgebrochen.
 - **Massenoperationen** (Wunsch des Eigentümers: Systeme, Instanzen und Hosts, Standard 5
   gleichzeitig, bei Fehlern weitermachen, keine zusätzliche Bestätigung): eine
   Sammelaktivität (`target_type` MASS, Einstellungen als JSON in `activities.options`) mit
@@ -299,10 +306,18 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
   Laufs: Fault 255 „Timeout occurred“ mit den bisherigen Zeilen (zuletzt „saphostcontrol:
   Executing <Description> hook“); `IsOperationFinished` „noch nicht fertig“. Erfolg endet mit
   „… hook successfully executed“; Exit-Code ≠ 0 gibt Fault 127 „Command execution failed.“
-  mit „… hook failed (exit code = N)“. Schlüssel `Info`, `Warning`, `Error`. `CancelOperation`
+  mit „… hook failed (exit code = N)“. `CancelOperation`
   beendet das Skript (Exit-Code 15, Antwort Fault 127); danach `IsOperationFinished` „Failed
   to determine operation status“ und `GetOperationResults` Fault -20 „Operation ID not found“.
-- Noch nicht gegen echte Systeme getestet: HTTPS; eigene Operationen aus dem Tool heraus.
+- **Rohe Antwort von `GetOperationResults`** (aus dem Tool und per `curl` geprüft): Das
+  Antwortelement heißt wie in der WSDL `GetOperationResponse`, nicht
+  `GetOperationResultsResponse` (`soapxml.RESPONSE_ELEMENTS`). Jede Zeile kommt als vier
+  Meldungen `LogMsg/TimeStamp` (leer), `LogMsg/Severity` (`Info`, `Warning`, `Error`),
+  `LogMsg/Source` (Beschreibung der Operation bzw. `saphostcontrol`) und `LogMsg/Text`;
+  `hostagent.log_messages` fasst sie zu Zeilen zusammen. `saphostctrl` zeigt dieselben
+  Zeilen als „Severity: Source: Text“. Eine eigene Operation lief aus dem Tool heraus bis
+  zur Erfolgsmeldung; danach scheiterte nur das Lesen der Antwort am Elementnamen.
+- Noch nicht gegen echte Systeme getestet: HTTPS.
 
 ## Offene Annahmen, die ein Test mit einer echten Instanz klären muss
 
