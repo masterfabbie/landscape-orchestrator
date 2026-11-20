@@ -166,9 +166,24 @@ Wichtige Entwurfsentscheidungen:
 - **API-Tokens** sind persönlich, haben die Rechte ihres Benutzers, optional ein Ablaufdatum;
   gespeichert wird nur der SHA-256-Hash. Aktivitäten speichern `requested_by`.
 - **Discovery löscht nichts**, sie meldet fehlende Einträge nur.
-- **Die Oberfläche lädt keine externen Dateien** und nutzt kein JavaScript-Framework. Alles
-  muss ohne JavaScript funktionieren. `static/ui.js` (vom Eigentümer erlaubt) ergänzt nur:
-  offene Systeme im Baum merken (sessionStorage), „Alle auf-/zuklappen“, Menüs schließen.
+- **JavaScript ist erlaubt** (Entscheidung des Eigentümers, 2026-11-20), auch ein Framework wie
+  React, wo es echten Nutzen bringt: Mehrfachauswahl mit Aktionsleiste, Live-Ansichten,
+  Drag-and-drop. Die bisherige Oberfläche funktioniert noch ohne JavaScript; `static/ui.js`
+  ergänzt dort nur: offene Systeme im Baum merken (sessionStorage), „Alle auf-/zuklappen“,
+  Menüs schließen. Eine neue Oberfläche baut auf der REST-API auf. **Offen:** ob Bibliotheken
+  mitgeliefert (gebaut und vom Server ausgeliefert) oder von einem CDN geladen werden; bis zur
+  Entscheidung lädt die Oberfläche nichts von außen. Größere Umbauten erst vorschlagen.
+- **Gestaltungsrichtung** (Rückmeldung des Eigentümers zu fünf Entwürfen, 2026-11-20):
+  - Landscape als dichte Tabelle mit Mehrfachauswahl von Systemen und Instanzen und einer
+    Leiste unten mit den möglichen Operationen (Massenoperationen); Befehlspalette (Strg K).
+  - Rechts aufklappende Detailleiste eines Systems; darin der Status je Instanz aus
+    `GetProcessList` des sapstartsrv (Prozesse mit Farbe). Ein Abhängigkeitsgraph als
+    Hauptansicht bringt keinen Mehrwert.
+  - Aktivität als Live-Ansicht: Zeitplan je Instanz und mitlaufendes Protokoll mit Filtern.
+  - Übersicht als Statusmatrix Produkte × Stufen mit „Braucht Aufmerksamkeit“; was dort
+    erscheint, muss konfigurierbar sein (z. B. stündlich geplante Operationen ausblenden).
+  - Operationsvorlagen als Kette von Bausteinen mit Parametern je Schritt, Verhalten bei
+    Fehler und Einplanen: genau so umsetzen.
 - **Systembaum der Landscape:** je System ein `<tbody class="tree-system">`; Auf- und
   Zuklappen per Checkbox und CSS `:has()`, ohne Server. Zugeklappt zu Beginn (Wunsch des
   Eigentümers). Der Filter „Instanztyp“ klappt auf und zeigt nur passende Instanzen
