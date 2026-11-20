@@ -482,6 +482,19 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
 Wenn ein Test eine Annahme bestätigt oder widerlegt: Mock, Client und Tests anpassen und den
 Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 
+## ToDo-Liste des Eigentümers
+
+Gewünscht (2026-11-20), noch nicht umgesetzt; vor der Umsetzung jeweils einen Vorschlag machen
+und freigeben lassen:
+
+1. Mehrere Hosts auf einmal anlegen, Namen durch Komma getrennt.
+2. Zwei-Faktor-Anmeldung mit YubiKey (z. B. WebAuthn/FIDO2).
+3. Sprache und Dark Mode als Benutzereinstellung (in „Mein Konto“).
+4. Kernel-Repository (Ablage der Kernel-Versionen für Kernel-Tausch-Skripte).
+5. Zertifikatsbasierte Anmeldung am Host Agent (mTLS, Client-Zertifikat statt Passwort).
+6. Docker-Container für LO.
+7. Ansteuerung von außen, z. B. AWS SSM: ein externer Auftrag lässt LO ein SAP-System starten.
+
 ## Bekannte Lücken
 
 - nur lokale Benutzer, kein LDAP oder SSO
