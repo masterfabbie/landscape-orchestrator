@@ -99,6 +99,8 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `operations.py` | Start, Stopp, Neustart, Discovery als Hintergrund-Aktivitäten, Massenoperationen (`OperationRunner`) |
 | `catalog.py` | Katalog der Operationen: eingebaute und eigene (`Catalog`, je App eine Instanz, neu geladen nach Änderungen), Ziele, nötige Rolle, als Massenoperation erlaubt |
 | `customspec.py` | Beschreibung einer eigenen Operation (`CustomSpec`, als JSON in der Aktivität), Kontextparameter, `SERVICE_SUBTYPE` |
+| `templatespec.py`, `templates.py` | Operationsvorlagen: Beschreibung (`TemplateSpec`, `StepSpec`, als JSON in der Aktivität), anlegen und prüfen (`save_template`), Werte eines Laufs je Schritt (`template_values`) |
+| `schedules.py` | Einplanungen (einmalig, täglich, Intervall), nächster Lauf (`next_run`), Start einer Katalog-Operation (`start_operation`), `Scheduler` |
 | `customops.py` | eigene Operationen und Parameter anlegen und prüfen, Parameterwerte prüfen (`parameter_values`) |
 | `api/` | REST-API unter `/api`, geschützt durch persönliche API-Tokens; `create_app` baut die Anwendung |
 | `web/` | servergerenderte Oberfläche (Jinja2), Anmeldung, Einrichtung, Konto, Übersetzungen |
@@ -109,7 +111,8 @@ Seite und Zustand, `SystemsTable`, `HostsTable`, `FilterBar`, `ActionBar`, `Draw
 (Detailleiste: System, Instanz mit Reitern, Host, letzte Aktivitäten), `CommandPalette`,
 `ParameterDialog`; `filter.ts` und `selection.ts` reine Logik mit Tests. `src/activity/`:
 `ActivityPage.tsx` (Live-Ansicht einer Aktivität), `timeline.ts` (Zeitplan aus den
-strukturierten Protokolleinträgen, mit Tests). `src/lib/` API-Aufrufe, Texte, Typen. Ein
+strukturierten Protokolleinträgen, mit Tests). `src/templates/`: `TemplatesPage.tsx` (Liste
+und Baukasten unter `/configuration/templates`), `Schedules.tsx` (Einplanen). `src/lib/` API-Aufrufe, Texte, Typen. Ein
 Stylesheet für alle Seiten (`app.css`), gemeinsamer Code in `shared-*.js`.
 
 Wichtige Entwurfsentscheidungen:
@@ -239,6 +242,24 @@ Wichtige Entwurfsentscheidungen:
   data=)` im Runner. Neue Wartezustände, die im Zeitplan erscheinen sollen, brauchen dort ein
   Ereignis. Abbrechen über `POST /api/activities/<id>/cancel`; die alte Web-Route dafür gibt
   es nicht mehr.
+- **Operationsvorlagen** (Phase 3, Wunsch des Eigentümers nach Entwurf 5): Tabellen
+  `operation_templates`, `template_steps` (Migration 0007), nur Admins legen sie an. Schlüssel
+  teilen sich den Raum mit eigenen Operationen. Ziel SYSTEM oder HOST; jeder Schritt ist eine
+  eingebaute oder eigene Operation für dieses Ziel, mit Vorgabewerten und `on_error` (`stop`,
+  `continue`, `stop_and_start`). Rolle der Vorlage ≥ höchste Rolle der Schritte. Im Katalog
+  als `OperationDef(kind=TEMPLATE, template=TemplateSpec)`; Parameter eines Laufs heißen
+  `<Position>.<Name>`. Der Runner führt Schritte als Kind-Aktivitäten nacheinander aus
+  (`_execute_template`, `_wait_for_child`); die Vorlage sperrt System/Host, `_submit` lässt
+  Kinder durch, deren Vorfahr die Sperre hält (`_ancestors`). Teilweise gescheitert → PARTIAL
+  (`PartlyFailedError`). Abbruch der Vorlage bricht den laufenden Schritt ab. Jinja-Menüs
+  zeigen Vorlagen nicht (nur die React-Landscape). Annahme: kein Probelauf.
+- **Einplanen** (Tabelle `schedules`): beliebige Katalog-Operation, Ziele (mehrere →
+  Massenoperation), Werte, `once`/`daily` (Ortszeit in `LO_TIMEZONE`, Standard
+  `Europe/Berlin` als Annahme)/`interval` (≥ 5 Minuten). Läuft mit den Rechten von
+  `created_by`, beim Start erneut geprüft; Fehler in `last_error`. Der `Scheduler` prüft alle
+  30 Sekunden (`lo-server` startet ihn, `create_app(run_scheduler=True)`); Tests rufen
+  `app.state.scheduler.tick()` mit eigener Uhr (`scheduler.now`). Verpasste Wiederholungen
+  werden nicht nachgeholt, ein fälliger Lauf schon.
 - **API mit Sitzungs-Cookie:** `require_user` nimmt ein Token oder das Sitzungs-Cookie; mit
   Cookie brauchen ändernde Aufrufe den Header `X-LO-Request: 1` (Schutz gegen fremde Seiten,
   es gibt kein CORS), ein Startpasswort sperrt die API. Rollen wie bisher über
@@ -333,6 +354,7 @@ Wichtige Entwurfsentscheidungen:
   `frontend/src`): Filter mit denselben Fällen wie früher auf dem Server, Auswahllogik,
   Aktionsleiste, Zeitplan (`timeline.test.ts`). Ende-zu-Ende-Tests im Browser gibt es noch
   nicht.
+- Vorlagen und Einplanungen testet `tests/test_templates.py` (Fixtures von `test_mass.py`).
 - Eigene Operationen testet `tests/test_custom.py` mit den Fixtures von `test_mass.py` und der
   simulierten Operation `LO_TEST` (`PARAM-SLEEP` Laufzeit, `PARAM-RC` Exit-Code).
 - Neue Funktionen brauchen Tests, auch für Fehlerfälle. Verhalten, das der Mock simulieren
@@ -431,7 +453,8 @@ Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 - Änderungen an der Konfiguration werden nicht protokolliert, nur Aktivitäten
 - Migrationen nur vorwärts; zurück geht es über die Sicherungskopie
 - Abbrechen von Start und Stopp beendet nur das Warten
-- keine Operationsvorlagen (Ketten von Operationen) und keine zeitgesteuerte Ausführung
+- kein Probelauf für Operationsvorlagen; Vorlagen nicht in den Menüs der Jinja-Seiten
+- Einplanen in der Oberfläche nur für Vorlagen (per API für jede Operation)
 - keine eingebaute Operation „Instanz-Agent neu starten und registrieren“
 - keine Kernel-Repositories (Ablage der Kernel-Versionen für Kernel-Tausch-Skripte)
 - keine Hooks und kein HTTP-Provider für eigene Operationen

@@ -23,7 +23,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -53,6 +53,7 @@ from .models import (
 )
 from .roles import Role
 from .status import refresh_databases
+from .templatespec import StepSpec, TemplateSpec
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,8 @@ class OperationKind(StrEnum):
     DISCOVER = "DISCOVER"
     # A custom operation: a script configured in the host agent's operations.d.
     CUSTOM = "CUSTOM"
+    # An operation template: its steps run one after another as child activities.
+    TEMPLATE = "TEMPLATE"
 
 
 class TargetType(StrEnum):
@@ -98,6 +101,8 @@ class ActivityStatus(StrEnum):
 
 
 MAX_PARALLEL = 20
+# A template has no time limit of its own; each step has its own.
+TEMPLATE_TIMEOUT_SECONDS = 86400
 MAX_MASS_TARGETS = 500
 
 
@@ -124,6 +129,10 @@ class NotActiveError(Exception):
 
 class OperationFailedError(Exception):
     """The operation did not reach its target state."""
+
+
+class PartlyFailedError(OperationFailedError):
+    """Some steps of a template failed, the chain went on; ends as PARTIAL."""
 
 
 def explain_fault(
@@ -299,10 +308,16 @@ class OperationRunner:
             )
             if host_id is not None:
                 conflict = Activity.host_id == host_id
+            # A step of a template runs while its template holds the lock.
+            ancestors = await self._ancestors(session, parent_id)
             active = await session.scalar(
                 select(Activity)
                 .outerjoin(activity_systems)
-                .where(Activity.status.in_(ACTIVE_STATUSES), conflict)
+                .where(
+                    Activity.status.in_(ACTIVE_STATUSES),
+                    conflict,
+                    Activity.id.not_in(ancestors) if ancestors else true(),
+                )
                 .limit(1)
             )
             if active is not None:
@@ -330,6 +345,16 @@ class OperationRunner:
             await session.commit()
         self._start_task(activity.id)
         return activity
+
+    @staticmethod
+    async def _ancestors(session: AsyncSession, parent_id: int | None) -> set[int]:
+        found: set[int] = set()
+        while parent_id is not None and parent_id not in found:
+            found.add(parent_id)
+            parent_id = await session.scalar(
+                select(Activity.parent_id).where(Activity.id == parent_id)
+            )
+        return found
 
     def _start_task(self, activity_id: int) -> None:
         task = asyncio.create_task(self._run(activity_id), name=f"activity-{activity_id}")
@@ -424,6 +449,52 @@ class OperationRunner:
             options=options,
         )
 
+    async def submit_template(
+        self,
+        session: AsyncSession,
+        spec: TemplateSpec,
+        target_type: TargetType,
+        target_id: int,
+        values: dict[str, dict[str, str]],
+        requested_by: str | None = None,
+        *,
+        parent_id: int | None = None,
+    ) -> Activity:
+        """Run an operation template: its steps one after another as child activities.
+
+        ``values`` are the checked parameter values per step (templates.template_values).
+        The template holds the lock of the system (with its dependencies) or of the host
+        for the whole chain; its own steps may run inside it.
+        """
+        if TargetType(spec.target) != target_type:
+            raise ValueError(f"{spec.name} runs on {spec.target}, not on {target_type}")
+        options = json.dumps({"template": spec.to_dict(), "values": values})
+        if target_type == TargetType.HOST:
+            host = await session.get(Host, target_id)
+            if host is None:
+                raise TargetNotFoundError("Host not found")
+            label, system_id, involved, host_id = host.name, None, set(), host.id
+        else:
+            system = await session.get(System, target_id)
+            if system is None:
+                raise TargetNotFoundError("System not found")
+            involved = (await self._plan(session, system.id)).involved
+            label, system_id, host_id = system.name, system.id, None
+        return await self._submit(
+            session,
+            OperationKind.TEMPLATE,
+            target_type,
+            label,
+            system_id,
+            None,
+            TEMPLATE_TIMEOUT_SECONDS,
+            involved,
+            requested_by,
+            parent_id=parent_id,
+            host_id=host_id,
+            options=options,
+        )
+
     async def cancel(self, session: AsyncSession, activity_id: int, user: str) -> Activity:
         """Cancel a running activity on behalf of ``user``.
 
@@ -462,6 +533,8 @@ class OperationRunner:
         requested_by: str | None = None,
         custom: CustomSpec | None = None,
         parameters: dict[str, str] | None = None,
+        template: TemplateSpec | None = None,
+        template_values: dict[str, dict[str, str]] | None = None,
     ) -> Activity:
         """Run ``kind`` on many targets as one parent activity with a child per target.
 
@@ -494,11 +567,14 @@ class OperationRunner:
         }
         if custom is not None:
             options |= {"custom": custom.to_dict(), "parameters": parameters or {}}
+        if template is not None:
+            options |= {"template": template.to_dict(), "values": template_values or {}}
         noun = {"SYSTEM": "systems", "INSTANCE": "instances", "HOST": "hosts"}[target_type]
+        named = template.name if template else custom.name if custom else None
         activity = Activity(
             kind=kind,
             target_type=TargetType.MASS,
-            target_label=(f"{custom.name}: " if custom else "") + f"{len(ids)} {noun}",
+            target_label=(f"{named}: " if named else "") + f"{len(ids)} {noun}",
             status=ActivityStatus.PENDING,
             requested_by=requested_by,
             timeout_seconds=timeout_seconds,
@@ -585,8 +661,11 @@ class OperationRunner:
                 await self._run_mass(session, activity)
                 return
             error: str | None = None
+            partial = False
             try:
                 await self._execute(session, activity)
+            except PartlyFailedError as exc:
+                error, partial = str(exc), True
             except (OperationFailedError, SoapError, SecretError) as exc:
                 error = str(exc)
             except Exception as exc:  # noqa: BLE001 - an activity must never stay "running"
@@ -596,7 +675,7 @@ class OperationRunner:
                 await self._refresh_databases(session, activity)
             except (SoapError, SecretError):
                 pass  # best effort; the next discovery corrects the status
-            await self._finish(session, activity, error)
+            await self._finish(session, activity, error, partial=partial)
 
     async def _refresh_databases(self, session: AsyncSession, activity: Activity) -> None:
         """Update the stored status of the databases on the hosts the operation touched.
@@ -732,6 +811,17 @@ class OperationRunner:
     ) -> Activity:
         common = {"requested_by": parent.requested_by}
         timeout = parent.timeout_seconds
+        if kind is OperationKind.TEMPLATE:
+            options = json.loads(parent.options or "{}")
+            return await self.submit_template(
+                session,
+                TemplateSpec.from_dict(options["template"]),
+                target_type,
+                target,
+                options.get("values", {}),
+                parent_id=parent.id,
+                **common,
+            )
         if kind is OperationKind.CUSTOM:
             options = json.loads(parent.options or "{}")
             return await self.submit_custom(
@@ -816,7 +906,10 @@ class OperationRunner:
         session: AsyncSession, kind: OperationKind, target_type: TargetType, targets: list[int]
     ) -> dict[int, set[int]]:
         """target -> selected targets that must have succeeded before it may begin."""
-        if target_type != TargetType.SYSTEM or kind is OperationKind.CUSTOM:
+        if target_type != TargetType.SYSTEM or kind in (
+            OperationKind.CUSTOM,
+            OperationKind.TEMPLATE,
+        ):
             return {}
         graph = await load_graph(session)
         selected = set(targets)
@@ -863,13 +956,20 @@ class OperationRunner:
         session.add(self._entry(activity, "WARNING", message))
         await session.commit()
 
-    async def _finish(self, session: AsyncSession, activity: Activity, error: str | None) -> None:
+    async def _finish(
+        self,
+        session: AsyncSession,
+        activity: Activity,
+        error: str | None,
+        *,
+        partial: bool = False,
+    ) -> None:
         activity.finished_at = _now()
         if error is None:
             activity.status = ActivityStatus.SUCCEEDED
             session.add(self._entry(activity, "INFO", "Finished successfully"))
         else:
-            activity.status = ActivityStatus.FAILED
+            activity.status = ActivityStatus.PARTIAL if partial else ActivityStatus.FAILED
             activity.error = error
             session.add(self._entry(activity, "ERROR", error))
         await session.commit()
@@ -904,15 +1004,16 @@ class OperationRunner:
         subject: str | None = None,
         data: dict[str, str] | None = None,
     ) -> None:
-        session.add(
-            self._entry(activity, "INFO", message, event=event, subject=subject, data=data)
-        )
+        session.add(self._entry(activity, "INFO", message, event=event, subject=subject, data=data))
         await session.commit()
 
     async def _execute(self, session: AsyncSession, activity: Activity) -> None:
         kind = OperationKind(activity.kind)
         if kind is OperationKind.CUSTOM:
             await self._execute_custom(session, activity)
+            return
+        if kind is OperationKind.TEMPLATE:
+            await self._execute_template(session, activity)
             return
         if activity.target_type == TargetType.HOST:
             await self._discover(session, activity)
@@ -976,6 +1077,92 @@ class OperationRunner:
                         )
                     name = names.get(system_id, f"#{system_id}")
                     await self._system_phase(session, activity, name, instances, start)
+
+    # --- operation templates ------------------------------------------------------------
+
+    async def _execute_template(self, session: AsyncSession, activity: Activity) -> None:
+        """Run the steps one after another as child activities and wait for each.
+
+        On a failed step the step's ``on_error`` decides: ``stop`` ends the chain,
+        ``continue`` goes on (the template then ends as PARTIAL), ``stop_and_start`` ends the
+        chain after starting the system again, e.g. after a failed kernel copy.
+        """
+        options = json.loads(activity.options or "{}")
+        spec = TemplateSpec.from_dict(options["template"])
+        values: dict[str, dict[str, str]] = options.get("values", {})
+        target_type = TargetType(activity.target_type)
+        target = activity.host_id if target_type == TargetType.HOST else activity.system_id
+        failed: list[str] = []
+        total = len(spec.steps)
+        for step in spec.steps:
+            title = f"Step {step.position}/{total}: {step.name}"
+            await self._log(session, activity, title, event="step", subject=str(step.position))
+            child = await self._submit_step(session, activity, step, target_type, target, values)
+            status = await self._wait_for_child(session, child.id)
+            if status == ActivityStatus.SUCCEEDED:
+                continue
+            reason = f"{title} ended {status} (activity {child.id})"
+            if step.on_error == "continue":
+                failed.append(reason)
+                session.add(self._entry(activity, "WARNING", f"{reason}; the chain goes on"))
+                await session.commit()
+                continue
+            if step.on_error == "stop_and_start" and target_type == TargetType.SYSTEM:
+                await self._log(session, activity, f"{reason}; starting the system again")
+                start = await self.submit_system(
+                    session,
+                    target,
+                    OperationKind.START,
+                    requested_by=activity.requested_by,
+                    parent_id=activity.id,
+                )
+                started = await self._wait_for_child(session, start.id)
+                await self._log(session, activity, f"Start after the failed step: {started}")
+            raise OperationFailedError(reason)
+        if failed:
+            raise PartlyFailedError(f"{len(failed)} of {total} steps failed: " + "; ".join(failed))
+
+    async def _submit_step(
+        self,
+        session: AsyncSession,
+        activity: Activity,
+        step: StepSpec,
+        target_type: TargetType,
+        target: int,
+        values: dict[str, dict[str, str]],
+    ) -> Activity:
+        common = {"requested_by": activity.requested_by, "parent_id": activity.id}
+        kind = OperationKind(step.kind)
+        if kind is OperationKind.CUSTOM:
+            assert step.custom is not None
+            return await self.submit_custom(
+                session,
+                step.custom,
+                target_type,
+                target,
+                values.get(str(step.position), {}),
+                **common,
+            )
+        if target_type == TargetType.HOST:
+            return await self.submit_host(session, target, kind, **common)
+        return await self.submit_system(session, target, kind, **common)
+
+    async def _wait_for_child(self, session: AsyncSession, child_id: int) -> str:
+        """Wait for a child activity; a cancel of the parent cancels the child first."""
+        parent = _CURRENT_ACTIVITY.get()
+        try:
+            while child_id in self._tasks:
+                await self._wait_for_any([child_id])
+        except asyncio.CancelledError:
+            user = self._cancel_requests.get(parent) if parent is not None else None
+            task = self._request_cancel(child_id, user) if user else self._tasks.get(child_id)
+            if task is not None:
+                if not user:
+                    task.cancel()
+                await asyncio.wait([task])
+            raise
+        status = await session.scalar(select(Activity.status).where(Activity.id == child_id))
+        return status or ActivityStatus.FAILED
 
     # --- custom operations --------------------------------------------------------------
 

@@ -118,3 +118,25 @@ describe("helpers", () => {
     expect(formatDuration(3_725_000)).toBe("1:02:05");
   });
 });
+
+describe("timeline of a template", () => {
+  it("has a lane per step, named from the stored template", () => {
+    const child = (n: number, kind: string, status: string, from: number, to: number) => ({
+      ...activity([]),
+      id: n,
+      kind,
+      status,
+      started_at: new Date(T0 + from * 1000).toISOString(),
+      finished_at: new Date(T0 + to * 1000).toISOString(),
+    });
+    const options = { template: { target: "SYSTEM", steps: [{ operation: "copy", custom: { name: "Copy kernel" } }, { operation: "stop", custom: null }] } };
+    const timeline = buildTimeline(
+      activity([], { kind: "TEMPLATE", status: "FAILED", options, children: [child(2, "CUSTOM", "SUCCEEDED", 0, 5), child(3, "STOP", "FAILED", 5, 9), child(4, "START", "SUCCEEDED", 9, 12)] }),
+    );
+    expect(timeline.lanes.map((l) => [l.subject, l.segments[0].state])).toEqual([
+      ["1. Copy kernel", "done"],
+      ["2. op.stop_system", "failed"],
+      ["3. START", "done"],
+    ]);
+  });
+});

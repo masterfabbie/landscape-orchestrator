@@ -60,7 +60,7 @@ export function ActionBar({ selection, operations, instances, onRun, onClear }: 
                 }}
               >
                 {isArmed ? t("ui.confirm_operation", { operation: label }) : label}
-                {op.custom && op.parameters.length ? "…" : ""}
+                {op.custom && (op.parameters.length || op.template) ? "…" : ""}
               </button>
             );
           })

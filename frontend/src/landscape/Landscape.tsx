@@ -111,7 +111,8 @@ export function Landscape() {
 
   const execute = useCallback(
     async (op: OperationDef, target: Selection, options: RunOptions = {}) => {
-      if (op.custom && op.parameters.length && !options.parameters) {
+      // Custom operations with parameters and every template first show the dialog.
+      if (op.custom && (op.parameters.length || op.template) && !options.parameters) {
         setAsking({ op, selection: target, options });
         return;
       }

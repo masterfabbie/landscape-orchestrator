@@ -33,9 +33,9 @@ OPERATION_ROUTES = frozenset(
 def required_role(method: str, path: str) -> Role:
     """``path`` is the route template, e.g. "/systems/{system_id}/{operation}", without the
     "/api" prefix for API routes."""
-    if path.startswith(("/administration", "/users", "/custom-operations")):
+    if path.startswith(("/administration", "/users", "/custom-operations", "/templates")):
         return Role.ADMIN
-    if path.startswith("/configuration/operations"):
+    if path.startswith(("/configuration/operations", "/configuration/templates")):
         return Role.ADMIN
     if path.startswith(("/account", "/me")):
         return Role.VIEWER
@@ -45,6 +45,9 @@ def required_role(method: str, path: str) -> Role:
         return Role.OPERATOR
     if method in ("GET", "HEAD"):
         return Role.VIEWER
+    if path.startswith("/schedules"):
+        # Planning needs at least an operator; the role of the operation is checked too.
+        return Role.VIEWER if method in ("GET", "HEAD") else Role.OPERATOR
     if path.endswith("/refresh"):
         return Role.VIEWER
     if path in OPERATION_ROUTES:

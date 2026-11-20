@@ -106,20 +106,31 @@ def _operations(catalog: Catalog, user: User) -> list[dict[str, Any]]:
         if not has_role(user, operation.role):
             continue
         custom = operation.custom
+        template = operation.template
+        if template is not None:
+            parameters = [p.__dict__ for p in template.run_parameters()]
+        else:
+            parameters = [p.__dict__ for p in custom.parameters] if custom else []
         result.append(
             {
                 "key": operation.key,
                 # Translation keys per target type for built-in operations.
                 "labels": {t.value: operation.label_key(t) for t in operation.targets},
-                "name": custom.name if custom else None,
-                "description": custom.description if custom else None,
+                "name": operation.name,
+                "description": (template or custom).description if (template or custom) else None,
                 "targets": sorted(t.value for t in operation.targets),
                 "mass": operation.mass,
                 "danger": operation.danger,
-                "custom": custom is not None,
+                # Custom operations and templates run through /<targets>/<id>/operations/<key>.
+                "custom": custom is not None or template is not None,
+                "template": template is not None,
+                # Translation keys (built-in) or names (custom operations) of the steps.
+                "steps": [step.label_key(template.target) for step in template.steps]
+                if template
+                else [],
                 # Empty: every instance type (see customspec.spec_applies).
                 "instance_types": list(custom.instance_types) if custom else [],
-                "parameters": [p.__dict__ for p in custom.parameters] if custom else [],
+                "parameters": parameters,
             }
         )
     return result

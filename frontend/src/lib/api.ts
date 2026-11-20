@@ -6,6 +6,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** Error code of the server for translated messages (error.<code>), if it sent one. */
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -29,13 +31,18 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   }
   if (!response.ok) {
     let detail = response.statusText;
+    let code: string | undefined;
     try {
       const data = await response.json();
-      detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+      if (typeof data.detail === "string") detail = data.detail;
+      else if (data.detail && typeof data.detail.message === "string") {
+        detail = data.detail.message;
+        code = data.detail.code;
+      } else detail = JSON.stringify(data.detail);
     } catch {
       // no JSON body
     }
-    throw new ApiError(response.status, detail);
+    throw new ApiError(response.status, detail, code);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;

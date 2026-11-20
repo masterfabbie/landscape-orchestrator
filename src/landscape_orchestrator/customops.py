@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .catalog import BUILT_IN_KEYS
 from .customspec import CustomSpec, ParameterSpec
 from .filters import TYPE_VALUES
-from .models import CustomOperation, CustomOperationParameter
+from .models import CustomOperation, CustomOperationParameter, OperationTemplate
 from .users import ROLE_ORDER
 
 TARGETS = ("INSTANCE", "SYSTEM", "HOST")
@@ -144,7 +144,10 @@ async def save_operation(
         key, name, agent_operation, target, instance_types, ordering, role, timeout_seconds
     )
     taken = await session.scalar(select(CustomOperation.id).where(CustomOperation.key == key))
-    if taken is not None and (operation is None or taken != operation.id):
+    template = await session.scalar(
+        select(OperationTemplate.id).where(OperationTemplate.key == key)
+    )
+    if template is not None or (taken is not None and (operation is None or taken != operation.id)):
         raise CustomOperationError("operation_key_taken", f"An operation {key} already exists")
     if operation is None:
         operation = CustomOperation(created_at=datetime.now(UTC), parameters=[])

@@ -4,19 +4,22 @@ Each operation is described once: which targets it applies to, which role it nee
 whether it may run as a mass operation. Menus, mass operations and the API are built from
 this catalog. Besides the built-in operations it holds the custom operations defined by an
 admin (see customops.py); they run scripts configured in the host agent's operations.d,
-like LaMa's custom operations, and appear everywhere without further changes.
+like LaMa's custom operations, and appear everywhere without further changes. Operation
+templates (chains of the other operations, templates.py) are part of it as well.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .customspec import CustomSpec, ParameterSpec, spec_applies
-from .models import CustomOperation, Instance
+from .models import CustomOperation, Instance, OperationTemplate
 from .operations import OperationKind, TargetType
+from .templatespec import StepSpec, TemplateSpec
 from .users import Role, has_role
 
 
@@ -30,10 +33,20 @@ class OperationDef:
     # Stops or restarts something; shown in red.
     danger: bool = False
     custom: CustomSpec | None = None
+    # An operation template: a chain of the other operations (templatespec.py).
+    template: TemplateSpec | None = None
+
+    @property
+    def name(self) -> str | None:
+        if self.template is not None:
+            return self.template.name
+        return self.custom.name if self.custom else None
 
     def label_key(self, target: str) -> str:
-        """Translation key, e.g. "op.start_system"; for custom operations their name, which
-        the translation returns unchanged."""
+        """Translation key, e.g. "op.start_system"; for custom operations and templates their
+        name, which the translation returns unchanged."""
+        if self.template is not None:
+            return self.template.name
         if self.custom is not None:
             return self.custom.name
         return f"op.{self.key}_system" if target == TargetType.SYSTEM else f"op.{self.key}"
@@ -90,6 +103,51 @@ def definition_of(operation: CustomOperation) -> OperationDef:
     )
 
 
+def template_spec(
+    template: OperationTemplate, known: dict[str, OperationDef]
+) -> TemplateSpec | None:
+    """None if a step uses an operation that no longer exists."""
+    steps = []
+    for step in template.steps:
+        operation = known.get(step.operation)
+        if operation is None or operation.template is not None:
+            return None
+        steps.append(
+            StepSpec(
+                position=step.position,
+                operation=step.operation,
+                kind=operation.kind.value,
+                on_error=step.on_error,
+                parameters=json.loads(step.parameters or "{}"),
+                custom=operation.custom,
+            )
+        )
+    return TemplateSpec(
+        id=template.id,
+        key=template.key,
+        name=template.name,
+        description=template.description,
+        target=template.target,
+        steps=tuple(steps),
+    )
+
+
+def template_definition(
+    template: OperationTemplate, known: dict[str, OperationDef]
+) -> OperationDef | None:
+    spec = template_spec(template, known)
+    if spec is None:
+        return None
+    return OperationDef(
+        key=template.key,
+        kind=OperationKind.TEMPLATE,
+        targets=frozenset({TargetType(template.target)}),
+        role=Role(template.role),
+        mass=template.mass,
+        template=spec,
+    )
+
+
 class Catalog:
     """The built-in operations plus the custom operations of one application.
 
@@ -98,12 +156,24 @@ class Catalog:
 
     def __init__(self) -> None:
         self._custom: tuple[OperationDef, ...] = ()
+        self._templates: tuple[OperationDef, ...] = ()
 
     async def reload(self, session: AsyncSession) -> None:
         rows = await session.scalars(select(CustomOperation).order_by(CustomOperation.name))
         self._custom = tuple(definition_of(op) for op in rows)
+        known = {op.key: op for op in BUILT_IN + self._custom}
+        templates = await session.scalars(
+            select(OperationTemplate).order_by(OperationTemplate.name)
+        )
+        self._templates = tuple(
+            d for d in (template_definition(t, known) for t in templates) if d is not None
+        )
 
     def all(self) -> tuple[OperationDef, ...]:
+        return BUILT_IN + self._custom + self._templates
+
+    def steps(self) -> tuple[OperationDef, ...]:
+        """Operations a template may use as a step: all but templates."""
         return BUILT_IN + self._custom
 
     def get(self, key: str) -> OperationDef | None:

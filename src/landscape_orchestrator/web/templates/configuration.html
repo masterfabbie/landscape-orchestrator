@@ -3,7 +3,7 @@
 {% block title %}{{ t("nav.configuration") }}{% endblock %}
 {% block content %}
 <h1>{{ t("nav.configuration") }}</h1>
-{{ ui.tabs([("hosts", "/configuration?tab=hosts", t("tab.hosts")), ("systems", "/configuration?tab=systems", t("tab.systems")), ("pools", "/configuration?tab=pools", t("tab.pools"))] + ([("operations", "/configuration?tab=operations", t("tab.operations"))] if can("admin") else []), tab, t("nav.configuration")) }}
+{{ ui.tabs([("hosts", "/configuration?tab=hosts", t("tab.hosts")), ("systems", "/configuration?tab=systems", t("tab.systems")), ("pools", "/configuration?tab=pools", t("tab.pools"))] + ([("operations", "/configuration?tab=operations", t("tab.operations")), ("templates", "/configuration/templates", t("tpl.title"))] if can("admin") else []), tab, t("nav.configuration")) }}
 
 {% if tab == "hosts" %}
 <section class="card">

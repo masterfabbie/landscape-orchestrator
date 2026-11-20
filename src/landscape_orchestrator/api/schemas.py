@@ -363,3 +363,66 @@ class NewTokenOut(BaseModel):
     # Shown only once; only a hash is stored.
     token: str
     info: TokenOut
+
+
+class TemplateStepIn(BaseModel):
+    # Key of a built-in or custom operation that runs on the template's target type.
+    operation: str
+    # Values of the custom operation's parameters; defaults that a run can change.
+    parameters: dict[str, str] = {}
+    on_error: Literal["stop", "continue", "stop_and_start"] = "stop"
+
+
+class TemplateIn(BaseModel):
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = None
+    target: Literal["SYSTEM", "HOST"] = "SYSTEM"
+    role: Literal["viewer", "operator", "configurator", "admin"] = "operator"
+    mass: bool = True
+    steps: list[TemplateStepIn] = Field(min_length=1, max_length=30)
+
+
+class TemplateStepOut(TemplateStepIn):
+    position: int
+    # Name of the operation (custom) or its key (built-in); null if it no longer exists.
+    name: str | None
+
+
+class TemplateOut(BaseModel):
+    id: int
+    key: str
+    name: str
+    description: str | None
+    target: str
+    role: str
+    mass: bool
+    steps: list[TemplateStepOut]
+    # False if a step uses an operation that no longer exists; the template is then not
+    # offered for running.
+    valid: bool
+
+
+class ScheduleIn(BaseModel):
+    operation: str
+    target_type: Literal["SYSTEM", "INSTANCE", "HOST"]
+    target_ids: list[int] = Field(min_length=1, max_length=500)
+    parameters: dict[str, str | int | bool] = {}
+    recurrence: Literal["once", "daily", "interval"]
+    # once: the moment (with time zone); daily: time_of_day local time and weekdays
+    # (1 = Monday, e.g. "12345"); interval: every interval_minutes (at least 5).
+    run_at: datetime | None = None
+    time_of_day: str | None = None
+    weekdays: str = "1234567"
+    interval_minutes: int | None = None
+    enabled: bool = True
+
+
+class ScheduleOut(ScheduleIn):
+    id: int
+    created_by: str
+    created_at: datetime
+    next_run_at: datetime | None
+    last_run_at: datetime | None
+    last_activity_id: int | None
+    last_error: str | None

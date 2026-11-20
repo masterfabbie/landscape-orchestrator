@@ -238,7 +238,14 @@ def render(request: Request, name: str, status_code: int = 200, **context: Any) 
         "can": lambda role: user is not None and has_role(user, Role(role)),
         # Operations of the catalog this user may run on a target type, e.g. "SYSTEM".
         "ops": lambda target, instance=None: (
-            get_context(request).catalog.for_target(TargetType(target), user, instance=instance)
+            # Templates are run from the landscape (React), not from these menus.
+            [
+                op
+                for op in get_context(request).catalog.for_target(
+                    TargetType(target), user, instance=instance
+                )
+                if op.template is None
+            ]
             if user
             else []
         ),
@@ -494,13 +501,28 @@ async def landscape(request: Request, user: CurrentUser) -> HTMLResponse:
 
 
 def _boot(request: Request, user: User, **extra: Any) -> dict[str, Any]:
-    """Start data of a React page: language, all texts and the user."""
+    """Start data of a React page: language, all texts, the user and the time zone of
+    schedules."""
     language = _language(request)
     return {
         "language": language,
         "texts": all_texts(language),
         "user": {"name": user.username, "role": user.role},
+        "timezone": get_context(request).settings.timezone,
     } | extra
+
+
+@pages.get("/configuration/templates")
+async def templates_page(request: Request, user: CurrentUser) -> HTMLResponse:
+    """Operation templates (admin): list and composer, a React page (frontend/src/templates)."""
+    return render(
+        request,
+        "app_page.html",
+        title=translate(_language(request), "tpl.title"),
+        app="templates",
+        boot=_boot(request, user),
+        wide=True,
+    )
 
 
 @pages.get("/hosts")

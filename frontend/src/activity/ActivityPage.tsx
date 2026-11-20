@@ -36,14 +36,15 @@ export function ActivityPage({ id }: { id: number }) {
   const [subject, setSubject] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
-  const timeline = useMemo(() => (data ? buildTimeline(data, now) : null), [data, now]);
+  const timeline = useMemo(() => (data ? buildTimeline(data, now, t) : null), [data, now, t]);
 
   if (isPending) return <p className="lo-muted">{t("ui.loading")}</p>;
   if (error || !data) return <p className="flash error">{t("ui.load_failed")}</p>;
 
+  const template = (data.options?.template ?? null) as { name?: string } | null;
   const custom = (data.options?.custom ?? null) as { name?: string; agent_operation?: string } | null;
   const parameters = (data.options?.parameters ?? {}) as Record<string, string>;
-  const title = custom?.name ?? t(`kind.${data.kind}`);
+  const title = template?.name ?? custom?.name ?? t(`kind.${data.kind}`);
   const started = data.started_at ? new Date(data.started_at).getTime() : null;
   const ended = data.finished_at ? new Date(data.finished_at).getTime() : now;
 
@@ -126,10 +127,16 @@ export function ActivityPage({ id }: { id: number }) {
         </dl>
       )}
 
-      {data.target_type === "MASS" && <Children activity={data} />}
+      {(data.target_type === "MASS" || data.kind === "TEMPLATE") && <Children activity={data} />}
 
       {timeline && timeline.lanes.length > 0 && (
-        <TimelineView timeline={timeline} now={now} selected={subject} onSelect={setSubject} mass={data.target_type === "MASS"} />
+        <TimelineView
+          timeline={timeline}
+          now={now}
+          selected={subject}
+          onSelect={setSubject}
+          mass={data.target_type === "MASS" || data.kind === "TEMPLATE"}
+        />
       )}
 
       <Log entries={data.entries} running={running} subject={subject} onSubject={setSubject} subjects={timeline?.lanes.map((l) => l.subject) ?? []} />
@@ -147,11 +154,13 @@ function Children({ activity }: { activity: ActivityDetail }) {
   const total = Array.isArray(options.targets) ? options.targets.length : activity.children.length;
   return (
     <section className="lo-card">
-      <h2>{t("mass.children")}</h2>
-      <p className="lo-muted">
-        {t("mass.settings_summary", { parallel: String(options.parallel ?? ""), total })}{" "}
-        {options.stop_on_error ? t("mass.stop") : t("mass.continue")}
-      </p>
+      <h2>{activity.kind === "TEMPLATE" ? t("tpl.steps") : t("mass.children")}</h2>
+      {activity.target_type === "MASS" && (
+        <p className="lo-muted">
+          {t("mass.settings_summary", { parallel: String(options.parallel ?? ""), total })}{" "}
+          {options.stop_on_error ? t("mass.stop") : t("mass.continue")}
+        </p>
+      )}
       <p className="lo-counts">
         {[...counts].map(([status, count]) => (
           <span key={status} className={`lo-badge lo-badge-${activityTone(status)}`}>

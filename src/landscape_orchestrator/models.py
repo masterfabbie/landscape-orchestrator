@@ -545,3 +545,78 @@ class CustomOperationParameter(Base):
     help: Mapped[str | None] = mapped_column(Text)
 
     operation: Mapped[CustomOperation] = relationship(back_populates="parameters")
+
+
+class OperationTemplate(Base):
+    """A chain of operations run one after another on a system or host, like an operation
+    template in LaMa (e.g. prepare kernel, stop, copy kernel, start)."""
+
+    __tablename__ = "operation_templates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Shares the key space of custom operations, e.g. "kernel_update".
+    key: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str | None] = mapped_column(Text)
+    # SYSTEM or HOST; every step must run on this target type.
+    target: Mapped[str] = mapped_column(String(16))
+    # Role needed to run the template; at least the highest role of its steps.
+    role: Mapped[str] = mapped_column(String(16))
+    mass: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    steps: Mapped[list[TemplateStep]] = relationship(
+        back_populates="template",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="TemplateStep.position",
+        lazy="selectin",
+    )
+
+
+class TemplateStep(Base):
+    __tablename__ = "template_steps"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    template_id: Mapped[int] = mapped_column(
+        ForeignKey("operation_templates.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    # Key of a built-in or custom operation of the catalog.
+    operation: Mapped[str] = mapped_column(String(64))
+    # Values of the parameters of a custom operation (name -> value, JSON); defaults that can
+    # be changed when the template runs.
+    parameters: Mapped[str] = mapped_column(Text, default="{}")
+    # stop: end the chain; continue: go on; stop_and_start: end the chain and start the
+    # system again (system templates only).
+    on_error: Mapped[str] = mapped_column(String(16), default="stop")
+
+    template: Mapped[OperationTemplate] = relationship(back_populates="steps")
+
+
+class Schedule(Base):
+    """An operation (built-in, custom or template) planned for later, once or recurring."""
+
+    __tablename__ = "schedules"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    operation: Mapped[str] = mapped_column(String(64))
+    target_type: Mapped[str] = mapped_column(String(16))
+    # Ids of the targets (JSON list); several run as one mass operation.
+    target_ids: Mapped[str] = mapped_column(Text)
+    # Parameter values as in a run (JSON), for templates "<step>.<NAME>".
+    parameters: Mapped[str] = mapped_column(Text, default="{}")
+    # once (run_at), daily (time_of_day on weekdays), interval (every interval_minutes).
+    recurrence: Mapped[str] = mapped_column(String(16))
+    run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    time_of_day: Mapped[str | None] = mapped_column(String(5))  # "22:00", local time
+    weekdays: Mapped[str] = mapped_column(String(7), default="1234567")  # 1 = Monday
+    interval_minutes: Mapped[int | None] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # The run happens with the rights of this user, checked again when it is due.
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_activity_id: Mapped[int | None] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(Text)

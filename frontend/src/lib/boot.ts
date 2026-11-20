@@ -4,6 +4,7 @@ export interface Boot {
   language: string;
   texts: Record<string, string>;
   user: { name: string; role: string };
+  timezone?: string;
 }
 
 export function readBoot(id = "lo-boot"): Boot {

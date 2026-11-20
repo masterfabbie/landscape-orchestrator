@@ -59,7 +59,7 @@ function Operations({ operations, selection, onRun }: { operations: OperationDef
           }}
         >
           {operationLabel(op, selection.kind, t)}
-          {op.custom && op.parameters.length ? "…" : ""}
+          {op.custom && (op.parameters.length || op.template) ? "…" : ""}
         </button>
       ))}
     </div>

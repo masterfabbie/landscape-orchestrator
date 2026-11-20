@@ -4,12 +4,14 @@
 # route functions at runtime, and they refer to names local to create_app.
 
 import asyncio
+import json
 import secrets
 import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
@@ -44,7 +46,9 @@ from ..models import (
     Host,
     HostTag,
     Instance,
+    OperationTemplate,
     Pool,
+    Schedule,
     Sid,
     System,
     SystemTag,
@@ -63,6 +67,7 @@ from ..operations import (
 )
 from ..permissions import required_role
 from ..pools import UnknownPoolError, assign_pool
+from ..schedules import ScheduleError, Scheduler, save_schedule
 from ..settings import Settings
 from ..status import refresh_system
 from ..systems import (
@@ -75,6 +80,7 @@ from ..systems import (
     update_system,
 )
 from ..tags import TagError, matches, parse_tags, replace_tags
+from ..templates import TemplateError, save_template, steps_using, template_values
 from ..users import (
     API_REQUEST_HEADER,
     SESSION_COOKIE,
@@ -114,11 +120,15 @@ from .schemas import (
     PoolOut,
     RefreshOut,
     RunIn,
+    ScheduleIn,
+    ScheduleOut,
     SidOut,
     SystemCreate,
     SystemOut,
     SystemUpdate,
     TagsIn,
+    TemplateIn,
+    TemplateOut,
     TokenCreate,
     TokenOut,
     UserCreate,
@@ -169,6 +179,7 @@ def create_app(
     poll_interval: float = 2.0,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
+    run_scheduler: bool = False,
 ) -> FastAPI:
     """Build the application.
 
@@ -184,6 +195,8 @@ def create_app(
     runner = OperationRunner(
         session_factory, clients, poll_interval=poll_interval, sleep=sleep, clock=clock
     )
+    # Starts due schedules every 30 seconds; tests call scheduler.tick() themselves.
+    scheduler = Scheduler(session_factory, runner, catalog, ZoneInfo(settings.timezone))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -201,7 +214,15 @@ def create_app(
                     file=sys.stderr,
                     flush=True,
                 )
+        scheduling = (
+            asyncio.create_task(scheduler.run(), name="scheduler")
+            if app.state.run_scheduler
+            else None
+        )
         yield
+        if scheduling is not None:
+            scheduling.cancel()
+            await asyncio.gather(scheduling, return_exceptions=True)
         await runner.shutdown()
         await engine.dispose()
 
@@ -645,6 +666,176 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Activity not found")
         return activity
 
+    # --- operation templates --------------------------------------------------------------
+
+    def template_out(template: OperationTemplate) -> dict[str, object]:
+        known = {op.key: op for op in catalog.steps()}
+        return {
+            "id": template.id,
+            "key": template.key,
+            "name": template.name,
+            "description": template.description,
+            "target": template.target,
+            "role": template.role,
+            "mass": template.mass,
+            "valid": catalog.get(template.key) is not None,
+            "steps": [
+                {
+                    "position": step.position,
+                    "operation": step.operation,
+                    "name": (known[step.operation].name or step.operation)
+                    if step.operation in known
+                    else None,
+                    "parameters": json.loads(step.parameters or "{}"),
+                    "on_error": step.on_error,
+                }
+                for step in template.steps
+            ],
+        }
+
+    async def load_template(session: AsyncSession, template_id: int) -> OperationTemplate:
+        template = await session.get(OperationTemplate, template_id)
+        if template is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Template not found")
+        return template
+
+    async def save_template_body(
+        session: AsyncSession, template: OperationTemplate | None, body: TemplateIn
+    ) -> dict[str, object]:
+        try:
+            template = await save_template(
+                session,
+                catalog,
+                template,
+                key=body.key,
+                name=body.name,
+                description=body.description,
+                target=body.target,
+                role=body.role,
+                mass=body.mass,
+                steps=[step.model_dump() for step in body.steps],
+            )
+        except TemplateError as exc:
+            await session.rollback()
+            code = 409 if exc.code == "template_key_taken" else 422
+            raise HTTPException(code, {"code": exc.code, "message": str(exc)}) from exc
+        await session.commit()
+        await catalog.reload(session)
+        return template_out(template)
+
+    @api.get("/templates", response_model=list[TemplateOut])
+    async def list_templates(session: Session) -> list[dict[str, object]]:
+        rows = await session.scalars(select(OperationTemplate).order_by(OperationTemplate.name))
+        return [template_out(t) for t in rows]
+
+    @api.post("/templates", response_model=TemplateOut, status_code=status.HTTP_201_CREATED)
+    async def create_template(body: TemplateIn, session: Session) -> dict[str, object]:
+        """Define an operation template (admin): a chain of operations run one after another."""
+        return await save_template_body(session, None, body)
+
+    @api.get("/templates/{template_id}", response_model=TemplateOut)
+    async def get_template(template_id: int, session: Session) -> dict[str, object]:
+        return template_out(await load_template(session, template_id))
+
+    @api.put("/templates/{template_id}", response_model=TemplateOut)
+    async def update_template(
+        template_id: int, body: TemplateIn, session: Session
+    ) -> dict[str, object]:
+        return await save_template_body(session, await load_template(session, template_id), body)
+
+    @api.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_template(template_id: int, session: Session) -> Response:
+        template = await load_template(session, template_id)
+        planned = await session.scalar(
+            select(Schedule.id).where(Schedule.operation == template.key).limit(1)
+        )
+        if planned is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "The template is still scheduled")
+        await session.delete(template)
+        await session.commit()
+        await catalog.reload(session)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # --- schedules ------------------------------------------------------------------------
+
+    def schedule_out(schedule: Schedule) -> dict[str, object]:
+        return {
+            "id": schedule.id,
+            "operation": schedule.operation,
+            "target_type": schedule.target_type,
+            "target_ids": json.loads(schedule.target_ids),
+            "parameters": json.loads(schedule.parameters or "{}"),
+            "recurrence": schedule.recurrence,
+            "run_at": schedule.run_at,
+            "time_of_day": schedule.time_of_day,
+            "weekdays": schedule.weekdays,
+            "interval_minutes": schedule.interval_minutes,
+            "enabled": schedule.enabled,
+            "created_by": schedule.created_by,
+            "created_at": schedule.created_at,
+            "next_run_at": schedule.next_run_at,
+            "last_run_at": schedule.last_run_at,
+            "last_activity_id": schedule.last_activity_id,
+            "last_error": schedule.last_error,
+        }
+
+    async def save_schedule_body(
+        session: AsyncSession, schedule: Schedule | None, body: ScheduleIn, user: User
+    ) -> dict[str, object]:
+        try:
+            schedule = await save_schedule(
+                session,
+                catalog,
+                schedule,
+                user,
+                scheduler.zone,
+                now=scheduler.now(),
+                **body.model_dump(),
+            )
+        except ScheduleError as exc:
+            await session.rollback()
+            code = 403 if exc.code == "forbidden" else 422
+            raise HTTPException(code, {"code": exc.code, "message": str(exc)}) from exc
+        await session.commit()
+        return schedule_out(schedule)
+
+    async def load_schedule(session: AsyncSession, schedule_id: int, user: User) -> Schedule:
+        schedule = await session.get(Schedule, schedule_id)
+        if schedule is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Schedule not found")
+        return schedule
+
+    @api.get("/schedules", response_model=list[ScheduleOut])
+    async def list_schedules(
+        session: Session, operation: str | None = None
+    ) -> list[dict[str, object]]:
+        """Planned operations, next due first; ``operation`` limits them to one operation."""
+        query = select(Schedule).order_by(Schedule.next_run_at.is_(None), Schedule.next_run_at)
+        if operation:
+            query = query.where(Schedule.operation == operation)
+        return [schedule_out(s) for s in await session.scalars(query)]
+
+    @api.post("/schedules", response_model=ScheduleOut, status_code=status.HTTP_201_CREATED)
+    async def create_schedule(
+        body: ScheduleIn, session: Session, user: CurrentUser
+    ) -> dict[str, object]:
+        """Plan an operation once, daily or every N minutes; it runs with the creator's
+        rights, checked again when it is due."""
+        return await save_schedule_body(session, None, body, user)
+
+    @api.put("/schedules/{schedule_id}", response_model=ScheduleOut)
+    async def update_schedule(
+        schedule_id: int, body: ScheduleIn, session: Session, user: CurrentUser
+    ) -> dict[str, object]:
+        schedule = await load_schedule(session, schedule_id, user)
+        return await save_schedule_body(session, schedule, body, user)
+
+    @api.delete("/schedules/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_schedule(schedule_id: int, session: Session, user: CurrentUser) -> Response:
+        await session.delete(await load_schedule(session, schedule_id, user))
+        await session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     # --- browser interface ----------------------------------------------------------------
 
     @api.get("/landscape")
@@ -806,7 +997,12 @@ def create_app(
 
     @api.delete("/custom-operations/{operation_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_custom_operation(operation_id: int, session: Session) -> Response:
-        await session.delete(await load_custom(session, operation_id))
+        operation = await load_custom(session, operation_id)
+        if used := await steps_using(session, operation.key):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Used by the templates " + ", ".join(used)
+            )
+        await session.delete(operation)
         await session.commit()
         await catalog.reload(session)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -821,10 +1017,24 @@ def create_app(
         timeout: int | None,
     ) -> Activity:
         definition = catalog.get(key)
-        if definition is None or definition.custom is None or target_type not in definition.targets:
+        if (
+            definition is None
+            or (definition.custom is None and definition.template is None)
+            or target_type not in definition.targets
+        ):
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"No custom operation {key} here")
         if not has_role(user, definition.role):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires the role {definition.role}")
+        if definition.template is not None:
+            try:
+                values = template_values(definition.template, body.parameters)
+            except ParameterError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            return await submit(
+                runner.submit_template(
+                    session, definition.template, target_type, target_id, values, user.username
+                )
+            )
         if target_type == TargetType.INSTANCE:
             instance = await session.scalar(select(Instance).where(Instance.id == target_id))
             if instance is not None and not definition.applies_to(instance):
@@ -924,11 +1134,14 @@ def create_app(
         if not has_role(user, definition.role):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires the role {definition.role}")
         values = None
-        if definition.custom is not None:
-            try:
+        steps = None
+        try:
+            if definition.custom is not None:
                 values = parameter_values(definition.custom, body.parameters)
-            except ParameterError as exc:
-                raise HTTPException(422, str(exc)) from exc
+            if definition.template is not None:
+                steps = template_values(definition.template, body.parameters)
+        except ParameterError as exc:
+            raise HTTPException(422, str(exc)) from exc
         default_timeout = (
             definition.custom.timeout_seconds if definition.custom else DEFAULT_TIMEOUT_SECONDS
         )
@@ -944,6 +1157,8 @@ def create_app(
                 requested_by=user.username,
                 custom=definition.custom,
                 parameters=values,
+                template=definition.template,
+                template_values=steps,
             )
         except TargetNotFoundError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
@@ -1042,6 +1257,9 @@ def create_app(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     app.state.runner = runner
+    app.state.scheduler = scheduler
+    # Tests drive the scheduler with tick(); the server lets it run on its own.
+    app.state.run_scheduler = run_scheduler
     # Event stream: how often the database is checked for changes; limit only for tests.
     app.state.events_interval = 2.0
     app.state.events_sleep = asyncio.sleep

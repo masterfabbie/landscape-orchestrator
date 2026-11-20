@@ -58,17 +58,35 @@ function finish(timeline: Map<string, Lane>, activity: Activity, now: number): v
       }
 }
 
-export function buildTimeline(activity: ActivityDetail, now = Date.now()): Timeline {
+/** Name of the step a child of a template activity ran (from the stored template). */
+function stepNames(activity: ActivityDetail, t: (key: string) => string): string[] {
+  const template = activity.options?.template as
+    | { target?: string; steps?: { operation: string; custom?: { name: string } | null }[] }
+    | undefined;
+  const suffix = template?.target === "SYSTEM" ? "_system" : "";
+  return (template?.steps ?? []).map((s, i) => `${i + 1}. ${s.custom?.name ?? t(`op.${s.operation}${suffix}`)}`);
+}
+
+export function buildTimeline(
+  activity: ActivityDetail,
+  now = Date.now(),
+  t: (key: string) => string = (key) => key,
+): Timeline {
   const running = ACTIVE.has(activity.status);
   const start = time(activity.started_at ?? activity.requested_at);
   const end = activity.finished_at ? time(activity.finished_at) : Math.max(now, start + 1000);
   const lanes = new Map<string, Lane>();
 
-  if (activity.target_type === "MASS") {
-    for (const child of activity.children) {
-      const l = lane(lanes, child.target_label);
+  if (activity.target_type === "MASS" || activity.kind === "TEMPLATE") {
+    // Mass operation: a lane per target; template: a lane per step (an extra start after a
+    // failed step gets its own lane).
+    const names = activity.kind === "TEMPLATE" ? stepNames(activity, t) : [];
+    activity.children.forEach((child, index) => {
+      const subject =
+        activity.kind === "TEMPLATE" ? (names[index] ?? `${index + 1}. ${child.kind}`) : child.target_label;
+      const l = lane(lanes, subject);
       l.status = child.status;
-      if (!child.started_at) continue;
+      if (!child.started_at) return;
       l.segments.push({
         kind: "child",
         from: time(child.started_at),
@@ -76,7 +94,7 @@ export function buildTimeline(activity: ActivityDetail, now = Date.now()): Timel
         state: ACTIVE.has(child.status) ? "running" : child.status === "SUCCEEDED" ? "done" : "failed",
         activityId: child.id,
       });
-    }
+    });
     finish(lanes, activity, now);
     return { lanes: [...lanes.values()], start, end, running };
   }

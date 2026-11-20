@@ -14,7 +14,11 @@ export default defineConfig({
     // One style sheet for all pages (app.css), linked by app_page.html.
     cssCodeSplit: false,
     rollupOptions: {
-      input: { landscape: "src/landscape/main.tsx", activity: "src/activity/main.tsx" },
+      input: {
+        landscape: "src/landscape/main.tsx",
+        activity: "src/activity/main.tsx",
+        templates: "src/templates/main.tsx",
+      },
       output: {
         entryFileNames: "[name].js",
         // Code shared by the pages (React, API, texts).

@@ -96,8 +96,7 @@ Noch nicht gegen echte Hosts getestet:
 
 - HTTPS
 
-Nicht Teil der ersten Version: Verschieben von Instanzen (Adaptive Computing), Hooks,
-Operationsvorlagen (Ketten von Operationen) und zeitgesteuerte Ausführung.
+Nicht Teil der ersten Version: Verschieben von Instanzen (Adaptive Computing) und Hooks.
 
 ## Entwicklung
 
@@ -152,6 +151,7 @@ Der Server braucht einen Schlüssel aus einer Umgebungsvariable. `lo-keygen` erz
 |---|---|
 | `LO_SECRET_KEY` | Schlüssel, mit dem gespeicherte Passwörter verschlüsselt werden |
 | `LO_DATABASE_URL` | optional, Standard `sqlite+aiosqlite:///./landscape.db` |
+| `LO_TIMEZONE` | optional, Standard `Europe/Berlin`: Zeitzone für Uhrzeiten in Einplanungen (IANA-Name) |
 
 **Den `LO_SECRET_KEY` sicher aufbewahren.** Geht er verloren oder wird er geändert, lassen sich
 die gespeicherten Passwörter nicht mehr entschlüsseln und müssen neu eingegeben werden.
@@ -339,6 +339,40 @@ Aktivität ohne Neuladen:
   Migration 0006): angefordert (`request_start`, `request_stop`), Status je Instanz
   (`status`) und Start einer eigenen Operation (`op_started`). Ältere Aktivitäten haben diese
   Felder nicht; sie zeigen nur das Protokoll.
+
+### Operationsvorlagen und Einplanen
+
+Eine **Operationsvorlage** verkettet Operationen, die nacheinander auf einem System oder Host
+laufen, z. B. Kernel vorbereiten, stoppen, Kernel kopieren, starten (vgl. die
+Operationsvorlagen in LaMa). Anlegen dürfen nur Admins: Configuration → Operationsvorlagen.
+
+- **Baukasten:** links die Bausteine (eingebaute und eigene Operationen für das Ziel), in der
+  Mitte die Kette (per Drag-and-drop oder mit den Pfeilen ordnen), rechts der gewählte
+  Schritt mit seinen Parameterwerten und dem Verhalten bei Fehler: „Kette anhalten“
+  (Standard), „weitermachen“ oder „Kette anhalten, System starten“ (nur bei Systemen, z. B.
+  nach einem gescheiterten Kernel-Kopieren).
+- **Werte** in der Vorlage sind Vorgaben. Beim Ausführen fragt ein Formular alle Parameter der
+  Schritte ab (als „<Schritt>.<Name>“, z. B. `3.KRNLREL`), vorausgefüllt mit den Vorgaben.
+- **Rolle:** Jede Vorlage hat eine Rolle zum Ausführen, mindestens die höchste ihrer Schritte.
+- **Ausführen:** Vorlagen erscheinen in der Landscape wie Operationen (Leiste, Detailleiste,
+  Befehlspalette), auch als Massenoperation. Eine Vorlage läuft als Aktivität; jeder Schritt
+  ist eine Teilaktivität. Die Vorlage sperrt das System (samt Abhängigkeiten) bzw. den Host für
+  die ganze Kette; nur ihre eigenen Schritte dürfen darin laufen. Endstatus: erfolgreich,
+  teilweise fehlgeschlagen (Schritt mit „weitermachen“ gescheitert) oder fehlgeschlagen.
+  Abbrechen bricht den laufenden Schritt ab und startet keinen weiteren. Die Live-Ansicht
+  zeigt je Schritt eine Spur.
+- Eine eigene Operation, die eine Vorlage nutzt, lässt sich nicht löschen; eine eingeplante
+  Vorlage auch nicht.
+- In den Menüs der Seiten von System und Host (noch Jinja2) erscheinen Vorlagen nicht.
+
+**Einplanen** (im Baukasten unter der Kette; per API für jede Operation): einmalig zu einem
+Zeitpunkt, täglich zu einer Uhrzeit an gewählten Wochentagen oder alle N Minuten (mindestens 5).
+Mehrere Ziele laufen als Massenoperation. Der Lauf geschieht mit den Rechten des Benutzers,
+der ihn eingeplant hat; sie werden beim Start erneut geprüft (gesperrter Benutzer oder fehlende
+Rolle: kein Lauf, der Grund steht bei der Einplanung). Uhrzeiten gelten in der Zeitzone
+`LO_TIMEZONE` des Servers. Der Server prüft alle 30 Sekunden, was fällig ist; war er zur
+fälligen Zeit aus, läuft ein Lauf beim nächsten Prüfen nach, verpasste Wiederholungen werden
+nicht nachgeholt. Die Aktivität nennt als Auftraggeber „<Benutzer> (schedule <Nr.>)“.
 
 ### Massenoperationen
 
@@ -542,6 +576,10 @@ keine Inventardaten.
 | GET, POST | `/api/custom-operations` | eigene Operationen auflisten bzw. anlegen (nur Admin), mit `parameters` |
 | GET, PUT, DELETE | `/api/custom-operations/{id}` | eigene Operation lesen, ersetzen (samt Parametern) bzw. löschen (nur Admin) |
 | POST | `/api/instances/{id}/operations/{key}`, `/api/systems/{id}/operations/{key}`, `/api/hosts/{id}/operations/{key}` | eigene Operation ausführen (`{"parameters": {"KRNLREL": "793", "ONLYPREPARE": true}}`, `?timeout=` überschreibt das Zeitlimit) |
+| GET, POST | `/api/templates` | Operationsvorlagen auflisten bzw. anlegen (nur Admin): `{"key", "name", "target": "SYSTEM", "role", "steps": [{"operation": "stop", "parameters": {}, "on_error": "stop"}]}` |
+| GET, PUT, DELETE | `/api/templates/{id}` | Vorlage lesen, ersetzen bzw. löschen (nur Admin); ausgeführt wird sie wie eine eigene Operation über `/api/systems/{id}/operations/{key}` |
+| GET, POST | `/api/schedules` | Einplanungen (`?operation=`) bzw. einplanen (ab Operator, Rolle der Operation nötig): `{"operation", "target_type", "target_ids", "parameters", "recurrence": "once"|"daily"|"interval", "run_at", "time_of_day", "weekdays", "interval_minutes"}` |
+| PUT, DELETE | `/api/schedules/{id}` | Einplanung ändern (z. B. `enabled`) bzw. löschen |
 | POST | `/api/activities/{id}/cancel` | laufende Aktivität abbrechen (Operator); HTTP 409, wenn sie schon beendet ist |
 | POST | `/api/mass-operations` | Massenoperation (`{"operation": "stop", "target_type": "SYSTEM", "target_ids": [1, 2], "parallel": 5, "stop_on_error": false}`); `target_type` ist `SYSTEM`, `INSTANCE` oder `HOST`; für eigene Operationen zusätzlich `parameters`; Antwort ist die Sammelaktivität (HTTP 202) |
 

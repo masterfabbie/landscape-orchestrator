@@ -70,6 +70,8 @@ export interface OperationDef {
   mass: boolean;
   danger: boolean;
   custom: boolean;
+  template?: boolean;
+  steps?: string[];
   instance_types: string[];
   parameters: Parameter[];
 }
@@ -130,4 +132,43 @@ export interface ActivityDetail extends Activity {
   entries: LogEntry[];
   children: Activity[];
   options: Record<string, unknown> | null;
+}
+
+export interface TemplateStep {
+  position?: number;
+  operation: string;
+  name?: string | null;
+  parameters: Record<string, string>;
+  on_error: "stop" | "continue" | "stop_and_start";
+}
+
+export interface Template {
+  id: number;
+  key: string;
+  name: string;
+  description: string | null;
+  target: "SYSTEM" | "HOST";
+  role: string;
+  mass: boolean;
+  steps: TemplateStep[];
+  valid: boolean;
+}
+
+export interface ScheduleRow {
+  id: number;
+  operation: string;
+  target_type: TargetType;
+  target_ids: number[];
+  parameters: Record<string, string | number | boolean>;
+  recurrence: "once" | "daily" | "interval";
+  run_at: string | null;
+  time_of_day: string | null;
+  weekdays: string;
+  interval_minutes: number | null;
+  enabled: boolean;
+  created_by: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_activity_id: number | null;
+  last_error: string | null;
 }

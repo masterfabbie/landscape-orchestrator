@@ -59,7 +59,8 @@ def main() -> None:
         transport = MockLandscapeTransport(MockLandscape.from_dict(default_landscape_config()))
         print("Using the simulated landscape. Hosts: sapapp1 (offset 0), sapdb1 (offset 10000).")
 
-    uvicorn.run(create_app(settings, transport=transport), host=args.host, port=args.port)
+    app = create_app(settings, transport=transport, run_scheduler=True)
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

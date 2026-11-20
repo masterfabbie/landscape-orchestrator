@@ -40,6 +40,13 @@ export function ParameterDialog({ operation, selection, onCancel, onRun }: Props
       <form onSubmit={submit}>
         <h2 id="lo-param-title">{operation.name}</h2>
         {operation.description && <p>{operation.description}</p>}
+        {operation.template && operation.steps && (
+          <ol className="lo-steps-preview">
+            {operation.steps.map((step, index) => (
+              <li key={index}>{t(step)}</li>
+            ))}
+          </ol>
+        )}
         <p className="lo-muted">{t(`ui.selected_${selection.kind.toLowerCase()}`, { count: selection.ids.length })}</p>
         <div className="lo-fields">
           {operation.parameters.map((p) =>
@@ -71,7 +78,7 @@ export function ParameterDialog({ operation, selection, onCancel, onRun }: Props
             ),
           )}
         </div>
-        <p className="lo-muted">{t("custom.parameters_hint")}</p>
+        {operation.parameters.length > 0 && <p className="lo-muted">{t("custom.parameters_hint")}</p>}
         <div className="lo-dialog-buttons">
           <button type="submit">{t("custom.run")}</button>
           <button type="button" className="secondary" onClick={onCancel}>

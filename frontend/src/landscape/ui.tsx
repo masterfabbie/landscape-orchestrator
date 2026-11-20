@@ -8,6 +8,8 @@ export interface AppInfo {
   t: Translate;
   role: string;
   language: string;
+  /** Time zone of the server for times of day in schedules (LO_TIMEZONE). */
+  timezone?: string;
 }
 
 export const AppContext = createContext<AppInfo>({ t: (k) => k, role: "viewer", language: "en" });
