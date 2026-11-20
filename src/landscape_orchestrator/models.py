@@ -62,6 +62,14 @@ activity_systems = Table(
     Column("system_id", ForeignKey("systems.id", ondelete="CASCADE"), primary_key=True),
 )
 
+# Hosts an activity locks besides its own host_id, e.g. the hosts of an operation template.
+activity_hosts = Table(
+    "activity_hosts",
+    Base.metadata,
+    Column("activity_id", ForeignKey("activities.id", ondelete="CASCADE"), primary_key=True),
+    Column("host_id", ForeignKey("hosts.id", ondelete="CASCADE"), primary_key=True),
+)
+
 
 class Host(Base):
     __tablename__ = "hosts"
@@ -375,9 +383,13 @@ class Activity(Base):
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # False for custom operations that lock nothing (e.g. reading logs): they run beside
+    # other activities and do not keep others from starting.
+    locks: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # All systems the activity may touch; used to keep activities from overlapping.
     systems: Mapped[list[System]] = relationship(secondary=activity_systems)
+    hosts: Mapped[list[Host]] = relationship(secondary=activity_hosts)
     children: Mapped[list[Activity]] = relationship(
         primaryjoin=lambda: Activity.id == foreign(Activity.parent_id),
         order_by="Activity.id",
@@ -511,6 +523,10 @@ class CustomOperation(Base):
     ordering: Mapped[str] = mapped_column(String(16), default="parallel")
     role: Mapped[str] = mapped_column(String(16))
     mass: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Locks the instance, system or host like start and stop; off for read-only scripts.
+    locks: Mapped[bool] = mapped_column(Boolean, default=True)
+    # False: only as a step of an operation template, not in menus or the landscape.
+    standalone: Mapped[bool] = mapped_column(Boolean, default=True)
     timeout_seconds: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -548,8 +564,9 @@ class CustomOperationParameter(Base):
 
 
 class OperationTemplate(Base):
-    """A chain of operations run one after another on a system or host, like an operation
-    template in LaMa (e.g. prepare kernel, stop, copy kernel, start)."""
+    """Steps of operations with their targets and values, run as a graph (steps after their
+    predecessors, independent ones in parallel), like an operation template in LaMa (e.g.
+    prepare kernel, stop, copy kernel, start)."""
 
     __tablename__ = "operation_templates"
 
@@ -558,10 +575,13 @@ class OperationTemplate(Base):
     key: Mapped[str] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(128))
     description: Mapped[str | None] = mapped_column(Text)
-    # SYSTEM or HOST; every step must run on this target type.
+    # Type of the "$selection" placeholder (INSTANCE, SYSTEM or HOST) the steps without
+    # fixed targets run on, chosen when the template starts (a dialog template); "" if every
+    # step has fixed targets (a template that runs as it is, e.g. scheduled).
     target: Mapped[str] = mapped_column(String(16))
     # Role needed to run the template; at least the highest role of its steps.
     role: Mapped[str] = mapped_column(String(16))
+    # Unused since migration 0008: a selection of several targets is one run.
     mass: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -581,14 +601,23 @@ class TemplateStep(Base):
     template_id: Mapped[int] = mapped_column(
         ForeignKey("operation_templates.id", ondelete="CASCADE"), index=True
     )
+    # Number of the step within the template; predecessors refer to it.
     position: Mapped[int] = mapped_column(Integer)
     # Key of a built-in or custom operation of the catalog.
     operation: Mapped[str] = mapped_column(String(64))
-    # Values of the parameters of a custom operation (name -> value, JSON); defaults that can
-    # be changed when the template runs.
+    # INSTANCE, SYSTEM or HOST.
+    target_type: Mapped[str] = mapped_column(String(16), default="")
+    # Ids of fixed targets (JSON list); empty: the "$selection" of the run.
+    targets: Mapped[str] = mapped_column(Text, default="[]")
+    # Positions of the steps that must have finished first (JSON list); none: from the start.
+    after: Mapped[str] = mapped_column(Text, default="[]")
+    # Values of the parameters of a custom operation (name -> value, JSON).
     parameters: Mapped[str] = mapped_column(Text, default="{}")
-    # stop: end the chain; continue: go on; stop_and_start: end the chain and start the
-    # system again (system templates only).
+    # Names of parameters asked for when the template starts (JSON list), the template's
+    # value as the default; the others are fixed.
+    ask: Mapped[str] = mapped_column(Text, default="[]")
+    # stop: start no further steps; continue: go on; stop_and_start: like stop, then start
+    # the systems of the step again (steps on systems and instances).
     on_error: Mapped[str] = mapped_column(String(16), default="stop")
 
     template: Mapped[OperationTemplate] = relationship(back_populates="steps")
@@ -601,8 +630,10 @@ class Schedule(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     operation: Mapped[str] = mapped_column(String(64))
+    # "" for a template whose steps all have fixed targets.
     target_type: Mapped[str] = mapped_column(String(16))
-    # Ids of the targets (JSON list); several run as one mass operation.
+    # Ids of the targets (JSON list); several run as one mass operation (a template: as its
+    # selection).
     target_ids: Mapped[str] = mapped_column(Text)
     # Parameter values as in a run (JSON), for templates "<step>.<NAME>".
     parameters: Mapped[str] = mapped_column(Text, default="{}")

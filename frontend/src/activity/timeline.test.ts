@@ -136,7 +136,35 @@ describe("timeline of a template", () => {
     expect(timeline.lanes.map((l) => [l.subject, l.segments[0].state])).toEqual([
       ["1. Copy kernel", "done"],
       ["2. op.stop_system", "failed"],
-      ["3. START", "done"],
+      ["kind.START: " + activity([]).target_label, "done"],
     ]);
+  });
+
+  it("names the children of parallel steps from the step entries of the log", () => {
+    const child = (n: number, kind: string) => ({ ...activity([]), id: n, kind, status: "RUNNING", started_at: new Date(T0).toISOString(), finished_at: null });
+    const options = {
+      template: {
+        selection: "SYSTEM",
+        steps: [
+          { position: 1, operation: "discover", target_type: "HOST", custom: null },
+          { position: 2, operation: "discover", target_type: "HOST", custom: null },
+          { position: 3, operation: "restart", target_type: "SYSTEM", custom: null },
+        ],
+      },
+    };
+    const step = (position: number, child: number) => ({
+      id: position,
+      timestamp: new Date(T0).toISOString(),
+      level: "INFO",
+      message: `Step ${position}/3`,
+      event: "step",
+      subject: String(position),
+      data: { activity: String(child) },
+    });
+    const timeline = buildTimeline(
+      activity([step(2, 5), step(1, 6)], { kind: "TEMPLATE", status: "RUNNING", finished_at: null, options, children: [child(5, "DISCOVER"), child(6, "DISCOVER")] }),
+      T0 + 1000,
+    );
+    expect(timeline.lanes.map((l) => l.subject)).toEqual(["2. op.discover", "1. op.discover"]);
   });
 });

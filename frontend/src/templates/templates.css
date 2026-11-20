@@ -7,26 +7,6 @@
 .lo-fields-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; align-items: end; }
 .lo-fields-row .lo-wide { grid-column: span 2; }
 .lo-fields-row input, .lo-fields-row select, .lo-step-editor input, .lo-step-editor select, .lo-schedule-form input { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
-.lo-composer { display: grid; grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(280px, 380px); gap: 20px; align-items: start; }
-@media (max-width: 1100px) { .lo-composer { grid-template-columns: 1fr; } }
-.lo-blocks { display: flex; flex-direction: column; gap: 6px; }
-.lo-blocks h2, .lo-step-editor h2 { font-size: 16px; margin: 0; }
-.lo-block { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; text-align: left; cursor: grab; }
-.lo-block:hover { border-color: var(--accent); }
-.lo-chain { min-height: 240px; display: flex; flex-direction: column; gap: 8px; }
-.lo-drop { padding: 28px; border: 2px dashed var(--border); border-radius: 12px; text-align: center; color: var(--muted); }
-.lo-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: none; }
-.lo-step { position: relative; display: flex; align-items: stretch; gap: 12px; }
-.lo-step:not(:last-child)::after { content: ""; position: absolute; left: 15px; top: 34px; bottom: -12px; width: 2px; background: var(--border); }
-.lo-step-number { flex: none; width: 32px; height: 32px; margin-top: 8px; border-radius: 50%; background: var(--gray-bg); color: var(--gray-fg); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; z-index: 1; }
-.lo-step.lo-on .lo-step-number { background: var(--accent); color: var(--accent-text); }
-.lo-step-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
-.lo-step.lo-on .lo-step-body { border: 2px solid var(--accent); padding: 11px 13px; }
-.lo-step.lo-dragging { opacity: 0.5; }
-.lo-step-name { font-weight: 650; }
-.lo-step-tools { display: flex; flex-direction: column; justify-content: center; gap: 2px; }
-.lo-step-tools button { width: 30px; height: 26px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; }
-.lo-step-tools button:disabled { opacity: 0.35; cursor: default; }
 .lo-step-editor { display: flex; flex-direction: column; gap: 16px; }
 .lo-schedule { display: flex; flex-direction: column; gap: 10px; }
 .lo-schedule h3 { margin: 6px 0 0; font-size: 15px; }
@@ -45,3 +25,45 @@
 /* Same head as the server-rendered pages of the area (style.css: .page-head, .tabs). */
 .lo-templates > .page-head { margin-bottom: -8px; }
 .lo-templates > .tabs { margin-top: 0; }
+
+.lo-secondary { min-height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--accent); background: transparent; color: var(--accent); font: inherit; cursor: pointer; }
+.lo-secondary:disabled { opacity: 0.5; cursor: default; }
+.lo-selection-note { margin: -8px 0 0; }
+
+/* Graph of the steps (React Flow) and the panel of the chosen step, as in LaMa. */
+.lo-graph-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 420px); gap: 20px; align-items: start; }
+@media (max-width: 1100px) { .lo-graph-editor { grid-template-columns: 1fr; } }
+.lo-graph { position: relative; height: min(70vh, 720px); min-height: 420px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); overflow: hidden; display: flex; flex-direction: column; }
+.lo-graph .react-flow { flex: 1 1 auto; --xy-background-color: var(--bg); --xy-edge-stroke: var(--muted); --xy-edge-stroke-selected: var(--accent); --xy-handle-background-color: var(--muted); --xy-handle-border-color: var(--surface); }
+.lo-graph-empty { margin: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.lo-graph-hint { position: absolute; z-index: 5; top: 10px; left: 50%; transform: translateX(-50%); margin: 0; padding: 6px 12px; border-radius: 8px; background: var(--blue-bg); color: var(--blue-fg); font-size: 14px; }
+.lo-graph-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--surface); font-size: 13px; }
+.lo-node { position: relative; width: 220px; height: 84px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 8px 12px 8px 40px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer; }
+.lo-node.lo-on { border: 2px solid var(--accent); padding: 7px 11px 7px 39px; }
+.lo-node.lo-connecting { outline: 2px dashed var(--accent); outline-offset: 3px; }
+.lo-node.lo-invalid { border-color: var(--danger); }
+.lo-node-number { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 999px; background: var(--gray-bg); color: var(--gray-fg); font-size: 12px; font-weight: 700; }
+.lo-node > .lo-node-number { position: absolute; left: 10px; top: 10px; }
+.lo-node.lo-on > .lo-node-number { background: var(--accent); color: var(--accent-text); }
+.lo-node-title { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lo-node-target { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lo-node-flag { color: var(--yellow-fg); font-size: 12px; }
+.lo-node-tools { position: absolute; left: calc(100% + 8px); top: 0; display: flex; flex-direction: column; gap: 4px; }
+.lo-node-tools button { width: 28px; height: 24px; padding: 0; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 13px; line-height: 1; cursor: pointer; }
+.lo-node-tools button:hover { border-color: var(--accent); color: var(--accent); }
+.lo-step-panel { display: flex; flex-direction: column; gap: 12px; }
+.lo-step-panel h2 { display: flex; align-items: center; gap: 8px; }
+.lo-step-panel details { border-top: 1px solid var(--border); padding-top: 8px; }
+.lo-step-panel summary { cursor: pointer; font-weight: 650; margin-bottom: 8px; }
+.lo-step-panel .lo-fields { display: flex; flex-direction: column; gap: 10px; }
+.lo-param { display: flex; flex-direction: column; gap: 2px; }
+.lo-param.lo-invalid input, .lo-param.lo-invalid select { border-color: var(--danger); }
+.lo-ask { font-size: 13px; color: var(--muted); }
+.lo-target-scroll { max-height: 220px; overflow: auto; flex-direction: column; flex-wrap: nowrap; }
+.lo-step-panel input[type="search"] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+
+/* Operation picker */
+.lo-picker-items { list-style: none; margin: 0; padding: 0; }
+.lo-picker .lo-palette-entry { align-items: center; }
+.lo-star { border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; padding: 2px 6px; cursor: pointer; }
+.lo-star.lo-on { color: var(--yellow-fg); }

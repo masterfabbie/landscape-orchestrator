@@ -349,32 +349,60 @@ Aktivität ohne Neuladen:
 
 ### Operationsvorlagen und Einplanen
 
-Eine **Operationsvorlage** verkettet Operationen, die nacheinander auf einem System oder Host
-laufen, z. B. Kernel vorbereiten, stoppen, Kernel kopieren, starten (vgl. die
-Operationsvorlagen in LaMa). Anlegen dürfen nur Admins: Operations → Operationsvorlagen.
+Eine **Operationsvorlage** besteht aus Schritten, die wie in LaMa einen Graphen bilden: Ein
+Schritt startet, wenn alle seine Vorgänger fertig sind; Schritte ohne Weg zwischen ihnen laufen
+parallel, und ein Schritt kann mehrere Vorgänger haben (z. B. Kernel vorab kopieren und
+parallel einen Scheduler stoppen, beides vor dem Stopp des Systems). Anlegen dürfen nur Admins:
+Operations → Operationsvorlagen.
 
-- **Baukasten:** links die Bausteine (eingebaute und eigene Operationen für das Ziel), in der
-  Mitte die Kette (per Drag-and-drop oder mit den Pfeilen ordnen), rechts der gewählte
-  Schritt mit seinen Parameterwerten und dem Verhalten bei Fehler: „Kette anhalten“
-  (Standard), „weitermachen“ oder „Kette anhalten, System starten“ (nur bei Systemen, z. B.
-  nach einem gescheiterten Kernel-Kopieren).
-- **Werte** in der Vorlage sind Vorgaben. Beim Ausführen fragt ein Formular alle Parameter der
-  Schritte ab (als „<Schritt>.<Name>“, z. B. `3.KRNLREL`), vorausgefüllt mit den Vorgaben.
+- **Editor:** Reiter „Allgemein“ (Name, Schlüssel, Rolle, Beschreibung), „Schritte“ und
+  „Einplanen“. Unter „Schritte“ steht der Graph (von oben nach unten angeordnet, React Flow).
+  Ein gewählter Schritt zeigt „+“ (nächster Schritt), „→“ (mit einem folgenden Schritt
+  verbinden) und Löschen; verbunden wird auch durch Ziehen vom unteren zum oberen Rand, Entf
+  löscht einen gewählten Pfeil. „+ Schritt ohne Vorgänger“ legt einen parallelen Zweig an.
+  Rechts stehen für den gewählten Schritt Operation, Zieltyp, Verhalten bei Fehler,
+  Parameter, Ziele und Vorgänger. Gelöschte Schritte reichen ihre Vorgänger an ihre
+  Nachfolger weiter.
+- **Operation wählen:** eine Suche über alle Operationen, die ein Schritt nutzen kann, oben die
+  eigenen **Favoriten** (Stern, je Benutzer) und die **5 meistgenutzten** Operationen der
+  letzten 90 Tage (über alle Benutzer).
+- **Ziele je Schritt:** fest (eine oder mehrere Instanzen, Systeme oder Hosts; mehrere laufen
+  als Massenoperation) oder der Platzhalter **„$Auswahl“**. Eine Vorlage darf Schritte auf
+  Hosts, Instanzen und Systemen mischen; alle Schritte auf der Auswahl brauchen aber denselben
+  Zieltyp.
+  - **Dialog-Vorlage** (mit „$Auswahl“): erscheint in der Landschaft bei passender Auswahl
+    (Leiste, Detailleiste, Befehlspalette). Mehrere ausgewählte Ziele sind **ein** Lauf mit
+    allen Zielen als Auswahl.
+  - **Vorlage mit festen Zielen:** läuft, wie sie ist, über „Ausführen“ im Editor oder
+    eingeplant; in der Landschaft erscheint sie nicht.
+- **Werte:** Jeder Parameter eines Schritts hat einen festen Wert in der Vorlage. Mit „Beim
+  Start fragen“ fragt ein Formular ihn beim Start ab (als „<Schritt>.<Name>“, z. B.
+  `3.KRNLREL`), vorausgefüllt mit dem Wert der Vorlage; alle anderen Werte lassen sich beim
+  Start nicht ändern. Ein Pflichtparameter braucht einen Wert oder „Beim Start fragen“.
+- **Verhalten bei Fehler** je Schritt: „Kette anhalten“ (Standard: kein weiterer Schritt
+  startet, laufende laufen zu Ende), „weitermachen“ (der Schritt gilt als erledigt, Endstatus
+  teilweise fehlgeschlagen) oder „Kette anhalten, System starten“ (danach werden die Systeme
+  des Schritts wieder gestartet, nicht bei Hosts).
+- **Sperren:** Die Vorlage sperrt beim Start alle Systeme (samt Abhängigkeiten) und Hosts ihrer
+  sperrenden Schritte für den ganzen Lauf; nur ihre eigenen Schritte dürfen darin laufen.
+  Zwei sperrende Schritte, die gleichzeitig auf denselben Zielen laufen könnten, weist das
+  Speichern ab; trifft ein Schritt auf der Auswahl zur Laufzeit auf einen parallelen Schritt
+  mit festen Zielen, wartet er. Eigene Operationen, die nichts sperren (siehe unten), dürfen
+  parallel laufen.
 - **Rolle:** Jede Vorlage hat eine Rolle zum Ausführen, mindestens die höchste ihrer Schritte.
-- **Ausführen:** Vorlagen erscheinen in der Landscape wie Operationen (Leiste, Detailleiste,
-  Befehlspalette), auch als Massenoperation. Eine Vorlage läuft als Aktivität; jeder Schritt
-  ist eine Teilaktivität. Die Vorlage sperrt das System (samt Abhängigkeiten) bzw. den Host für
-  die ganze Kette; nur ihre eigenen Schritte dürfen darin laufen. Endstatus: erfolgreich,
-  teilweise fehlgeschlagen (Schritt mit „weitermachen“ gescheitert) oder fehlgeschlagen.
-  Abbrechen bricht den laufenden Schritt ab und startet keinen weiteren. Die Live-Ansicht
-  zeigt je Schritt eine Spur.
+- **Ablauf:** Eine Vorlage läuft als Aktivität, jeder Schritt als Teilaktivität. Endstatus:
+  erfolgreich, teilweise fehlgeschlagen oder fehlgeschlagen. Abbrechen bricht die laufenden
+  Schritte ab und startet keinen weiteren. Die Live-Ansicht zeigt je Schritt eine Spur.
+- Vorlagen von vor Migration 0008 wurden zu Ketten auf der Auswahl mit allen Parametern als
+  „Beim Start fragen“; sie verhalten sich wie bisher.
 - Eine eigene Operation, die eine Vorlage nutzt, lässt sich nicht löschen; eine eingeplante
   Vorlage auch nicht.
 - In den Menüs der Seiten von System und Host (noch Jinja2) erscheinen Vorlagen nicht.
 
-**Einplanen** (im Baukasten unter der Kette; per API für jede Operation): einmalig zu einem
+**Einplanen** (im Editor im Reiter „Einplanen“; per API für jede Operation): einmalig zu einem
 Zeitpunkt, täglich zu einer Uhrzeit an gewählten Wochentagen oder alle N Minuten (mindestens 5).
-Mehrere Ziele laufen als Massenoperation. Der Lauf geschieht mit den Rechten des Benutzers,
+Mehrere Ziele laufen als Massenoperation, bei einer Dialog-Vorlage als ein Lauf mit allen
+Zielen als Auswahl; eine Vorlage mit festen Zielen wird ohne Ziele eingeplant. Der Lauf geschieht mit den Rechten des Benutzers,
 der ihn eingeplant hat; sie werden beim Start erneut geprüft (gesperrter Benutzer oder fehlende
 Rolle: kein Lauf, der Grund steht bei der Einplanung). Uhrzeiten gelten in der Zeitzone
 `LO_TIMEZONE` des Servers. Der Server prüft alle 30 Sekunden, was fällig ist; war er zur
@@ -419,7 +447,12 @@ auf und liest die Ausgabe laufend ins Protokoll.
 - **Anlegen** dürfen nur Admins: Operations → Eigene Operationen. Je Operation: Name, Schlüssel
   (für URLs und API), Host-Agent-Operation (der `Name:` der Konfigurationsdatei), Ziel
   (Instanz, System oder Host), Instanztypen, Reihenfolge bei Systemen, Rolle zum Ausführen,
-  Zeitlimit und ob sie als Massenoperation erlaubt ist.
+  Zeitlimit, ob sie als Massenoperation erlaubt ist, und zwei Merkmale wie in LaMa:
+  - **Sperrt Instanz oder Host** (Standard an): Die Operation wartet auf andere Aktivitäten
+    ihrer Ziele und hält sie vom Start ab, wie Start und Stopp. Für Skripte, die nur lesen
+    (z. B. Protokolle), abschalten; sie laufen dann neben anderen Aktivitäten.
+  - **Nicht für Einzelausführung:** nur als Schritt einer Operationsvorlage, nicht in Menüs,
+    Landschaft, Massenoperationen oder Einplanungen.
 - **Parameter** haben Name, Anzeigename, Typ (Text, Ganzzahl, Ja/Nein), Pflichtfeld,
   Standardwert, Muster und Hilfetext. Sie werden als `PARAM-<Name>` übergeben. Ja/Nein wird
   als `true`/`false` übergeben. Text muss dem Muster entsprechen; ohne eigenes Muster sind
@@ -583,8 +616,11 @@ keine Inventardaten.
 | GET, POST | `/api/custom-operations` | eigene Operationen auflisten bzw. anlegen (nur Admin), mit `parameters` |
 | GET, PUT, DELETE | `/api/custom-operations/{id}` | eigene Operation lesen, ersetzen (samt Parametern) bzw. löschen (nur Admin) |
 | POST | `/api/instances/{id}/operations/{key}`, `/api/systems/{id}/operations/{key}`, `/api/hosts/{id}/operations/{key}` | eigene Operation ausführen (`{"parameters": {"KRNLREL": "793", "ONLYPREPARE": true}}`, `?timeout=` überschreibt das Zeitlimit) |
-| GET, POST | `/api/templates` | Operationsvorlagen auflisten bzw. anlegen (nur Admin): `{"key", "name", "target": "SYSTEM", "role", "steps": [{"operation": "stop", "parameters": {}, "on_error": "stop"}]}` |
-| GET, PUT, DELETE | `/api/templates/{id}` | Vorlage lesen, ersetzen bzw. löschen (nur Admin); ausgeführt wird sie wie eine eigene Operation über `/api/systems/{id}/operations/{key}` |
+| GET, POST | `/api/templates` | Operationsvorlagen auflisten bzw. anlegen (nur Admin): `{"key", "name", "role", "steps": [{"position": 1, "operation": "stop", "target_type": "SYSTEM", "targets": [], "after": [], "parameters": {}, "ask": [], "on_error": "stop"}]}`; `targets` leer heißt „$Auswahl“; die Antwort nennt `selection` (Zieltyp der Auswahl oder `null`) |
+| GET, PUT, DELETE | `/api/templates/{id}` | Vorlage lesen, ersetzen bzw. löschen (nur Admin); eine Dialog-Vorlage läuft wie eine eigene Operation über `/api/systems/{id}/operations/{key}` bzw. `/api/mass-operations` (ein Lauf mit allen Zielen) |
+| POST | `/api/templates/{id}/run` | Vorlage starten (Rolle der Vorlage): `{"target_ids": [], "parameters": {"3.KRNLREL": "793"}}`; `target_ids` nur bei einer Dialog-Vorlage |
+| GET | `/api/templates-blocks` | Für den Editor (nur Admin): alle Operationen, die ein Schritt nutzen kann, die 5 meistgenutzten (`top`) und die Favoriten des Benutzers |
+| PUT | `/api/me/favorites` | Favoriten des Editors speichern: `{"operations": ["stop", "copy_kernel"]}` |
 | GET, POST | `/api/schedules` | Einplanungen (`?operation=`) bzw. einplanen (ab Operator, Rolle der Operation nötig): `{"operation", "target_type", "target_ids", "parameters", "recurrence": "once"|"daily"|"interval", "run_at", "time_of_day", "weekdays", "interval_minutes"}` |
 | PUT, DELETE | `/api/schedules/{id}` | Einplanung ändern (z. B. `enabled`) bzw. löschen |
 | POST | `/api/activities/{id}/cancel` | laufende Aktivität abbrechen (Operator); HTTP 409, wenn sie schon beendet ist |

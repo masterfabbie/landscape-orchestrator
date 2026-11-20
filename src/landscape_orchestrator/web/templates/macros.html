@@ -264,7 +264,12 @@
     </div>
     <p class="muted">{{ t("custom.instance_types_hint") }}</p>
   </fieldset>
-  <div class="checks"><label><input type="checkbox" name="mass" value="true" {% if not op or op.mass %}checked{% endif %}> {{ t("custom.mass") }}</label></div>
+  <div class="checks">
+    <label><input type="checkbox" name="mass" value="true" {% if not op or op.mass %}checked{% endif %}> {{ t("custom.mass") }}</label>
+    <label><input type="checkbox" name="locks" value="true" {% if not op or op.locks %}checked{% endif %}> {{ t("custom.locks") }}</label>
+    <label><input type="checkbox" name="template_only" value="true" {% if op and not op.standalone %}checked{% endif %}> {{ t("custom.template_only") }}</label>
+  </div>
+  <p class="muted">{{ t("custom.flags_hint") }}</p>
   <p class="muted">{{ t("custom.agent_hint") }}</p>
   <div><button type="submit">{{ t("action.save") }}</button></div>
 </form>

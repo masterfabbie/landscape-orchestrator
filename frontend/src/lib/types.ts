@@ -74,6 +74,11 @@ export interface OperationDef {
   steps?: string[];
   instance_types: string[];
   parameters: Parameter[];
+  // Locks its target (custom operations may lock nothing, e.g. reading logs).
+  locks?: boolean;
+  // False: only as a step of an operation template.
+  standalone?: boolean;
+  role?: string;
 }
 
 export interface Snapshot {
@@ -134,12 +139,22 @@ export interface ActivityDetail extends Activity {
   options: Record<string, unknown> | null;
 }
 
+export type OnError = "stop" | "continue" | "stop_and_start";
+
 export interface TemplateStep {
-  position?: number;
+  position: number;
   operation: string;
   name?: string | null;
+  target_type: TargetType;
+  // Fixed targets; empty: the selection chosen when the template starts ("$selection").
+  targets: number[];
+  target_labels?: { id: number; label: string | null }[];
+  // Positions of the steps that must have finished first.
+  after: number[];
   parameters: Record<string, string>;
-  on_error: "stop" | "continue" | "stop_and_start";
+  // Parameters asked for when the template starts.
+  ask: string[];
+  on_error: OnError;
 }
 
 export interface Template {
@@ -147,17 +162,24 @@ export interface Template {
   key: string;
   name: string;
   description: string | null;
-  target: "SYSTEM" | "HOST";
+  // Type of the selection the steps without fixed targets run on; null: fixed targets only.
+  selection: TargetType | null;
   role: string;
-  mass: boolean;
   steps: TemplateStep[];
   valid: boolean;
+}
+
+export interface BuildingBlocks {
+  top: string[];
+  favorites: string[];
+  operations: OperationDef[];
 }
 
 export interface ScheduleRow {
   id: number;
   operation: string;
-  target_type: TargetType;
+  // "" for a template with fixed targets only.
+  target_type: TargetType | "";
   target_ids: number[];
   parameters: Record<string, string | number | boolean>;
   recurrence: "once" | "daily" | "interval";

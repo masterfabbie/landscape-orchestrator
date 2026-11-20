@@ -33,8 +33,10 @@ class OperationDef:
     # Stops or restarts something; shown in red.
     danger: bool = False
     custom: CustomSpec | None = None
-    # An operation template: a chain of the other operations (templatespec.py).
+    # An operation template: a graph of the other operations (templatespec.py).
     template: TemplateSpec | None = None
+    # False: only as a step of a template, not in menus, the landscape or schedules.
+    standalone: bool = True
 
     @property
     def name(self) -> str | None:
@@ -85,6 +87,7 @@ def spec_of(operation: CustomOperation) -> CustomSpec:
         instance_types=tuple(t for t in operation.instance_types.split(",") if t),
         ordering=operation.ordering,
         timeout_seconds=operation.timeout_seconds,
+        locks=operation.locks,
         parameters=tuple(
             ParameterSpec(p.name, p.label, p.type, p.required, p.default, p.pattern, p.help)
             for p in operation.parameters
@@ -100,6 +103,7 @@ def definition_of(operation: CustomOperation) -> OperationDef:
         role=Role(operation.role),
         mass=operation.mass,
         custom=spec_of(operation),
+        standalone=operation.standalone,
     )
 
 
@@ -110,15 +114,23 @@ def template_spec(
     steps = []
     for step in template.steps:
         operation = known.get(step.operation)
-        if operation is None or operation.template is not None:
+        if (
+            operation is None
+            or operation.template is not None
+            or step.target_type not in operation.targets
+        ):
             return None
         steps.append(
             StepSpec(
                 position=step.position,
                 operation=step.operation,
                 kind=operation.kind.value,
+                target_type=step.target_type,
+                targets=tuple(json.loads(step.targets or "[]")),
+                after=tuple(json.loads(step.after or "[]")),
                 on_error=step.on_error,
                 parameters=json.loads(step.parameters or "{}"),
+                ask=tuple(json.loads(step.ask or "[]")),
                 custom=operation.custom,
             )
         )
@@ -127,7 +139,7 @@ def template_spec(
         key=template.key,
         name=template.name,
         description=template.description,
-        target=template.target,
+        selection=template.target or None,
         steps=tuple(steps),
     )
 
@@ -138,12 +150,14 @@ def template_definition(
     spec = template_spec(template, known)
     if spec is None:
         return None
+    # A dialog template runs on the selection (one run for all selected targets); a
+    # template with fixed targets only has no target in the landscape.
     return OperationDef(
         key=template.key,
         kind=OperationKind.TEMPLATE,
-        targets=frozenset({TargetType(template.target)}),
+        targets=frozenset({TargetType(spec.selection)}) if spec.selection else frozenset(),
         role=Role(template.role),
-        mass=template.mass,
+        mass=True,
         template=spec,
     )
 
@@ -182,12 +196,14 @@ class Catalog:
     def for_target(
         self, target: TargetType | str, user=None, *, mass: bool = False, instance=None
     ) -> list[OperationDef]:
-        """Operations for a target type; with ``user`` only those the user may run, with
-        ``instance`` only those that apply to its instance type."""
+        """Operations for a target type that run on their own (not only as template steps);
+        with ``user`` only those the user may run, with ``instance`` only those that apply to
+        its instance type."""
         return [
             op
             for op in self.all()
             if target in op.targets
+            and op.standalone
             and (not mass or op.mass)
             and (user is None or has_role(user, op.role))
             and op.applies_to(instance)

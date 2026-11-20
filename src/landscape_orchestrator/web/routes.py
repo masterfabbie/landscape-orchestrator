@@ -720,6 +720,7 @@ async def _run_target(
         target_type is None
         or definition is None
         or definition.custom is None
+        or not definition.standalone
         or target_type not in definition.targets
     ):
         raise HTTPException(404, "Unknown operation")
@@ -967,6 +968,8 @@ class OperationForm:
         ordering: Annotated[str, Form()] = "parallel",
         role: Annotated[str, Form()] = "configurator",
         mass: Annotated[bool, Form()] = False,
+        locks: Annotated[bool, Form()] = False,
+        template_only: Annotated[bool, Form()] = False,
         timeout_seconds: Annotated[int, Form()] = 600,
     ) -> None:
         self.values = {
@@ -979,6 +982,8 @@ class OperationForm:
             "ordering": ordering,
             "role": role,
             "mass": mass,
+            "locks": locks,
+            "standalone": not template_only,
             "timeout_seconds": timeout_seconds,
         }
 

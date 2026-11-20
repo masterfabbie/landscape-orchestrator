@@ -199,6 +199,43 @@ async def test_run_on_host(app, api, landscape):
     assert run.host == "sapdb1" and run.arguments == []
 
 
+async def test_operation_that_locks_nothing(app, api):
+    """A read-only script runs beside a running stop and does not block other activities."""
+    await create(api, LO_TEST | {"locks": False})
+    gate = hold_activities(app)
+    stop = (await api.post("/api/systems/2/stop")).json()["id"]
+    await asyncio.sleep(0.05)
+    body = {"parameters": {"RC": 0, "SLEEP": 5}}
+    reading = await api.post("/api/instances/2/operations/lo_test", json=body)
+    assert reading.status_code == 202, reading.text
+    await asyncio.sleep(0.05)
+    gate.set()
+    await app.state.runner.wait(stop)
+    # While the script runs, the system can be started again.
+    start = await api.post("/api/systems/2/start")
+    assert start.status_code == 202, start.text
+    for activity in (reading.json()["id"], start.json()["id"]):
+        assert (await finished(app, api, activity))["status"] == "SUCCEEDED"
+    operations = {o["key"]: o for o in (await api.get("/api/operations")).json()}
+    assert operations["lo_test"]["locks"] is False
+
+
+async def test_operation_only_for_templates(app, api):
+    await create(api, LO_TEST | {"standalone": False})
+    assert (await api.post("/api/instances/2/operations/lo_test", json={})).status_code == 404
+    mass = {"operation": "lo_test", "target_type": "INSTANCE", "target_ids": [2]}
+    assert (await api.post("/api/mass-operations", json=mass)).status_code == 422
+    landscape = (await api.get("/api/landscape")).json()
+    assert "lo_test" not in {o["key"] for o in landscape["operations"]}
+    # As a step of a template it runs.
+    step = {"operation": "lo_test", "target_type": "INSTANCE", "parameters": {"RC": "0"}}
+    body = {"key": "only", "name": "Only", "steps": [step]}
+    assert (await api.post("/api/templates", json=body)).status_code == 201
+    response = await api.post("/api/instances/2/operations/only", json={})
+    assert response.status_code == 202, response.text
+    assert (await finished(app, api, response.json()["id"]))["status"] == "SUCCEEDED"
+
+
 async def test_cancel_custom_operation(app, api, landscape):
     await create(api)
     gate = hold_activities(app)

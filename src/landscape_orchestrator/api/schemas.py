@@ -215,6 +215,10 @@ class OperationOut(BaseModel):
     role: str
     mass: bool
     custom: bool = False
+    # Locks its target (custom operations can lock nothing, e.g. reading logs).
+    locks: bool = True
+    # False: only as a step of an operation template.
+    standalone: bool = True
     parameters: list[ParameterDef] = []
 
 
@@ -229,6 +233,10 @@ class CustomOperationIn(BaseModel):
     ordering: Literal["parallel", "roles", "sequential"] = "parallel"
     role: Literal["viewer", "operator", "configurator", "admin"] = "configurator"
     mass: bool = True
+    # Locks the instance, system or host like start and stop; off for read-only scripts.
+    locks: bool = True
+    # False: only as a step of an operation template, not in menus or the landscape.
+    standalone: bool = True
     timeout_seconds: int = Field(default=600, ge=10, le=86400)
     parameters: list[ParameterDef] = Field(default=[], max_length=50)
 
@@ -366,10 +374,19 @@ class NewTokenOut(BaseModel):
 
 
 class TemplateStepIn(BaseModel):
-    # Key of a built-in or custom operation that runs on the template's target type.
+    # Number of the step; predecessors refer to it. Default: its place in the list.
+    position: int | None = Field(default=None, ge=1, le=999)
+    # Key of a built-in or custom operation.
     operation: str
-    # Values of the custom operation's parameters; defaults that a run can change.
+    target_type: Literal["INSTANCE", "SYSTEM", "HOST"]
+    # Fixed targets; empty: the selection chosen when the template starts.
+    targets: list[int] = Field(default=[], max_length=100)
+    # Positions of the steps that must have finished first; empty: from the start.
+    after: list[int] = Field(default=[], max_length=50)
+    # Values of the custom operation's parameters.
     parameters: dict[str, str] = {}
+    # Parameters asked for when the template starts (the value above as default).
+    ask: list[str] = []
     on_error: Literal["stop", "continue", "stop_and_start"] = "stop"
 
 
@@ -377,16 +394,21 @@ class TemplateIn(BaseModel):
     key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     name: str = Field(min_length=1, max_length=128)
     description: str | None = None
-    target: Literal["SYSTEM", "HOST"] = "SYSTEM"
     role: Literal["viewer", "operator", "configurator", "admin"] = "operator"
-    mass: bool = True
-    steps: list[TemplateStepIn] = Field(min_length=1, max_length=30)
+    steps: list[TemplateStepIn] = Field(min_length=1, max_length=50)
+
+
+class StepTargetOut(BaseModel):
+    id: int
+    # Name of the target; null if it no longer exists.
+    label: str | None
 
 
 class TemplateStepOut(TemplateStepIn):
     position: int
     # Name of the operation (custom) or its key (built-in); null if it no longer exists.
     name: str | None
+    target_labels: list[StepTargetOut] = []
 
 
 class TemplateOut(BaseModel):
@@ -394,19 +416,26 @@ class TemplateOut(BaseModel):
     key: str
     name: str
     description: str | None
-    target: str
+    # Type of the selection ("$selection") the steps without fixed targets run on; null if
+    # every step has fixed targets.
+    selection: str | None
     role: str
-    mass: bool
     steps: list[TemplateStepOut]
     # False if a step uses an operation that no longer exists; the template is then not
     # offered for running.
     valid: bool
 
 
+class TemplateRunIn(RunIn):
+    # The selection; empty for a template with fixed targets only.
+    target_ids: list[int] = Field(default=[], max_length=500)
+
+
 class ScheduleIn(BaseModel):
     operation: str
-    target_type: Literal["SYSTEM", "INSTANCE", "HOST"]
-    target_ids: list[int] = Field(min_length=1, max_length=500)
+    # "" and no targets for a template with fixed targets only.
+    target_type: Literal["SYSTEM", "INSTANCE", "HOST", ""]
+    target_ids: list[int] = Field(default=[], max_length=500)
     parameters: dict[str, str | int | bool] = {}
     recurrence: Literal["once", "daily", "interval"]
     # once: the moment (with time zone); daily: time_of_day local time and weekdays
@@ -426,3 +455,16 @@ class ScheduleOut(ScheduleIn):
     last_run_at: datetime | None
     last_activity_id: int | None
     last_error: str | None
+
+
+class BuildingBlocksOut(BaseModel):
+    # Keys of the operations used most often in the last 90 days, by all users.
+    top: list[str]
+    # Keys the user marked as favorites.
+    favorites: list[str]
+    # Every operation a step may use, as in /api/landscape (also those only for templates).
+    operations: list[dict] = []
+
+
+class FavoritesIn(BaseModel):
+    operations: list[str] = Field(default=[], max_length=100)

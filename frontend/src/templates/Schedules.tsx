@@ -1,27 +1,36 @@
 // Schedules of one operation (here: a template): once, daily at a time on weekdays, or
-// every N minutes. They run with the rights of the user who planned them.
+// every N minutes. They run with the rights of the user who planned them. A template with
+// fixed targets only is planned without targets; one on the selection with its targets.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { ApiError, api } from "../lib/api";
-import type { ScheduleRow, Snapshot } from "../lib/types";
+import type { ScheduleRow, Snapshot, TargetType } from "../lib/types";
 import { formatTime, useApp } from "../landscape/ui";
 
 const DAYS = ["1", "2", "3", "4", "5", "6", "7"];
 
 interface Props {
   operation: string;
-  target: "SYSTEM" | "HOST";
+  // Type of the selection; null: the template has fixed targets only.
+  selection: TargetType | null;
   snapshot: Snapshot;
   disabled?: boolean;
 }
 
-export function Schedules({ operation, target, snapshot, disabled }: Props) {
+export function Schedules({ operation, selection, snapshot, disabled }: Props) {
   const { t, language, timezone } = useApp();
   const queries = useQueryClient();
   const key = ["schedules", operation];
   const { data } = useQuery({ queryKey: key, queryFn: () => api<ScheduleRow[]>(`/schedules?operation=${operation}`) });
-  const targets = target === "SYSTEM" ? snapshot.systems.map((s) => ({ id: s.id, name: s.name })) : snapshot.hosts.map((h) => ({ id: h.id, name: h.name }));
+  const targets =
+    selection === "SYSTEM"
+      ? snapshot.systems.map((s) => ({ id: s.id, name: s.name }))
+      : selection === "HOST"
+        ? snapshot.hosts.map((h) => ({ id: h.id, name: h.name }))
+        : selection === "INSTANCE"
+          ? snapshot.systems.flatMap((s) => s.instances.map((i) => ({ id: i.id, name: `${i.label} (${i.host.name})` })))
+          : [];
   const names = new Map(targets.map((x) => [x.id, x.name]));
 
   const [chosen, setChosen] = useState<number[]>([]);
@@ -44,8 +53,8 @@ export function Schedules({ operation, target, snapshot, disabled }: Props) {
     setError(null);
     const body = {
       operation,
-      target_type: target,
-      target_ids: chosen,
+      target_type: selection ?? "",
+      target_ids: selection ? chosen : [],
       recurrence,
       run_at: recurrence === "once" && runAt ? new Date(runAt).toISOString() : null,
       time_of_day: recurrence === "daily" ? time : null,
@@ -81,7 +90,7 @@ export function Schedules({ operation, target, snapshot, disabled }: Props) {
         <ul className="lo-schedule-list">
           {data.map((s) => (
             <li key={s.id} className={s.enabled ? undefined : "lo-off"}>
-              <span className="lo-strong">{s.target_ids.map((id) => names.get(id) ?? `#${id}`).join(", ")}</span>
+              <span className="lo-strong">{s.target_ids.length ? s.target_ids.map((id) => names.get(id) ?? `#${id}`).join(", ") : t("tpl.fixed_targets")}</span>
               <span>{describe(s)}</span>
               <span className="lo-muted">
                 {s.next_run_at ? t("sched.next", { time: formatTime(s.next_run_at, language) }) : t("sched.none_next")}
@@ -108,8 +117,9 @@ export function Schedules({ operation, target, snapshot, disabled }: Props) {
       <form onSubmit={submit} className="lo-schedule-form">
         <h3>{t("sched.add")}</h3>
         {disabled && <p className="lo-muted">{t("sched.save_first")}</p>}
+        {selection && (
         <fieldset>
-          <legend>{t(target === "SYSTEM" ? "tab.systems" : "tab.hosts")}</legend>
+          <legend>{t(`target.${selection}`)}</legend>
           <div className="lo-target-list">
             {targets.map((x) => (
               <label key={x.id} className="lo-inline">
@@ -123,6 +133,7 @@ export function Schedules({ operation, target, snapshot, disabled }: Props) {
             ))}
           </div>
         </fieldset>
+        )}
         <div className="lo-segmented" role="radiogroup" aria-label={t("sched.recurrence")}>
           {(["once", "daily", "interval"] as const).map((r) => (
             <button key={r} type="button" role="radio" aria-checked={recurrence === r} className={recurrence === r ? "lo-on" : undefined} onClick={() => setRecurrence(r)}>
@@ -169,7 +180,7 @@ export function Schedules({ operation, target, snapshot, disabled }: Props) {
           </p>
         )}
         <div>
-          <button type="submit" className="lo-primary" disabled={disabled || !chosen.length}>
+          <button type="submit" className="lo-primary" disabled={disabled || (selection !== null && !chosen.length)}>
             {t("sched.plan")}
           </button>
         </div>

@@ -26,6 +26,7 @@ OPERATION_ROUTES = frozenset(
         "/hosts/{host_id}/operations/{key}",
         "/run/{kind}/{target_id}/{key}",
         "/activities/{activity_id}/cancel",
+        "/templates/{template_id}/run",
     }
 )
 
@@ -33,6 +34,9 @@ OPERATION_ROUTES = frozenset(
 def required_role(method: str, path: str) -> Role:
     """``path`` is the route template, e.g. "/systems/{system_id}/{operation}", without the
     "/api" prefix for API routes."""
+    if path == "/templates/{template_id}/run":
+        # Running a template needs its own role, checked by the handler.
+        return Role.OPERATOR
     if path.startswith(("/administration", "/users", "/custom-operations", "/templates")):
         return Role.ADMIN
     # Web area "Operations": custom operations and templates. "/operations" alone is the

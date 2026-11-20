@@ -24,6 +24,7 @@ from .customops import ParameterError, parameter_values
 from .models import Activity, Schedule, User
 from .operations import (
     DEFAULT_TIMEOUT_SECONDS,
+    NotAssignedError,
     OperationConflictError,
     OperationRunner,
     TargetNotFoundError,
@@ -105,17 +106,24 @@ async def save_schedule(
     """Create or change a schedule; the operation's role and parameters are checked now
     and again when it runs. The caller commits."""
     definition = catalog.get(operation)
-    if definition is None:
+    if definition is None or not definition.standalone:
         raise ScheduleError("schedule_operation", f"No operation {operation}")
-    try:
-        kind = TargetType(target_type)
-    except ValueError as exc:
-        raise ScheduleError("invalid_input", "Unknown target type") from exc
-    if kind not in definition.targets:
-        raise ScheduleError("schedule_operation", f"{operation} does not run on {target_type}")
     ids = list(dict.fromkeys(int(i) for i in target_ids))
-    if not ids:
-        raise ScheduleError("schedule_targets", "Choose at least one target")
+    fixed = definition.template is not None and not definition.template.selection
+    if fixed:
+        # A template with fixed targets only runs as it is.
+        if target_type or ids:
+            raise ScheduleError("schedule_targets", f"{operation} has fixed targets")
+        kind = None
+    else:
+        try:
+            kind = TargetType(target_type)
+        except ValueError as exc:
+            raise ScheduleError("invalid_input", "Unknown target type") from exc
+        if kind not in definition.targets:
+            raise ScheduleError("schedule_operation", f"{operation} does not run on {target_type}")
+        if not ids:
+            raise ScheduleError("schedule_targets", "Choose at least one target")
     if len(ids) > 1 and not definition.mass:
         raise ScheduleError("schedule_targets", f"{operation} allows no mass operation")
     if not has_role(user, definition.role):
@@ -142,7 +150,7 @@ async def save_schedule(
         schedule = Schedule(created_at=now, created_by=user.username)
         session.add(schedule)
     schedule.operation = operation
-    schedule.target_type = kind.value
+    schedule.target_type = kind.value if kind else ""
     schedule.target_ids = json.dumps(ids)
     schedule.parameters = json.dumps(dict(parameters))
     schedule.recurrence = recurrence
@@ -161,13 +169,19 @@ async def start_operation(
     session: AsyncSession,
     runner: OperationRunner,
     definition: OperationDef,
-    target_type: TargetType,
+    target_type: TargetType | None,
     target_ids: list[int],
     parameters: Mapping[str, str | int | bool],
     requested_by: str,
 ) -> Activity:
-    """Start an operation of the catalog on one or more targets, as the landscape does."""
+    """Start an operation of the catalog on one or more targets, as the landscape does. A
+    template runs once on all targets (its selection)."""
     values = check_values(definition, parameters)
+    if definition.template is not None:
+        return await runner.submit_template(
+            session, definition.template, target_ids, values, requested_by
+        )
+    assert target_type is not None
     if len(target_ids) > 1:
         return await runner.submit_mass(
             session,
@@ -180,14 +194,8 @@ async def start_operation(
             ),
             custom=definition.custom,
             parameters=values if definition.custom else None,
-            template=definition.template,
-            template_values=values if definition.template else None,
         )
     [target] = target_ids
-    if definition.template is not None:
-        return await runner.submit_template(
-            session, definition.template, target_type, target, values, requested_by
-        )
     if definition.custom is not None:
         return await runner.submit_custom(
             session, definition.custom, target_type, target, values, requested_by=requested_by
@@ -271,12 +279,18 @@ class Scheduler:
                 session,
                 self._runner,
                 definition,
-                TargetType(schedule.target_type),
+                TargetType(schedule.target_type) if schedule.target_type else None,
                 json.loads(schedule.target_ids),
                 json.loads(schedule.parameters or "{}"),
                 f"{schedule.created_by} (schedule {schedule.id})",
             )
-        except (ParameterError, TargetNotFoundError, OperationConflictError, ValueError) as exc:
+        except (
+            ParameterError,
+            TargetNotFoundError,
+            NotAssignedError,
+            OperationConflictError,
+            ValueError,
+        ) as exc:
             schedule.last_error = str(exc)
             return None
         schedule.last_activity_id = activity.id

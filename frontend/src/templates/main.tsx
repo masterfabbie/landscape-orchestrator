@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { readBoot } from "../lib/boot";
 import { makeTranslate } from "../lib/i18n";
 import { AppContext } from "../landscape/ui";
+import "@xyflow/react/dist/style.css";
 import "../landscape/landscape.css";
 import "../activity/activity.css";
 import "./templates.css";

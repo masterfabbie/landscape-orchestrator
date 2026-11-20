@@ -36,6 +36,8 @@ class CustomSpec:
     ordering: str  # parallel, roles, sequential
     timeout_seconds: int
     parameters: tuple[ParameterSpec, ...]
+    # Locks its target like start and stop; snapshots from before migration 0008 lack it.
+    locks: bool = True
 
     def to_dict(self) -> dict:
         data = self.__dict__ | {"parameters": [p.__dict__ for p in self.parameters]}

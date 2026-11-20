@@ -175,3 +175,45 @@ def test_lo_db_command(tmp_path, monkeypatch, capsys):
     assert f"current: {head_revision()}" in run("current")
     history = run("history")
     assert "0001" in history and "0002" in history
+
+
+async def test_template_chains_become_graphs(tmp_path):
+    """Migration 0008: existing steps keep their behavior (target type of the template, the
+    previous step as predecessor, every parameter asked for); custom operations lock and run
+    on their own as before."""
+    path = tmp_path / "chains.db"
+    engine = create_engine(url_of(path))
+    async with engine.begin() as connection:
+        await connection.run_sync(db._run, "upgrade", "0007")
+    await engine.dispose()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO custom_operations (id, key, name, agent_operation, target, "
+            "instance_types, ordering, role, mass, timeout_seconds, created_at) VALUES "
+            "(1, 'lo_test', 'Test', 'LO_TEST', 'SYSTEM', '', 'parallel', 'operator', 1, 60, "
+            "'2026-11-20')"
+        )
+        connection.execute(
+            "INSERT INTO custom_operation_parameters (operation_id, position, name, label, "
+            "type, required) VALUES (1, 1, 'RC', 'Exit code', 'INTEGER', 0)"
+        )
+        connection.execute(
+            "INSERT INTO operation_templates (id, key, name, target, role, mass, created_at) "
+            "VALUES (1, 'chain', 'Chain', 'SYSTEM', 'operator', 1, '2026-11-20')"
+        )
+        for position, operation in ((1, "lo_test"), (2, "stop")):
+            connection.execute(
+                "INSERT INTO template_steps (template_id, position, operation, parameters, "
+                "on_error) VALUES (1, ?, ?, '{}', 'stop')",
+                (position, operation),
+            )
+
+    await upgrade(path)
+    with sqlite3.connect(path) as connection:
+        steps = connection.execute(
+            "SELECT position, target_type, targets, after, ask FROM template_steps "
+            "ORDER BY position"
+        ).fetchall()
+        flags = connection.execute("SELECT locks, standalone FROM custom_operations").fetchall()
+    assert steps == [(1, "SYSTEM", "[]", "[]", '["RC"]'), (2, "SYSTEM", "[]", "[1]", "[]")]
+    assert flags == [(1, 1)]

@@ -509,7 +509,7 @@ TEXTS: dict[str, tuple[str, str]] = {
         "{total} targets, {parallel} at the same time.",
         "{total} Ziele, {parallel} gleichzeitig.",
     ),
-    "mass.part_of": ("Part of mass operation {id}", "Teil der Massenoperation {id}"),
+    "mass.part_of": ("Part of activity {id}", "Teil von Aktivität {id}"),
     "error.mass_operation": (
         "This operation cannot run as a mass operation on these targets.",
         "Diese Operation lässt sich auf diesen Zielen nicht als Massenoperation ausführen.",
@@ -645,6 +645,21 @@ TEXTS: dict[str, tuple[str, str]] = {
     ),
     "custom.empty": ("No custom operations yet.", "Noch keine eigenen Operationen."),
     "custom.add": ("Create operation", "Operation anlegen"),
+    "custom.locks": ("Locks instance or host", "Sperrt Instanz oder Host"),
+    "custom.template_only": (
+        "Not applicable for standalone execution",
+        "Nicht für Einzelausführung",
+    ),
+    "custom.flags_hint": (
+        "An operation that locks waits for other activities on its targets and keeps them "
+        "from starting, like start and stop; switch it off for scripts that only read, e.g. "
+        "logs. Not for standalone execution: only as a step of an operation template, not "
+        "in menus, the landscape or schedules.",
+        "Eine sperrende Operation wartet auf andere Aktivitäten ihrer Ziele und hält sie vom "
+        "Start ab, wie Start und Stopp; abschalten für Skripte, die nur lesen, z. B. "
+        "Protokolle. Nicht für Einzelausführung: nur als Schritt einer Operationsvorlage, "
+        "nicht in Menüs, der Landschaft oder Einplanungen.",
+    ),
     "custom.key": ("Key", "Schlüssel"),
     "custom.name_hint": ("e.g. Copy kernel", "z. B. Kernel kopieren"),
     "custom.agent_operation": ("Host agent operation", "Host-Agent-Operation"),
@@ -871,36 +886,103 @@ TEXTS: dict[str, tuple[str, str]] = {
     ),
     "tpl.steps": ("Steps", "Schritte"),
     "tpl.step": ("Step", "Schritt"),
-    "tpl.step_title": ("Step {n}: {name}", "Schritt {n}: {name}"),
-    "tpl.blocks": ("Building blocks", "Bausteine"),
-    "tpl.blocks_hint": (
-        "Drag into the chain or click to add at the end.",
-        "In die Kette ziehen oder anklicken, um sie hinten anzuhängen.",
-    ),
     "tpl.kind_builtin": ("built-in", "eingebaut"),
     "tpl.kind_custom": ("custom operation", "eigene Operation"),
-    "tpl.chain_hint_system": (
-        "Target: one system. Each step starts when the one before has succeeded.",
-        "Ziel: ein System. Jeder Schritt beginnt, wenn der vorige erfolgreich war.",
-    ),
-    "tpl.chain_hint_host": (
-        "Target: one host. Each step starts when the one before has succeeded.",
-        "Ziel: ein Host. Jeder Schritt beginnt, wenn der vorige erfolgreich war.",
-    ),
-    "tpl.drop_here": ("Drop building blocks here.", "Bausteine hier ablegen."),
-    "tpl.up": ("Move up", "Nach oben"),
-    "tpl.down": ("Move down", "Nach unten"),
     "tpl.remove": ("Remove step", "Schritt entfernen"),
+    "kind.TEMPLATE": ("Operation template", "Operationsvorlage"),
+    "target.TEMPLATE": ("Template", "Vorlage"),
+    "ui.palette_nothing": ("Nothing found.", "Nichts gefunden."),
+    "tpl.steps_tab": ("Steps ({count})", "Schritte ({count})"),
+    "tpl.on_selection": (
+        "Target when it starts: $selection ({type})",
+        "Ziel beim Start: $Auswahl ({type})",
+    ),
+    "tpl.fixed_targets": ("Fixed targets", "Feste Ziele"),
+    "tpl.selection_placeholder": ("$selection ({type})", "$Auswahl ({type})"),
+    "tpl.selection_hint": (
+        "A dialog template: it is started in the landscape on the selected targets.",
+        "Eine Dialog-Vorlage: Sie wird in der Landschaft auf der Auswahl gestartet.",
+    ),
+    "tpl.fixed_hint": (
+        "Every step has fixed targets: the template runs as it is, e.g. scheduled.",
+        "Jeder Schritt hat feste Ziele: Die Vorlage läuft, wie sie ist, z. B. eingeplant.",
+    ),
+    "tpl.selection_mixed": (
+        "Steps on the selection must all run on the same target type.",
+        "Schritte auf der Auswahl müssen alle denselben Zieltyp haben.",
+    ),
+    "tpl.graph_empty": ("No steps yet.", "Noch keine Schritte."),
+    "tpl.add_first": ("Add the first step", "Ersten Schritt hinzufügen"),
+    "tpl.add_parallel": ("+ Step without predecessor", "+ Schritt ohne Vorgänger"),
+    "tpl.graph_hint": (
+        "A step starts when all its predecessors have finished; steps side by side run in "
+        "parallel. Choose a step for + (next step), → (connect) and delete; drag from the "
+        "lower to the upper edge of a step to connect; Delete removes a selected arrow.",
+        "Ein Schritt startet, wenn alle Vorgänger fertig sind; Schritte nebeneinander laufen "
+        "parallel. Einen Schritt wählen für + (nächster Schritt), → (verbinden) und Löschen; "
+        "vom unteren zum oberen Rand eines Schritts ziehen verbindet; Entf löscht einen "
+        "gewählten Pfeil.",
+    ),
+    "tpl.add_after": ("Add a step after this one", "Schritt danach hinzufügen"),
+    "tpl.connect": ("Connect to a following step", "Mit einem folgenden Schritt verbinden"),
+    "tpl.connect_hint": (
+        "Choose the step that runs after step {n}.",
+        "Den Schritt wählen, der nach Schritt {n} läuft.",
+    ),
+    "tpl.step_number": ("Step {n}", "Schritt {n}"),
+    "tpl.current_operation": ("Operation", "Operation"),
+    "tpl.change_operation": ("Change operation …", "Operation ändern …"),
+    "tpl.target_type": ("Runs on", "Läuft auf"),
+    "tpl.locks_nothing": (
+        "This operation locks nothing; it may run beside other steps on the same targets.",
+        "Diese Operation sperrt nichts; sie darf neben anderen Schritten auf denselben Zielen "
+        "laufen.",
+    ),
+    "tpl.parameters": ("Operation parameters", "Parameter der Operation"),
+    "tpl.ask": ("Ask when it starts", "Beim Start fragen"),
+    "tpl.param_missing": (
+        "Required: give a value or ask for it when the template starts.",
+        "Pflichtfeld: einen Wert eintragen oder beim Start fragen.",
+    ),
+    "tpl.entities": ("Targets", "Ziele"),
+    "tpl.fixed": ("Fixed targets", "Feste Ziele"),
+    "tpl.selection_step_hint": (
+        "The step runs on the targets selected when the template starts.",
+        "Der Schritt läuft auf den Zielen, die beim Start ausgewählt sind.",
+    ),
+    "tpl.fixed_step_hint": (
+        "The step always runs on these targets; several run as a mass operation.",
+        "Der Schritt läuft immer auf diesen Zielen; mehrere laufen als Massenoperation.",
+    ),
+    "tpl.filter_targets": ("Filter targets", "Ziele filtern"),
+    "tpl.no_targets": ("No matching targets.", "Keine passenden Ziele."),
+    "tpl.predecessors": ("Predecessors", "Vorgänger"),
+    "tpl.no_predecessors": ("There are no other steps.", "Es gibt keine anderen Schritte."),
+    "tpl.pick_operation": ("Choose an operation", "Operation wählen"),
+    "tpl.search_operations": ("Search operations", "Operationen suchen"),
+    "tpl.favorites": ("Favorites", "Favoriten"),
+    "tpl.most_used": ("Used most (90 days)", "Meistgenutzt (90 Tage)"),
+    "tpl.all_operations": ("All operations", "Alle Operationen"),
+    "tpl.found": ("Found", "Gefunden"),
+    "tpl.favorite": ("Mark as favorite", "Als Favorit markieren"),
+    "tpl.unfavorite": ("Remove from favorites", "Aus den Favoriten entfernen"),
+    "tpl.template_only": ("only in templates", "nur in Vorlagen"),
+    "tpl.picker_keys": (
+        "↑ ↓ choose · Enter take · ☆ favorite · Esc close",
+        "↑ ↓ wählen · Enter übernehmen · ☆ Favorit · Esc schließen",
+    ),
+    "tpl.run": ("Run", "Ausführen"),
+    "tpl.run_title": ("Run {name}", "{name} ausführen"),
+    "tpl.run_hint": (
+        "The template runs on its fixed targets with the values below.",
+        "Die Vorlage läuft auf ihren festen Zielen mit den Werten unten.",
+    ),
     "tpl.choose_step": (
         "Choose a step to set its values and its behavior on error.",
         "Einen Schritt wählen, um seine Werte und das Verhalten bei Fehler festzulegen.",
     ),
     "tpl.no_parameters": ("This step has no parameters.", "Dieser Schritt hat keine Parameter."),
     "tpl.param_default": ("default ({value})", "Standard ({value})"),
-    "tpl.values_hint": (
-        "Values are defaults; they can be changed when the template runs.",
-        "Die Werte sind Vorgaben; beim Ausführen lassen sie sich ändern.",
-    ),
     "tpl.on_error": ("On error", "Bei Fehler"),
     "tpl.on_error.stop": ("stop the chain", "Kette anhalten"),
     "tpl.on_error.continue": ("go on", "weitermachen"),
@@ -911,10 +993,6 @@ TEXTS: dict[str, tuple[str, str]] = {
     "tpl.saved": ("Saved", "Gespeichert"),
     "tpl.unsaved": ("Not saved", "Nicht gespeichert"),
     "tpl.discard": ("Discard the changes?", "Die Änderungen verwerfen?"),
-    "tpl.target_change": (
-        "Changing the target removes all steps. Go on?",
-        "Ein anderes Ziel entfernt alle Schritte. Fortfahren?",
-    ),
     "tpl.delete": ("Delete template", "Vorlage löschen"),
     "tpl.delete_confirm": ("Delete this template?", "Diese Vorlage löschen?"),
     "sched.title": ("Schedules", "Einplanen"),
@@ -964,6 +1042,15 @@ TEXTS: dict[str, tuple[str, str]] = {
         "Eine Vorlage braucht mindestens einen Schritt.",
     ),
     "error.template_step": ("A step is not valid.", "Ein Schritt ist ungültig."),
+    "error.template_cycle": ("The steps wait for each other.", "Die Schritte warten aufeinander."),
+    "error.template_selection": (
+        "Steps on the selection need the same target type.",
+        "Schritte auf der Auswahl brauchen denselben Zieltyp.",
+    ),
+    "error.template_parallel": (
+        "Two locking steps would run at the same time on the same targets.",
+        "Zwei sperrende Schritte liefen gleichzeitig auf denselben Zielen.",
+    ),
     "error.template_role": (
         "The role is lower than the role the steps need.",
         "Die Rolle ist niedriger als die, die die Schritte brauchen.",

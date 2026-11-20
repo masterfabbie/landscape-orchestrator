@@ -58,13 +58,33 @@ function finish(timeline: Map<string, Lane>, activity: Activity, now: number): v
       }
 }
 
-/** Name of the step a child of a template activity ran (from the stored template). */
-function stepNames(activity: ActivityDetail, t: (key: string) => string): string[] {
+/** Name of the step each child of a template activity ran: child id -> "3. Stop". The
+ * "step" entries of the log name the child (data.activity); older activities ran their
+ * steps in order, one child each. */
+export function stepNames(activity: ActivityDetail, t: (key: string) => string): Map<number, string> {
   const template = activity.options?.template as
-    | { target?: string; steps?: { operation: string; custom?: { name: string } | null }[] }
+    | {
+        target?: string;
+        steps?: { position?: number; operation: string; target_type?: string; custom?: { name: string } | null }[];
+      }
     | undefined;
-  const suffix = template?.target === "SYSTEM" ? "_system" : "";
-  return (template?.steps ?? []).map((s, i) => `${i + 1}. ${s.custom?.name ?? t(`op.${s.operation}${suffix}`)}`);
+  const steps = (template?.steps ?? []).map((s, i) => ({ ...s, position: s.position ?? i + 1 }));
+  const name = (position: number) => {
+    const step = steps.find((s) => s.position === position);
+    if (!step) return `${position}.`;
+    const type = step.target_type ?? template?.target;
+    return `${position}. ${step.custom?.name ?? t(`op.${step.operation}${type === "SYSTEM" ? "_system" : ""}`)}`;
+  };
+  const names = new Map<number, string>();
+  const entries = activity.entries.filter((e) => e.event === "step" && e.data?.activity);
+  if (entries.length) {
+    for (const entry of entries) names.set(Number(entry.data?.activity), name(Number(entry.subject)));
+  } else {
+    activity.children.forEach((child, index) => {
+      if (index < steps.length) names.set(child.id, name(steps[index].position));
+    });
+  }
+  return names;
 }
 
 export function buildTimeline(
@@ -80,10 +100,12 @@ export function buildTimeline(
   if (activity.target_type === "MASS" || activity.kind === "TEMPLATE") {
     // Mass operation: a lane per target; template: a lane per step (an extra start after a
     // failed step gets its own lane).
-    const names = activity.kind === "TEMPLATE" ? stepNames(activity, t) : [];
-    activity.children.forEach((child, index) => {
+    const names = activity.kind === "TEMPLATE" ? stepNames(activity, t) : new Map<number, string>();
+    activity.children.forEach((child) => {
       const subject =
-        activity.kind === "TEMPLATE" ? (names[index] ?? `${index + 1}. ${child.kind}`) : child.target_label;
+        activity.kind === "TEMPLATE"
+          ? (names.get(child.id) ?? `${t(`kind.${child.kind}`)}: ${child.target_label}`)
+          : child.target_label;
       const l = lane(lanes, subject);
       l.status = child.status;
       if (!child.started_at) return;

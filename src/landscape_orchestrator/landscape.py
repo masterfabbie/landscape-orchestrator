@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from .catalog import Catalog
+from .catalog import Catalog, OperationDef
 from .clients import SoapError
 from .connections import ClientFactory
 from .crypto import SecretError
@@ -100,40 +100,45 @@ def _activity(activity: Activity | None) -> dict[str, Any] | None:
     return {"id": activity.id, "kind": activity.kind, "status": activity.status}
 
 
+def operation_row(operation: OperationDef) -> dict[str, Any]:
+    """An operation of the catalog for the interface."""
+    custom = operation.custom
+    template = operation.template
+    if template is not None:
+        parameters = [p.__dict__ for p in template.run_parameters()]
+    else:
+        parameters = [p.__dict__ for p in custom.parameters] if custom else []
+    return {
+        "key": operation.key,
+        # Translation keys per target type for built-in operations.
+        "labels": {t.value: operation.label_key(t) for t in operation.targets},
+        "name": operation.name,
+        "description": (template or custom).description if (template or custom) else None,
+        "targets": sorted(t.value for t in operation.targets),
+        "mass": operation.mass,
+        "danger": operation.danger,
+        # Custom operations and templates run through /<targets>/<id>/operations/<key>.
+        "custom": custom is not None or template is not None,
+        "template": template is not None,
+        "locks": custom.locks if custom else True,
+        "standalone": operation.standalone,
+        "role": operation.role.value,
+        # Translation keys (built-in) or names (custom operations) of the steps.
+        "steps": [step.label_key() for step in template.steps] if template else [],
+        # Empty: every instance type (see customspec.spec_applies).
+        "instance_types": list(custom.instance_types) if custom else [],
+        "parameters": parameters,
+    }
+
+
 def _operations(catalog: Catalog, user: User) -> list[dict[str, Any]]:
-    result = []
-    for operation in catalog.all():
-        if not has_role(user, operation.role):
-            continue
-        custom = operation.custom
-        template = operation.template
-        if template is not None:
-            parameters = [p.__dict__ for p in template.run_parameters()]
-        else:
-            parameters = [p.__dict__ for p in custom.parameters] if custom else []
-        result.append(
-            {
-                "key": operation.key,
-                # Translation keys per target type for built-in operations.
-                "labels": {t.value: operation.label_key(t) for t in operation.targets},
-                "name": operation.name,
-                "description": (template or custom).description if (template or custom) else None,
-                "targets": sorted(t.value for t in operation.targets),
-                "mass": operation.mass,
-                "danger": operation.danger,
-                # Custom operations and templates run through /<targets>/<id>/operations/<key>.
-                "custom": custom is not None or template is not None,
-                "template": template is not None,
-                # Translation keys (built-in) or names (custom operations) of the steps.
-                "steps": [step.label_key(template.target) for step in template.steps]
-                if template
-                else [],
-                # Empty: every instance type (see customspec.spec_applies).
-                "instance_types": list(custom.instance_types) if custom else [],
-                "parameters": parameters,
-            }
-        )
-    return result
+    # Operations only for template steps, and templates with fixed targets only, are not
+    # run from the landscape.
+    return [
+        operation_row(operation)
+        for operation in catalog.all()
+        if has_role(user, operation.role) and operation.standalone and operation.targets
+    ]
 
 
 async def landscape_snapshot(session: AsyncSession, catalog: Catalog, user: User) -> dict[str, Any]:

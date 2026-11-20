@@ -137,6 +137,8 @@ async def save_operation(
     role: str,
     mass: bool,
     timeout_seconds: int,
+    locks: bool = True,
+    standalone: bool = True,
 ) -> CustomOperation:
     """Create (``operation`` None) or change a custom operation. The caller commits."""
     key, agent_operation = key.strip(), agent_operation.strip()
@@ -161,6 +163,8 @@ async def save_operation(
     operation.ordering = ordering
     operation.role = role
     operation.mass = mass
+    operation.locks = locks
+    operation.standalone = standalone
     operation.timeout_seconds = timeout_seconds
     await session.flush()
     return operation

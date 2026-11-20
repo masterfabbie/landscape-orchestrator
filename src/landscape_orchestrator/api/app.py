@@ -10,6 +10,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
@@ -23,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import __version__
-from ..catalog import Catalog
+from ..catalog import Catalog, OperationDef
 from ..connections import ClientFactory
 from ..crypto import SecretBox
 from ..customops import (
@@ -38,7 +39,7 @@ from ..dependencies import DependencyError, set_dependencies
 from ..discovery import DiscoveryError, discover_host
 from ..events import change_events
 from ..hosts import Connection, HostChangeError, update_connection
-from ..landscape import landscape_snapshot, read_processes
+from ..landscape import landscape_snapshot, operation_row, read_processes
 from ..models import (
     Activity,
     ApiToken,
@@ -87,9 +88,11 @@ from ..users import (
     UserError,
     create_token,
     create_user,
+    get_setting,
     has_role,
     session_user,
     set_password,
+    set_setting,
     token_user,
     update_user,
     user_count,
@@ -99,11 +102,13 @@ from ..web.i18n import LANGUAGE_COOKIE, all_texts, pick_language
 from .schemas import (
     ActivityDetail,
     ActivityOut,
+    BuildingBlocksOut,
     Credentials,
     CustomOperationIn,
     CustomOperationOut,
     DependenciesIn,
     DiscoveryOut,
+    FavoritesIn,
     HostCreate,
     HostDetail,
     HostOut,
@@ -129,12 +134,16 @@ from .schemas import (
     TagsIn,
     TemplateIn,
     TemplateOut,
+    TemplateRunIn,
     TokenCreate,
     TokenOut,
     UserCreate,
     UserOut,
     UserUpdate,
 )
+
+# User setting with the favorite operations of the template editor, comma separated.
+FAVORITES = "favorites.operations"
 
 # Status codes of SystemChangeError.code; everything else is 422.
 _CHANGE_STATUS = {"unknown_system": 404, "name_taken": 409, "assigned": 409, "busy": 409}
@@ -668,30 +677,53 @@ def create_app(
 
     # --- operation templates --------------------------------------------------------------
 
-    def template_out(template: OperationTemplate) -> dict[str, object]:
+    async def template_out(session: AsyncSession, template: OperationTemplate) -> dict:
         known = {op.key: op for op in catalog.steps()}
-        return {
-            "id": template.id,
-            "key": template.key,
-            "name": template.name,
-            "description": template.description,
-            "target": template.target,
-            "role": template.role,
-            "mass": template.mass,
-            "valid": catalog.get(template.key) is not None,
-            "steps": [
+        steps = []
+        for step in template.steps:
+            target_type = step.target_type
+            ids = json.loads(step.targets or "[]")
+            labels = await target_labels(session, target_type, ids) if ids else {}
+            steps.append(
                 {
                     "position": step.position,
                     "operation": step.operation,
                     "name": (known[step.operation].name or step.operation)
                     if step.operation in known
                     else None,
+                    "target_type": target_type,
+                    "targets": ids,
+                    "target_labels": [{"id": i, "label": labels.get(i)} for i in ids],
+                    "after": json.loads(step.after or "[]"),
                     "parameters": json.loads(step.parameters or "{}"),
+                    "ask": json.loads(step.ask or "[]"),
                     "on_error": step.on_error,
                 }
-                for step in template.steps
-            ],
+            )
+        return {
+            "id": template.id,
+            "key": template.key,
+            "name": template.name,
+            "description": template.description,
+            "selection": template.target or None,
+            "role": template.role,
+            "valid": catalog.get(template.key) is not None,
+            "steps": steps,
         }
+
+    async def target_labels(session: AsyncSession, target_type: str, ids: list[int]) -> dict:
+        if target_type == "SYSTEM":
+            rows = await session.execute(select(System.id, System.name).where(System.id.in_(ids)))
+            return dict(rows.all())
+        if target_type == "HOST":
+            rows = await session.execute(select(Host.id, Host.name).where(Host.id.in_(ids)))
+            return dict(rows.all())
+        instances = await session.scalars(
+            select(Instance)
+            .where(Instance.id.in_(ids))
+            .options(selectinload(Instance.sid), selectinload(Instance.host))
+        )
+        return {i.id: f"{i.label} ({i.host.name})" for i in instances}
 
     async def load_template(session: AsyncSession, template_id: int) -> OperationTemplate:
         template = await session.get(OperationTemplate, template_id)
@@ -710,9 +742,7 @@ def create_app(
                 key=body.key,
                 name=body.name,
                 description=body.description,
-                target=body.target,
                 role=body.role,
-                mass=body.mass,
                 steps=[step.model_dump() for step in body.steps],
             )
         except TemplateError as exc:
@@ -721,12 +751,12 @@ def create_app(
             raise HTTPException(code, {"code": exc.code, "message": str(exc)}) from exc
         await session.commit()
         await catalog.reload(session)
-        return template_out(template)
+        return await template_out(session, template)
 
     @api.get("/templates", response_model=list[TemplateOut])
     async def list_templates(session: Session) -> list[dict[str, object]]:
         rows = await session.scalars(select(OperationTemplate).order_by(OperationTemplate.name))
-        return [template_out(t) for t in rows]
+        return [await template_out(session, t) for t in rows]
 
     @api.post("/templates", response_model=TemplateOut, status_code=status.HTTP_201_CREATED)
     async def create_template(body: TemplateIn, session: Session) -> dict[str, object]:
@@ -735,7 +765,7 @@ def create_app(
 
     @api.get("/templates/{template_id}", response_model=TemplateOut)
     async def get_template(template_id: int, session: Session) -> dict[str, object]:
-        return template_out(await load_template(session, template_id))
+        return await template_out(session, await load_template(session, template_id))
 
     @api.put("/templates/{template_id}", response_model=TemplateOut)
     async def update_template(
@@ -755,6 +785,85 @@ def create_app(
         await session.commit()
         await catalog.reload(session)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @api.post(
+        "/templates/{template_id}/run",
+        response_model=ActivityOut,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def run_template(
+        template_id: int, body: TemplateRunIn, session: Session, user: CurrentUser
+    ) -> Activity:
+        """Start a template: one with fixed targets as it is, a dialog template on
+        ``target_ids`` (its selection)."""
+        template = await load_template(session, template_id)
+        definition = catalog.get(template.key)
+        if definition is None or definition.template is None:
+            raise HTTPException(422, "A step uses an operation that no longer exists")
+        if not has_role(user, definition.role):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires the role {definition.role}")
+        return await start_template(session, user, definition, body.target_ids, body.parameters)
+
+    async def start_template(
+        session: AsyncSession,
+        user: User,
+        definition: OperationDef,
+        target_ids: list[int],
+        parameters: dict[str, str | int | bool],
+    ) -> Activity:
+        assert definition.template is not None
+        try:
+            values = template_values(definition.template, parameters)
+        except ParameterError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        try:
+            return await submit(
+                runner.submit_template(
+                    session, definition.template, target_ids, values, user.username
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @api.get("/templates-blocks", response_model=BuildingBlocksOut)
+    async def building_blocks(session: Session, user: CurrentUser) -> dict[str, list]:
+        """For the template editor: every operation a step may use, the 5 used most in the
+        last 90 days (by all users) and the user's favorites."""
+        since = datetime.now(UTC) - timedelta(days=90)
+        rows = await session.execute(
+            select(Activity.kind, Activity.options)
+            .where(Activity.requested_at >= since, Activity.target_type != TargetType.MASS)
+            .order_by(Activity.id.desc())
+            .limit(20000)
+        )
+        by_id = {op.custom.id: op.key for op in catalog.steps() if op.custom}
+        counts: dict[str, int] = {}
+        for kind, options in rows:
+            if kind == OperationKind.TEMPLATE:
+                continue
+            key = kind.lower()
+            if kind == OperationKind.CUSTOM:
+                custom = json.loads(options or "{}").get("custom") or {}
+                key = by_id.get(custom.get("id"))
+            if key and catalog.get(key) is not None:
+                counts[key] = counts.get(key, 0) + 1
+        top = sorted(counts, key=lambda k: (-counts[k], k))[:5]
+        favorites = (await get_setting(session, user, FAVORITES) or "").split(",")
+        return {
+            "top": top,
+            "favorites": [f for f in favorites if f],
+            "operations": [operation_row(op) for op in catalog.steps()],
+        }
+
+    @api.put("/me/favorites", response_model=BuildingBlocksOut)
+    async def save_favorites(
+        body: FavoritesIn, session: Session, user: CurrentUser
+    ) -> dict[str, list]:
+        """Operations the user marked as favorites in the template editor."""
+        known = [k for k in dict.fromkeys(body.operations) if catalog.get(k) is not None]
+        await set_setting(session, user, FAVORITES, ",".join(known))
+        await session.commit()
+        return await building_blocks(session, user)
 
     # --- schedules ------------------------------------------------------------------------
 
@@ -893,6 +1002,8 @@ def create_app(
                 "role": operation.role.value,
                 "mass": operation.mass,
                 "custom": operation.custom is not None,
+                "locks": operation.custom.locks if operation.custom else True,
+                "standalone": operation.standalone,
                 "parameters": [p.__dict__ for p in operation.custom.parameters]
                 if operation.custom
                 else [],
@@ -915,6 +1026,8 @@ def create_app(
             "ordering": operation.ordering,
             "role": operation.role,
             "mass": operation.mass,
+            "locks": operation.locks,
+            "standalone": operation.standalone,
             "timeout_seconds": operation.timeout_seconds,
             "parameters": [
                 {
@@ -947,6 +1060,8 @@ def create_app(
                 role=body.role,
                 mass=body.mass,
                 timeout_seconds=body.timeout_seconds,
+                locks=body.locks,
+                standalone=body.standalone,
             )
             # The parameters are replaced as a whole, in the given order.
             operation.parameters.clear()
@@ -1020,21 +1135,14 @@ def create_app(
         if (
             definition is None
             or (definition.custom is None and definition.template is None)
+            or not definition.standalone
             or target_type not in definition.targets
         ):
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"No custom operation {key} here")
         if not has_role(user, definition.role):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires the role {definition.role}")
         if definition.template is not None:
-            try:
-                values = template_values(definition.template, body.parameters)
-            except ParameterError as exc:
-                raise HTTPException(422, str(exc)) from exc
-            return await submit(
-                runner.submit_template(
-                    session, definition.template, target_type, target_id, values, user.username
-                )
-            )
+            return await start_template(session, user, definition, [target_id], body.parameters)
         if target_type == TargetType.INSTANCE:
             instance = await session.scalar(select(Instance).where(Instance.id == target_id))
             if instance is not None and not definition.applies_to(instance):
@@ -1129,17 +1237,24 @@ def create_app(
         """Run an operation on many targets; returns the parent activity with the children."""
         definition = catalog.get(body.operation)
         target_type = TargetType(body.target_type)
-        if definition is None or target_type not in definition.targets or not definition.mass:
+        if (
+            definition is None
+            or target_type not in definition.targets
+            or not definition.mass
+            or not definition.standalone
+        ):
             raise HTTPException(422, f"No mass operation {body.operation} on {target_type}")
         if not has_role(user, definition.role):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires the role {definition.role}")
+        if definition.template is not None:
+            # A template runs once with all selected targets as its selection.
+            return await start_template(
+                session, user, definition, body.target_ids, body.parameters
+            )
         values = None
-        steps = None
         try:
             if definition.custom is not None:
                 values = parameter_values(definition.custom, body.parameters)
-            if definition.template is not None:
-                steps = template_values(definition.template, body.parameters)
         except ParameterError as exc:
             raise HTTPException(422, str(exc)) from exc
         default_timeout = (
@@ -1157,8 +1272,6 @@ def create_app(
                 requested_by=user.username,
                 custom=definition.custom,
                 parameters=values,
-                template=definition.template,
-                template_values=steps,
             )
         except TargetNotFoundError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc

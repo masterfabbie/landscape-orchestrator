@@ -217,7 +217,8 @@ Wichtige Entwurfsentscheidungen:
   - Übersicht als Statusmatrix Produkte × Stufen mit „Braucht Aufmerksamkeit“; was dort
     erscheint, muss konfigurierbar sein (z. B. stündlich geplante Operationen ausblenden).
   - Operationsvorlagen als Kette von Bausteinen mit Parametern je Schritt, Verhalten bei
-    Fehler und Einplanen: genau so umsetzen.
+    Fehler und Einplanen: genau so umsetzen. Später (2026-11-20) ersetzt durch einen Graphen
+    wie in LaMa, siehe „Operationsvorlagen“ unten.
 - **Landscape als React-Seite** (Phase 1 des Umstiegs, ersetzt die alte Seite direkt;
   Wunsch des Eigentümers): `/landscape` liefert nur eine Hülle (`app_page.html` mit
   `base.html`, Startdaten als `<script type="application/json" id="lo-boot">`: Sprache, alle
@@ -242,19 +243,41 @@ Wichtige Entwurfsentscheidungen:
   data=)` im Runner. Neue Wartezustände, die im Zeitplan erscheinen sollen, brauchen dort ein
   Ereignis. Abbrechen über `POST /api/activities/<id>/cancel`; die alte Web-Route dafür gibt
   es nicht mehr.
-- **Operationsvorlagen** (Phase 3, Wunsch des Eigentümers nach Entwurf 5): Tabellen
-  `operation_templates`, `template_steps` (Migration 0007), nur Admins legen sie an. Schlüssel
-  teilen sich den Raum mit eigenen Operationen. Ziel SYSTEM oder HOST; jeder Schritt ist eine
-  eingebaute oder eigene Operation für dieses Ziel, mit Vorgabewerten und `on_error` (`stop`,
-  `continue`, `stop_and_start`). Rolle der Vorlage ≥ höchste Rolle der Schritte. Im Katalog
-  als `OperationDef(kind=TEMPLATE, template=TemplateSpec)`; Parameter eines Laufs heißen
-  `<Position>.<Name>`. Der Runner führt Schritte als Kind-Aktivitäten nacheinander aus
-  (`_execute_template`, `_wait_for_child`); die Vorlage sperrt System/Host, `_submit` lässt
-  Kinder durch, deren Vorfahr die Sperre hält (`_ancestors`). Teilweise gescheitert → PARTIAL
-  (`PartlyFailedError`). Abbruch der Vorlage bricht den laufenden Schritt ab. Jinja-Menüs
-  zeigen Vorlagen nicht (nur die React-Landscape). Annahme: kein Probelauf.
+- **Operationsvorlagen** (Phase 3, Wunsch des Eigentümers; seit Migration 0008 als Graph nach
+  dem Vorbild LaMa): Tabellen `operation_templates`, `template_steps`, nur Admins legen sie an.
+  Schlüssel teilen sich den Raum mit eigenen Operationen. Jeder Schritt hat `position`
+  (Nummer), eine eingebaute oder eigene Operation, `target_type`, `targets` (feste Ids, leer:
+  „$Auswahl“ des Laufs), `after` (Vorgänger), `parameters` (feste Werte), `ask` (beim Start
+  gefragt) und `on_error` (`stop`: kein neuer Schritt, laufende enden; `continue`;
+  `stop_and_start`: danach die Systeme des Schritts starten). `operation_templates.target`
+  ist der Zieltyp der Auswahl ("" ohne Auswahl; aus den Schritten abgeleitet, alle Schritte auf
+  der Auswahl brauchen denselben Typ); `mass` ist seit 0008 unbenutzt. `save_template` prüft
+  Kreise, Ziele und parallele sperrende Schritte auf denselben Zielen (`lock_scope`,
+  `templatespec.parallel_pairs`). Rolle der Vorlage ≥ höchste Rolle der Schritte. Im Katalog
+  als `OperationDef(kind=TEMPLATE)` mit `targets` = {Auswahltyp} (Dialog-Vorlage) oder leer
+  (feste Ziele: nicht in der Landschaft, Start über `POST /api/templates/{id}/run` oder
+  Einplanen). Mehrere ausgewählte Ziele sind ein Lauf (`submit_template(spec, selection, …)`,
+  auch aus `/api/mass-operations`). Der Runner (`_execute_template`) startet jeden Schritt,
+  sobald seine Vorgänger fertig sind, als Kind-Aktivität (mehrere Ziele: eine
+  Massenoperation mit `parent_id`); zwei sperrende Schritte mit überschneidenden Zielen warten
+  aufeinander. Die Vorlage sperrt beim Start alle Systeme und Hosts ihrer sperrenden Schritte
+  (`activity_systems`, neu `activity_hosts`); `_submit` lässt Kinder durch, deren Vorfahr die
+  Sperre hält (`_ancestors`). Das Ereignis `step` im Protokoll nennt das Kind
+  (`data.activity`) für den Zeitplan. Teilweise gescheitert → PARTIAL. Parameter eines Laufs
+  heißen `<Position>.<Name>`, nur die aus `ask`. Alte Schnappschüsse (ohne `target_type`)
+  liest `StepSpec.from_dict` als Kette auf der Auswahl. Editor: React Flow
+  (`@xyflow/react` 12, mitgeliefert), Anordnung in `frontend/src/templates/graph.ts`,
+  Operationsauswahl mit Favoriten (`user_settings` `favorites.operations`) und den 5
+  meistgenutzten der letzten 90 Tage (`/api/templates-blocks`). Jinja-Menüs zeigen Vorlagen
+  nicht. Annahme: kein Probelauf.
+- **Merkmale eigener Operationen** (Wunsch des Eigentümers, wie in LaMa): `locks` („Sperrt
+  Instanz oder Host“, Standard an; aus: läuft neben anderen Aktivitäten und blockiert keine,
+  Spalte `activities.locks`, die Konfliktprüfung in `_submit` beachtet nur sperrende) und
+  `standalone` (aus: „Nicht für Einzelausführung“, nur als Schritt einer Vorlage; nicht in
+  Menüs, Landschaft, Massenoperationen, Einplanungen, `Catalog.for_target` filtert).
 - **Einplanen** (Tabelle `schedules`): beliebige Katalog-Operation, Ziele (mehrere →
-  Massenoperation), Werte, `once`/`daily` (Ortszeit in `LO_TIMEZONE`, Standard
+  Massenoperation; Vorlage: ein Lauf mit allen Zielen als Auswahl; Vorlage mit festen Zielen:
+  `target_type` "" ohne Ziele), Werte, `once`/`daily` (Ortszeit in `LO_TIMEZONE`, Standard
   `Europe/Berlin` als Annahme)/`interval` (≥ 5 Minuten). Läuft mit den Rechten von
   `created_by`, beim Start erneut geprüft; Fehler in `last_error`. Der `Scheduler` prüft alle
   30 Sekunden (`lo-server` startet ihn, `create_app(run_scheduler=True)`); Tests rufen
@@ -365,7 +388,8 @@ Wichtige Entwurfsentscheidungen:
   `frontend/src`): Filter mit denselben Fällen wie früher auf dem Server, Auswahllogik,
   Aktionsleiste, Zeitplan (`timeline.test.ts`). Ende-zu-Ende-Tests im Browser gibt es noch
   nicht.
-- Vorlagen und Einplanungen testet `tests/test_templates.py` (Fixtures von `test_mass.py`).
+- Vorlagen und Einplanungen testet `tests/test_templates.py` (Fixtures von `test_mass.py`),
+  die Graph-Logik des Editors `frontend/src/templates/graph.test.ts`.
 - Eigene Operationen testet `tests/test_custom.py` mit den Fixtures von `test_mass.py` und der
   simulierten Operation `LO_TEST` (`PARAM-SLEEP` Laufzeit, `PARAM-RC` Exit-Code).
 - Neue Funktionen brauchen Tests, auch für Fehlerfälle. Verhalten, das der Mock simulieren
