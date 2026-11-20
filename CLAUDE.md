@@ -170,9 +170,17 @@ Wichtige Entwurfsentscheidungen:
   React, wo es echten Nutzen bringt: Mehrfachauswahl mit Aktionsleiste, Live-Ansichten,
   Drag-and-drop. Die bisherige Oberfläche funktioniert noch ohne JavaScript; `static/ui.js`
   ergänzt dort nur: offene Systeme im Baum merken (sessionStorage), „Alle auf-/zuklappen“,
-  Menüs schließen. Eine neue Oberfläche baut auf der REST-API auf. **Offen:** ob Bibliotheken
-  mitgeliefert (gebaut und vom Server ausgeliefert) oder von einem CDN geladen werden; bis zur
-  Entscheidung lädt die Oberfläche nichts von außen. Größere Umbauten erst vorschlagen.
+  Menüs schließen. Eine neue Oberfläche baut auf der REST-API auf. Größere Umbauten erst
+  vorschlagen.
+- **Bibliotheken und Schriften werden mitgeliefert** (Entscheidung des Eigentümers,
+  2026-11-20): gebaut und vom LO-Server ausgeliefert, nie von einem CDN oder aus dem
+  Internet geladen. Gründe: LO muss in abgeschotteten Admin-Netzen und im Störfall laufen; ein
+  Werkzeug, das Produktivsysteme steuert und Skripte als root startet, lädt keinen fremden
+  Code zur Laufzeit (strikte Content-Security-Policy nur mit `'self'` möglich); keine
+  Aufrufe an Dritte (Datenschutz); getestete, feste Versionen. Dafür nötig: Build-Schritt
+  (geplant: React mit Vite in `frontend/`, gebaut nach `web/static/app/`), die CI baut und
+  testet beides, Versionen fest im Lockfile, Updates und Sicherheitspatches der Bibliotheken
+  pflegen (z. B. Dependabot, `npm audit`), Lizenztexte mitliefern.
 - **Gestaltungsrichtung** (Rückmeldung des Eigentümers zu fünf Entwürfen, 2026-11-20):
   - Landscape als dichte Tabelle mit Mehrfachauswahl von Systemen und Instanzen und einer
     Leiste unten mit den möglichen Operationen (Massenoperationen); Befehlspalette (Strg K).
