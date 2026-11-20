@@ -315,8 +315,10 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
   Meldungen `LogMsg/TimeStamp` (leer), `LogMsg/Severity` (`Info`, `Warning`, `Error`),
   `LogMsg/Source` (Beschreibung der Operation bzw. `saphostcontrol`) und `LogMsg/Text`;
   `hostagent.log_messages` fasst sie zu Zeilen zusammen. `saphostctrl` zeigt dieselben
-  Zeilen als „Severity: Source: Text“. Eine eigene Operation lief aus dem Tool heraus bis
-  zur Erfolgsmeldung; danach scheiterte nur das Lesen der Antwort am Elementnamen.
+  Zeilen als „Severity: Source: Text“. Nach der Korrektur läuft eine eigene Host-Operation
+  aus dem Tool heraus erfolgreich durch; die Ausgabe des Skripts steht vollständig und in
+  der richtigen Reihenfolge im Protokoll. Noch offen aus dem Tool: Fehler mit Exit-Code,
+  Abbruch, Operationen auf Instanzen und Systemen.
 - Noch nicht gegen echte Systeme getestet: HTTPS.
 
 ## Offene Annahmen, die ein Test mit einer echten Instanz klären muss

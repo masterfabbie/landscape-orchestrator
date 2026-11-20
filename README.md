@@ -85,6 +85,9 @@ Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenban
     `Warning`, `Error`), `LogMsg/Source` (Beschreibung der Operation oder `saphostcontrol`)
     und `LogMsg/Text`. Das Tool fasst sie zu einer Zeile zusammen und zeigt den Text im
     Protokoll der Aktivität. Zeilen des Skripts mit `[WARNING]:` werden zu `Warning`.
+  - Aus dem Tool bestätigt: Eine eigene Host-Operation läuft durch, die Ausgabe des Skripts
+    steht vollständig im Protokoll. Noch nicht aus dem Tool geprüft: Fehler mit Exit-Code,
+    Abbruch, Operationen auf Instanzen und Systemen.
   - `CancelOperation` beendet das Skript (Exit-Code 15) und antwortet mit Fault-Code 127 und
     den Zeilen bis dahin. Danach kennt der Host Agent die Operation nicht mehr
     (`GetOperationResults`: Fault-Code -20 „Operation ID not found“).
