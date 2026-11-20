@@ -401,6 +401,12 @@ class ActivityLogEntry(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     level: Mapped[str] = mapped_column(String(8))
     message: Mapped[str] = mapped_column(Text)
+    # Structured part for the timeline of the activity page (all optional): ``event`` is
+    # request_start, request_stop, status or op_started; ``subject`` the instance (label)
+    # or host the line is about; ``data`` JSON, for status the status per instance label.
+    event: Mapped[str | None] = mapped_column(String(16))
+    subject: Mapped[str | None] = mapped_column(String(255))
+    data: Mapped[str | None] = mapped_column(Text)
 
     activity: Mapped[Activity] = relationship(back_populates="entries")
 

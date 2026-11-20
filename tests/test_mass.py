@@ -236,11 +236,12 @@ async def test_mass_operation_in_the_browser(app, api):
         assert response.status_code == 202, response.text
         parent_id = response.json()["id"]
         await app.state.runner.wait(parent_id)
-        detail = (await browser.get(f"/activities/{parent_id}")).text
-        assert "Mass operation" in detail and "3 targets, 5 at the same time." in detail
-        assert detail.count('href="/activities/') >= 3
-        child = (await browser.get(f"/activities/{parent_id + 1}")).text
-        assert f"Part of mass operation {parent_id}" in child
+        detail = (await browser.get(f"/api/activities/{parent_id}")).json()
+        assert detail["target_type"] == "MASS" and detail["options"]["parallel"] == 5
+        assert len(detail["children"]) == 3
+        assert {c["parent_id"] for c in detail["children"]} == {parent_id}
+        page = (await browser.get(f"/activities/{parent_id + 1}")).text
+        assert 'src="/static/app/activity.js?v=' in page
         # The old page for mass operations is gone; the landscape does it now.
         assert (await browser.get("/mass")).status_code == 404
 

@@ -49,6 +49,7 @@ from ..models import (
     System,
     SystemTag,
     User,
+    activity_systems,
 )
 from ..operations import (
     DEFAULT_TIMEOUT_SECONDS,
@@ -147,6 +148,18 @@ CONTENT_SECURITY_POLICY = (
     "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; "
     "form-action 'self'; frame-ancestors 'none'"
 )
+
+
+def _touches_system(system_id: int, *, whole_system: bool = False):
+    """Activities whose locked systems include the system (dependencies included).
+    ``whole_system``: only operations on whole systems, not on single other instances."""
+    locked = Activity.id.in_(
+        select(activity_systems.c.activity_id).where(activity_systems.c.system_id == system_id)
+    )
+    condition = (Activity.system_id == system_id) | locked
+    if whole_system:
+        return condition & Activity.instance_id.is_(None)
+    return condition
 
 
 def create_app(
@@ -597,9 +610,28 @@ def create_app(
 
     @api.get("/activities", response_model=list[ActivityOut])
     async def list_activities(
-        session: Session, limit: Annotated[int, Query(ge=1, le=500)] = 50
+        session: Session,
+        limit: Annotated[int, Query(ge=1, le=500)] = 50,
+        system_id: int | None = None,
+        instance_id: int | None = None,
+        host_id: int | None = None,
     ) -> list[Activity]:
+        """Newest first. ``system_id``: activities that touched the system, also through
+        dependencies or as part of a mass operation; ``instance_id``: those of the instance
+        and of its system; ``host_id``: host operations of the host."""
         query = select(Activity).order_by(Activity.id.desc()).limit(limit)
+        if instance_id is not None:
+            instance = await session.get(Instance, instance_id)
+            if instance is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Instance not found")
+            touched = Activity.instance_id == instance_id
+            if instance.system_id is not None:
+                touched = touched | _touches_system(instance.system_id, whole_system=True)
+            query = query.where(touched)
+        if system_id is not None:
+            query = query.where(_touches_system(system_id))
+        if host_id is not None:
+            query = query.where(Activity.host_id == host_id)
         return list(await session.scalars(query))
 
     @api.get("/activities/{activity_id}", response_model=ActivityDetail)

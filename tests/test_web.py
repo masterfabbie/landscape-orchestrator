@@ -259,6 +259,13 @@ async def landscape_data(browser) -> dict:
     return response.json()
 
 
+async def activity_data(browser, activity_id: int) -> dict:
+    """What the activity page shows; it loads this from the API."""
+    response = await browser.get(f"/api/activities/{activity_id}")
+    assert response.status_code == 200
+    return response.json()
+
+
 def system_names(data: dict) -> list[str]:
     return [system["name"] for system in data["systems"]]
 
@@ -266,14 +273,14 @@ def system_names(data: dict) -> list[str]:
 async def test_landscape_page_loads_the_interface(browser):
     page = await browser.get("/landscape?tab=hosts")
     assert page.status_code == 200
-    assert '<div id="lo-landscape">' in page.text
+    assert '<div id="lo-app">' in page.text
     assert 'src="/static/app/landscape.js?v=' in page.text
-    assert 'href="/static/app/landscape.css?v=' in page.text
+    assert 'href="/static/app/app.css?v=' in page.text
     # Start data for the app: texts and user, as JSON that is read, not run.
     assert '<script type="application/json" id="lo-boot">' in page.text
     assert '"nav.landscape": "Landscape"' in page.text and '"role": "admin"' in page.text
     script = await browser.get("/static/app/landscape.js")
-    assert script.status_code == 200 and "lo-landscape" in script.text
+    assert script.status_code == 200 and "lo-app" in script.text
 
 
 # --- overview ----------------------------------------------------------------------------
@@ -606,15 +613,17 @@ async def test_start_instance_from_the_browser(browser, app):
     response = await browser.post("/instances/1/start")
     assert response.headers["location"] == "/activities/1"
 
-    running = await browser.get("/activities/1")
-    assert '<meta http-equiv="refresh" content="2">' in running.text
+    page = (await browser.get("/activities/1")).text
+    # The page follows the activity itself (React, /api/activities/1).
+    assert 'src="/static/app/activity.js?v=' in page and '"activity_id": 1' in page
 
     await app.state.runner.wait(1)
-    finished = (await browser.get("/activities/1")).text
-    assert "http-equiv" not in finished
-    assert "succeeded" in finished
-    assert "Instance status: GREEN" in finished
-    assert "Finished successfully" in finished
+    finished = await activity_data(browser, 1)
+    assert finished["status"] == "SUCCEEDED"
+    messages = [e["message"] for e in finished["entries"]]
+    assert "Instance status: GREEN" in messages and "Finished successfully" in messages
+    status = next(e for e in finished["entries"] if e["message"] == "Instance status: GREEN")
+    assert status["event"] == "status" and status["data"] == {"DEV/01": "GREEN"}
 
     listing = (await browser.get("/activities")).text
     assert 'href="/activities/1"' in listing and "DEV/01" in listing
@@ -660,8 +669,8 @@ async def test_system_operation_with_dependency_and_conflict(browser, app):
     assert [s["activity"] for s in data["systems"]] == [None, None]
     assert [s["status"] for s in data["systems"]] == ["GREEN", "GREEN"]
     assert "badge-running" in (await browser.get("/hosts/2")).text  # databases follow
-    activity = (await browser.get("/activities/1")).text
-    assert "Start order including dependencies: HDV, DEV" in activity
+    messages = [e["message"] for e in (await activity_data(browser, 1))["entries"]]
+    assert "Start order including dependencies: HDV, DEV" in messages
 
 
 async def test_failed_activity_shows_error_in_german(browser, app):
@@ -673,9 +682,11 @@ async def test_failed_activity_shows_error_in_german(browser, app):
     await browser.post("/instances/1/start")
     await app.state.runner.wait(1)
     page = (await browser.get("/activities/1")).text
-    assert "fehlgeschlagen" in page
-    assert "Invalid Credentials" in page
+    # German texts for the page come with it; the error itself stays English.
+    assert '"activity.FAILED": "fehlgeschlagen"' in page
     assert "Protokollmeldungen werden auf Englisch aufgezeichnet." in page
+    activity = await activity_data(browser, 1)
+    assert activity["status"] == "FAILED" and "Invalid Credentials" in activity["error"]
 
 
 async def test_administration_shows_settings(browser):

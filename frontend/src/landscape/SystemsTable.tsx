@@ -12,7 +12,9 @@ interface Props {
   selection: Selection;
   onSelect: (kind: TargetType, ids: number[], add: boolean) => void;
   onOpen: (id: number) => void;
+  onOpenInstance: (id: number) => void;
   openId: number | null;
+  openInstanceId: number | null;
 }
 
 const OPEN_KEY = "lo.landscape.open";
@@ -25,7 +27,16 @@ function loadOpen(): Set<number> {
   }
 }
 
-export function SystemsTable({ rows, expandAll, selection, onSelect, onOpen, openId }: Props) {
+export function SystemsTable({
+  rows,
+  expandAll,
+  selection,
+  onSelect,
+  onOpen,
+  onOpenInstance,
+  openId,
+  openInstanceId,
+}: Props) {
   const { t } = useApp();
   const [open, setOpen] = useState<Set<number>>(loadOpen);
   useEffect(() => {
@@ -142,7 +153,10 @@ export function SystemsTable({ rows, expandAll, selection, onSelect, onOpen, ope
                 instances.map((instance) => {
                   const checked = selection.kind === "INSTANCE" && selected.has(instance.id);
                   return (
-                    <tr key={instance.id} className={`lo-instance${checked ? " lo-selected" : ""}${instance.agent ? " lo-agent" : ""}`}>
+                    <tr
+                      key={instance.id}
+                      className={`lo-instance${checked ? " lo-selected" : ""}${instance.agent ? " lo-agent" : ""}${openInstanceId === instance.id ? " lo-current-row" : ""}`}
+                    >
                       <td className="lo-check">
                         <input
                           type="checkbox"
@@ -152,7 +166,9 @@ export function SystemsTable({ rows, expandAll, selection, onSelect, onOpen, ope
                         />
                       </td>
                       <td className="lo-indent">
-                        <span className="lo-mono">{instance.label}</span>
+                        <button type="button" className="lo-open lo-mono" onClick={() => onOpenInstance(instance.id)}>
+                          {instance.label}
+                        </button>
                         <span className="lo-sub">
                           {instance.type ? t(`itype.${instance.type}`) : t(`ui.role.${instance.role}`)}
                         </span>

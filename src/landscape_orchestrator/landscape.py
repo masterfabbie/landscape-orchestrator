@@ -160,6 +160,8 @@ async def landscape_snapshot(session: AsyncSession, catalog: Catalog, user: User
                         "status": i.last_status,
                         "status_checked_at": i.status_checked_at,
                         "start_priority": i.start_priority,
+                        # From ListInstances, e.g. "753, patch 1100, changelist 2200000".
+                        "version": i.sap_version_info,
                         "depends_on": depends.get(i.id, []),
                     }
                     for i in instances

@@ -104,10 +104,13 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `web/` | servergerenderte Oberfläche (Jinja2), Anmeldung, Einrichtung, Konto, Übersetzungen |
 | `mock/` | simulierter Host Agent und sapstartsrv für Entwicklung und Tests |
 
-Außerhalb des Pakets: `frontend/` mit der Landscape-Seite (`src/landscape/`: `Landscape.tsx`
+Außerhalb des Pakets: `frontend/` mit den React-Seiten. `src/landscape/`: `Landscape.tsx`
 Seite und Zustand, `SystemsTable`, `HostsTable`, `FilterBar`, `ActionBar`, `Drawer`
-Detailleiste, `CommandPalette`, `ParameterDialog`; `filter.ts` und `selection.ts` reine Logik
-mit Tests; `src/lib/` API-Aufrufe, Texte, Typen).
+(Detailleiste: System, Instanz mit Reitern, Host, letzte Aktivitäten), `CommandPalette`,
+`ParameterDialog`; `filter.ts` und `selection.ts` reine Logik mit Tests. `src/activity/`:
+`ActivityPage.tsx` (Live-Ansicht einer Aktivität), `timeline.ts` (Zeitplan aus den
+strukturierten Protokolleinträgen, mit Tests). `src/lib/` API-Aufrufe, Texte, Typen. Ein
+Stylesheet für alle Seiten (`app.css`), gemeinsamer Code in `shared-*.js`.
 
 Wichtige Entwurfsentscheidungen:
 
@@ -213,7 +216,7 @@ Wichtige Entwurfsentscheidungen:
   - Operationsvorlagen als Kette von Bausteinen mit Parametern je Schritt, Verhalten bei
     Fehler und Einplanen: genau so umsetzen.
 - **Landscape als React-Seite** (Phase 1 des Umstiegs, ersetzt die alte Seite direkt;
-  Wunsch des Eigentümers): `/landscape` liefert nur eine Hülle (`landscape.html` mit
+  Wunsch des Eigentümers): `/landscape` liefert nur eine Hülle (`app_page.html` mit
   `base.html`, Startdaten als `<script type="application/json" id="lo-boot">`: Sprache, alle
   Texte, Benutzer) und lädt `static/app/landscape.js`; die Daten kommen aus `/api/landscape`.
   Dateinamen ohne Hash, `asset_url()` hängt `?v=<Inhalts-Hash>` an. Filter, Auswahl und
@@ -224,6 +227,18 @@ Wichtige Entwurfsentscheidungen:
   „Instanztyp“ klappt auf und zeigt nur passende Instanzen. Live über `/api/events`
   (React Query lädt neu). Die alte Seite `/mass` und `/landscape/filters` (sichtbare Filter
   pro Benutzer) gibt es nicht mehr. Die übrigen Seiten bleiben Jinja2 bis zu ihrer Phase.
+- **Detailleiste** (Wunsch des Eigentümers): Ein System zeigt nur eine Übersicht (Status
+  grob, Instanzen als Zeilen, letzte 5 Aktivitäten über `/api/activities?system_id=`), erst
+  eine Instanz zeigt Details in Reitern (Allgemein, Status mit `GetProcessList`, Aktivitäten).
+  Prozesse werden nur gelesen, solange der Reiter „Status“ offen ist. Kein
+  Validierungsstatus wie in LaMa (gibt es in LO nicht).
+- **Aktivität live** (Phase 2): `/activities/<id>` ist eine React-Hülle (`app_page.html`,
+  Startdaten mit `activity_id`), Daten aus `/api/activities/<id>`, neu geladen bei Ereignissen
+  aus `/api/events`. Der Zeitplan rechnet nicht mit Protokolltexten, sondern mit den Feldern
+  `event`, `subject`, `data` der Einträge (Migration 0006): `_log(..., event=, subject=,
+  data=)` im Runner. Neue Wartezustände, die im Zeitplan erscheinen sollen, brauchen dort ein
+  Ereignis. Abbrechen über `POST /api/activities/<id>/cancel`; die alte Web-Route dafür gibt
+  es nicht mehr.
 - **API mit Sitzungs-Cookie:** `require_user` nimmt ein Token oder das Sitzungs-Cookie; mit
   Cookie brauchen ändernde Aufrufe den Header `X-LO-Request: 1` (Schutz gegen fremde Seiten,
   es gibt kein CORS), ein Startpasswort sperrt die API. Rollen wie bisher über
@@ -312,10 +327,12 @@ Wichtige Entwurfsentscheidungen:
 - Zeit wird über eine falsche Uhr gesteuert (`FakeClock` in `tests/conftest.py`). Tests, die
   Operationen ausführen, übergeben `sleep` und `clock` an `create_app`.
 - Die neuen API-Teile für die Oberfläche (Cookie, Landscape-Daten, Prozesse, Ereignisse,
-  Texte, Header) testet `tests/test_interface_api.py`; was die Landscape zeigt, prüfen die
+  Texte, Header, Filter der Aktivitäten, strukturierte Protokolleinträge) testet
+  `tests/test_interface_api.py`; was die Landscape zeigt, prüfen die
   Web-Tests über `/api/landscape`. Das Frontend hat eigene Tests (Vitest, `*.test.ts(x)` in
   `frontend/src`): Filter mit denselben Fällen wie früher auf dem Server, Auswahllogik,
-  Aktionsleiste. Ende-zu-Ende-Tests im Browser gibt es noch nicht.
+  Aktionsleiste, Zeitplan (`timeline.test.ts`). Ende-zu-Ende-Tests im Browser gibt es noch
+  nicht.
 - Eigene Operationen testet `tests/test_custom.py` mit den Fixtures von `test_mass.py` und der
   simulierten Operation `LO_TEST` (`PARAM-SLEEP` Laufzeit, `PARAM-RC` Exit-Code).
 - Neue Funktionen brauchen Tests, auch für Fehlerfälle. Verhalten, das der Mock simulieren

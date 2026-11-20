@@ -11,12 +11,15 @@ export default defineConfig({
     outDir: "../src/landscape_orchestrator/web/static/app",
     emptyOutDir: true,
     sourcemap: false,
+    // One style sheet for all pages (app.css), linked by app_page.html.
+    cssCodeSplit: false,
     rollupOptions: {
-      input: { landscape: "src/landscape/main.tsx" },
+      input: { landscape: "src/landscape/main.tsx", activity: "src/activity/main.tsx" },
       output: {
         entryFileNames: "[name].js",
-        chunkFileNames: "[name].js",
-        assetFileNames: "[name][extname]",
+        // Code shared by the pages (React, API, texts).
+        chunkFileNames: "shared-[name].js",
+        assetFileNames: (asset) => (asset.names?.[0]?.endsWith(".css") ? "app.css" : "[name][extname]"),
       },
     },
   },

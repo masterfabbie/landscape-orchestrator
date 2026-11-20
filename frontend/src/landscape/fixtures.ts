@@ -14,6 +14,7 @@ const instance = (id: number, label: string, type: string, host: [number, string
   status: "GRAY",
   status_checked_at: null,
   start_priority: null,
+  version: null,
   depends_on: [],
 });
 

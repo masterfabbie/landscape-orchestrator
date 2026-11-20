@@ -84,9 +84,7 @@ async def test_event_stream(app, api):
     async def connected() -> bool:
         return False
 
-    async for event in change_events(
-        factory, sleep, interval=1, disconnected=connected, limit=2
-    ):
+    async for event in change_events(factory, sleep, interval=1, disconnected=connected, limit=2):
         seen.append(event)
     assert seen[0].startswith("event: hello") and before in seen[0]
     assert seen[1].startswith("event: change")
@@ -105,3 +103,48 @@ async def test_texts_and_headers(app, api):
     page = await client(app).get("/login")
     assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
     assert "onsubmit=" not in page.text and "onclick=" not in page.text
+
+
+async def test_activities_of_a_system_instance_and_host(app, api):
+    """The detail panel shows the last activities of what is selected."""
+    ids = {i["label"]: i["id"] for i in (await api.get("/api/instances")).json()}
+    system_a = (await api.post("/api/systems/1/start")).json()["id"]  # A depends on C
+    await app.state.runner.wait(system_a)
+    instance_b = (await api.post(f"/api/instances/{ids['DEV/00']}/stop")).json()["id"]
+    await app.state.runner.wait(instance_b)
+    discovery = (
+        await api.post(
+            "/api/mass-operations",
+            json={"operation": "discover", "target_type": "HOST", "target_ids": [1]},
+        )
+    ).json()["id"]
+    await app.state.runner.wait(discovery)
+
+    def ids_of(response) -> list[int]:
+        assert response.status_code == 200, response.text
+        return [a["id"] for a in response.json()]
+
+    assert ids_of(await api.get("/api/activities?system_id=1")) == [system_a]
+    # System C was started as dependency of A.
+    assert ids_of(await api.get("/api/activities?system_id=3")) == [system_a]
+    assert ids_of(await api.get("/api/activities?system_id=2")) == [instance_b]
+    assert ids_of(await api.get(f"/api/activities?instance_id={ids['DEV/01']}")) == [system_a]
+    assert ids_of(await api.get(f"/api/activities?instance_id={ids['DEV/00']}")) == [instance_b]
+    host_ops = ids_of(await api.get("/api/activities?host_id=1"))
+    assert host_ops == [discovery + 1]  # the child of the mass operation
+    assert ids_of(await api.get("/api/activities?system_id=1&limit=1")) == [system_a]
+    assert (await api.get("/api/activities?instance_id=99")).status_code == 404
+
+
+async def test_log_entries_carry_the_timeline(app, api):
+    activity_id = (await api.post("/api/systems/1/restart")).json()["id"]
+    await app.state.runner.wait(activity_id)
+    entries = (await api.get(f"/api/activities/{activity_id}")).json()["entries"]
+    events = [(e["event"], e["subject"]) for e in entries if e["event"]]
+    # Everything was stopped, so the restart only had to start (dependency C first).
+    assert events.index(("request_start", "HDV/02")) < events.index(("request_start", "DEV/01"))
+    statuses = [e["data"] for e in entries if e["event"] == "status"]
+    assert statuses and all(set(d) <= {"DEV/01", "HDV/02"} for d in statuses)
+    assert any(d.get("DEV/01") == "GREEN" for d in statuses)
+    plain = [e for e in entries if e["event"] is None]
+    assert plain and all(e["data"] is None for e in plain)

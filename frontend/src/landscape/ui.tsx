@@ -31,25 +31,27 @@ export function StatusDot({ status, label }: { status: string; label?: string })
   return <span className={`lo-dot lo-dot-${BADGE[status] ?? "unknown"}`} role={label ? "img" : undefined} aria-label={label} aria-hidden={label ? undefined : true} />;
 }
 
-export function formatTime(value: string | null, language: string): string {
+export function formatTime(value: string | null, language: string, seconds = false): string {
   if (!value) return "";
   const date = new Date(value);
   return date.toLocaleString(language === "de" ? "de-DE" : "en-GB", {
     dateStyle: "short",
-    timeStyle: "short",
+    timeStyle: seconds ? "medium" : "short",
   });
 }
 
-/** Reloads the landscape and open process lists when the server reports a change. */
-export function useLiveUpdates(): void {
+/** Reloads what the page shows when the server reports a change (``queryKey``: the
+ * queries to reload, by default the landscape and its activity lists). */
+export function useLiveUpdates(queryKey: unknown[] = ["landscape"]): void {
   const queries = useQueryClient();
+  const key = JSON.stringify(queryKey);
   useEffect(() => {
     if (typeof EventSource === "undefined") return;
     const source = new EventSource("/api/events");
     const reload = () => {
-      void queries.invalidateQueries({ queryKey: ["landscape"] });
+      void queries.invalidateQueries({ queryKey: JSON.parse(key) });
     };
     source.addEventListener("change", reload);
     return () => source.close();
-  }, [queries]);
+  }, [queries, key]);
 }

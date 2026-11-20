@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 class Credentials(BaseModel):
@@ -143,9 +144,20 @@ class DiscoveryOut(BaseModel):
 class ActivityLogEntryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    id: int
     timestamp: datetime
     level: str
     message: str
+    # For the timeline: request_start, request_stop, status or op_started; the instance or
+    # host the line is about; for status the status per instance label.
+    event: str | None = None
+    subject: str | None = None
+    data: dict[str, str] | None = None
+
+    @field_validator("data", mode="before")
+    @classmethod
+    def _parse_data(cls, value: object) -> object:
+        return json.loads(value) if isinstance(value, str) else value
 
 
 class ActivityOut(BaseModel):
@@ -173,6 +185,14 @@ class ActivityDetail(ActivityOut):
     entries: list[ActivityLogEntryOut]
     # Children of a mass operation.
     children: list[ActivityOut]
+    # Settings: of a mass operation (parallel, stop_on_error, targets) or of a custom
+    # operation (custom: its definition, parameters: the values passed).
+    options: dict | None = None
+
+    @field_validator("options", mode="before")
+    @classmethod
+    def _parse_options(cls, value: object) -> object:
+        return json.loads(value) if isinstance(value, str) else value
 
 
 class ParameterDef(BaseModel):

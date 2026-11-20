@@ -7,7 +7,6 @@ without internet access. State is changed only by POST forms.
 from __future__ import annotations
 
 import hashlib
-import json
 import secrets
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -67,8 +66,6 @@ from ..models import (
     User,
 )
 from ..operations import (
-    ACTIVE_STATUSES,
-    NotActiveError,
     NotAssignedError,
     OperationConflictError,
     OperationKind,
@@ -114,7 +111,6 @@ from ..users import (
 from .i18n import LANGUAGE_COOKIE, LANGUAGES, all_texts, instance_type_key, pick_language, translate
 
 WEB_DIR = Path(__file__).parent
-ACTIVITY_REFRESH_SECONDS = 2
 OVERVIEW_REFRESH_SECONDS = 5
 
 templates = Jinja2Templates(directory=WEB_DIR / "templates")
@@ -487,13 +483,24 @@ templates.env.globals["asset_url"] = asset_url
 async def landscape(request: Request, user: CurrentUser) -> HTMLResponse:
     """The landscape is a React page (frontend/src/landscape); it loads its data from
     /api/landscape. Texts and the user come with the page."""
+    return render(
+        request,
+        "app_page.html",
+        title=translate(_language(request), "nav.landscape"),
+        app="landscape",
+        boot=_boot(request, user),
+        wide=True,
+    )
+
+
+def _boot(request: Request, user: User, **extra: Any) -> dict[str, Any]:
+    """Start data of a React page: language, all texts and the user."""
     language = _language(request)
-    boot = {
+    return {
         "language": language,
         "texts": all_texts(language),
         "user": {"name": user.username, "role": user.role},
-    }
-    return render(request, "landscape.html", boot=boot, wide=True)
+    } | extra
 
 
 @pages.get("/hosts")
@@ -750,19 +757,6 @@ async def run_submit(
     return redirect(f"/activities/{activity.id}")
 
 
-@pages.post("/activities/{activity_id}/cancel")
-async def cancel_activity(
-    activity_id: int, context: Context, session: DbSession, user: CurrentUser
-) -> Response:
-    try:
-        await context.runner.cancel(session, activity_id, user.username)
-    except TargetNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except NotActiveError:
-        return redirect(f"/activities/{activity_id}", error="not_active")
-    return redirect(f"/activities/{activity_id}", notice="activity_cancelled")
-
-
 # --- activities -------------------------------------------------------------------------
 
 LOG_ENTRIES_SHOWN = 200
@@ -786,24 +780,20 @@ async def activities(request: Request, session: DbSession, tab: str | None = Non
 
 
 @pages.get("/activities/{activity_id}")
-async def activity_detail(request: Request, activity_id: int, session: DbSession) -> HTMLResponse:
-    activity = await session.scalar(
-        select(Activity)
-        .where(Activity.id == activity_id)
-        .options(selectinload(Activity.entries), selectinload(Activity.children))
-    )
-    if activity is None:
+async def activity_detail(
+    request: Request, activity_id: int, session: DbSession, user: CurrentUser
+) -> HTMLResponse:
+    """A React page (frontend/src/activity) that follows the activity live; its data comes
+    from /api/activities/{id}."""
+    if await session.get(Activity, activity_id) is None:
         raise HTTPException(404, "Activity not found")
-    running = activity.status in ACTIVE_STATUSES
-    options = json.loads(activity.options) if activity.options else {}
-    counts = _count([c.status for c in activity.children], ACTIVITY_STATUS_ORDER)
     return render(
         request,
-        "activity.html",
-        activity=activity,
-        options=options,
-        child_counts=counts,
-        refresh=ACTIVITY_REFRESH_SECONDS if running else None,
+        "app_page.html",
+        title=f"{translate(_language(request), 'activity.title')} {activity_id}",
+        app="activity",
+        boot=_boot(request, user, activity_id=activity_id),
+        wide=True,
     )
 
 

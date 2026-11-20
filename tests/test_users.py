@@ -299,8 +299,9 @@ async def test_roles_in_the_web_interface(app):
         assert 'action="/systems/1/start"' in page and ">Configuration</a>" not in page
         started = await operator.post("/systems/1/start")
         assert started.headers["location"].startswith("/activities/")
-        activity = (await operator.get(started.headers["location"])).text
-        assert ">operator</span>" in activity
+        activity_id = started.headers["location"].rsplit("/", 1)[1]
+        activity = (await operator.get(f"/api/activities/{activity_id}")).json()
+        assert activity["requested_by"] == "operator"
         await app.state.runner.wait(1)
 
 

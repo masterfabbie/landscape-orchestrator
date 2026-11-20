@@ -300,9 +300,12 @@ async def test_custom_operations_in_the_browser(app, api, landscape):
         started = await browser.post("/run/instances/2/lo_test", data={"param.RC": "0"})
         activity_id = int(started.headers["location"].rsplit("/", 1)[1])
         await app.state.runner.wait(activity_id)
-        activity = (await browser.get(f"/activities/{activity_id}")).text
-        assert "Test operation" in activity and "PARAM-RC=0" in activity
-        assert "PARAM-A" not in activity  # empty optional parameter is not passed
+        activity = (await browser.get(f"/api/activities/{activity_id}")).json()
+        assert activity["options"]["custom"]["name"] == "Test operation"
+        # The empty optional parameter A is not passed.
+        assert activity["options"]["parameters"] == {"PARAM-RC": "0"}
+        started_line = next(e for e in activity["entries"] if e["event"] == "op_started")
+        assert started_line["subject"] == "DEV/00"
 
         data = (await browser.get("/api/landscape")).json()
         offered = {op["key"]: op for op in data["operations"]}
@@ -325,13 +328,11 @@ async def test_cancel_in_the_browser(app, api):
     gate = hold_activities(app)
     activity_id = (await api.post("/api/systems/1/start")).json()["id"]
     await asyncio.sleep(0.05)
+    headers = {"X-LO-Request": "1"}
     async with sign_in(app) as browser:
-        page = (await browser.get(f"/activities/{activity_id}")).text
-        assert f'action="/activities/{activity_id}/cancel"' in page
-        response = await browser.post(f"/activities/{activity_id}/cancel")
-        assert response.headers["location"].endswith("notice=activity_cancelled")
+        # The activity page cancels through the API with the session cookie.
+        response = await browser.post(f"/api/activities/{activity_id}/cancel", headers=headers)
         gate.set()
-        page = (await browser.get(f"/activities/{activity_id}")).text
-        assert "cancelled" in page and "/cancel" not in page
-        again = await browser.post(f"/activities/{activity_id}/cancel")
-        assert again.headers["location"].endswith("error=not_active")
+        assert response.status_code == 200 and response.json()["status"] == "CANCELLED"
+        again = await browser.post(f"/api/activities/{activity_id}/cancel", headers=headers)
+        assert again.status_code == 409

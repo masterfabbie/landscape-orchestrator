@@ -21,6 +21,7 @@ export interface InstanceRow {
   status: string;
   status_checked_at: string | null;
   start_priority: string | null;
+  version: string | null;
   depends_on: string[];
 }
 
@@ -95,4 +96,38 @@ export interface ProcessList {
   status: string;
   processes: Process[];
   error: string | null;
+}
+
+export interface Activity {
+  id: number;
+  kind: string;
+  target_type: string;
+  target_label: string;
+  requested_by: string | null;
+  system_id: number | null;
+  instance_id: number | null;
+  host_id: number | null;
+  parent_id: number | null;
+  status: string;
+  timeout_seconds: number;
+  error: string | null;
+  requested_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface LogEntry {
+  id: number;
+  timestamp: string;
+  level: string;
+  message: string;
+  event: string | null;
+  subject: string | null;
+  data: Record<string, string> | null;
+}
+
+export interface ActivityDetail extends Activity {
+  entries: LogEntry[];
+  children: Activity[];
+  options: Record<string, unknown> | null;
 }

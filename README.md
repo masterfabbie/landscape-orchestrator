@@ -294,12 +294,19 @@ Seiten funktionieren weiter ohne JavaScript.
   anhalten“. Stopp und Neustart brauchen einen zweiten Klick auf denselben Knopf
   („Wirklich: …“). Eigene Operationen mit Parametern öffnen erst ein Formular. Danach
   erscheint eine Meldung mit Link zur Aktivität.
-- **Detailleiste rechts:** Ein Klick auf den Namen öffnet sie. Für ein System zeigt sie Pool,
-  Abhängigkeiten, Tags, die Operationen und die Instanzen in Startreihenfolge; je Instanz die
-  **Prozesse aus `GetProcessList`** mit Farbe, Text, Startzeit und PID, frisch gelesen und alle
-  15 Sekunden erneuert (der gespeicherte Status der Instanz wird dabei aktualisiert). „Status
-  aktualisieren“ liest alle Instanzen neu. Für einen Host: Adresse, Host Agent,
-  Betriebssystem, letzte Discovery und die Instanzen darauf.
+- **Detailleiste rechts:** Ein Klick auf den Namen öffnet sie.
+  - **System:** kurze Übersicht. Grob der Status („2 von 2 Instanzen laufen“, grün nur wenn
+    alle laufen; Diagnostics Agents zählen nicht), Pool, Abhängigkeiten, Hosts, Tags, die
+    Operationen, „Status aktualisieren“, die Instanzen als je eine Zeile und die **letzten 5
+    Aktivitäten** des Systems (auch über Abhängigkeiten und Massenoperationen).
+  - **Instanz** (Klick auf die Instanz in der Tabelle oder in der Systemübersicht), mit drei
+    Reitern: „Allgemein“ (Typ, System, SID, Nummer, Host, Instanz-Hostname, Kernel aus der
+    Discovery, Startpriorität, „Hängt ab von“, Operationen), „Status“ (die **Prozesse aus
+    `GetProcessList`** mit Farbe, Text, Laufzeit, Startzeit und PID; nur gelesen, solange der
+    Reiter offen ist, dann alle 15 Sekunden; aktualisiert den gespeicherten Status) und
+    „Aktivitäten“ (die letzten 5 der Instanz und ihres Systems).
+  - **Host:** Adresse, Host Agent, Betriebssystem, letzte Discovery, Instanzen darauf und die
+    letzten 5 Host-Operationen.
 - **Befehlspalette:** Strg+K (Mac: Cmd+K) sucht Systeme, Hosts und Seiten und bietet die
   Operationen der aktuellen Auswahl an; Pfeiltasten wählen, Enter führt aus.
 - **Live:** Die Seite bekommt Änderungen über `/api/events` mit und lädt dann neu, ohne die
@@ -312,6 +319,26 @@ Seiten funktionieren weiter ohne JavaScript.
   z. B. um alle ABAP-Anwendungsserver auszuwählen. Die Filter stehen in der Adresse; eine
   gefilterte Ansicht lässt sich als Lesezeichen speichern.
 - Auf den Seiten eines Systems und eines Hosts bleibt das Menü „Operationen“.
+
+### Aktivität live
+
+Die Seite einer Aktivität (`/activities/<id>`) ist ebenfalls eine React-Seite und folgt der
+Aktivität ohne Neuladen:
+
+- **Kopf:** Operation und Ziel, Status, angefordert von und um, laufende Dauer und Zeitlimit,
+  bei eigenen Operationen die übergebenen Parameter, bei Teilaktivitäten der Link zur
+  Massenoperation. Solange sie läuft, gibt es für Operator und höher „Abbrechen“.
+- **Zeitplan:** eine Spur je Instanz mit Stopp (grau) und Start (grün) vom Anfordern bis zum
+  Zielzustand, bei eigenen Operationen je Instanz bzw. Host vom Start bis zum Ergebnis des
+  Skripts; Fehlgeschlagenes rot, Laufendes gestreift, dazu eine Linie für „jetzt“. Ein Klick
+  auf eine Instanz filtert das Protokoll. Bei einer Massenoperation ist jede Teilaktivität
+  eine Spur (mit Link), dazu die Tabelle der Teilaktivitäten mit Zählern je Status.
+- **Protokoll:** läuft mit (abschaltbar), Filter „Alle / Warnungen / Fehler“ mit Anzahl,
+  Auswahl der Instanz und Textsuche.
+- Grundlage sind strukturierte Felder der Protokolleinträge (`event`, `subject`, `data`,
+  Migration 0006): angefordert (`request_start`, `request_stop`), Status je Instanz
+  (`status`) und Start einer eigenen Operation (`op_started`). Ältere Aktivitäten haben diese
+  Felder nicht; sie zeigen nur das Protokoll.
 
 ### Massenoperationen
 
@@ -505,8 +532,8 @@ keine Inventardaten.
 | DELETE | `/api/pools/{id}` | Pool löschen; seine Systeme bleiben erhalten |
 | POST | `/api/instances/{id}/start`, `/stop`, `/restart` | Operation für eine Instanz anstoßen; nur für Instanzen eines Systems, sonst HTTP 409 |
 | POST | `/api/systems/{id}/start`, `/stop`, `/restart` | Operation für ein ganzes System anstoßen |
-| GET | `/api/activities` | Aktivitäten, neueste zuerst (`?limit=`) |
-| GET | `/api/activities/{id}` | Aktivität mit Protokoll; bei einer Massenoperation mit `children` |
+| GET | `/api/activities` | Aktivitäten, neueste zuerst (`?limit=`); `?system_id=` die eines Systems (auch über Abhängigkeiten), `?instance_id=` die einer Instanz und ihres Systems, `?host_id=` die Host-Operationen eines Hosts |
+| GET | `/api/activities/{id}` | Aktivität mit Protokoll (Einträge mit `event`, `subject`, `data` für den Zeitplan) und `options` (Einstellungen der Massenoperation bzw. Beschreibung und Parameter einer eigenen Operation); bei einer Massenoperation mit `children` |
 | GET | `/api/operations` | Katalog der Operationen, die der eigene Benutzer ausführen darf, eigene mit Parametern |
 | GET | `/api/landscape` | alles, was die Landscape zeigt: Systeme mit Instanzen, Status und laufender Aktivität, Hosts, Pools, die Operationen des Benutzers |
 | GET | `/api/instances/{id}/processes` | Prozesse einer Instanz, jetzt gelesen per `GetProcessList`; aktualisiert den gespeicherten Status |

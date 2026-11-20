@@ -7,7 +7,7 @@ import { ApiError, api } from "../lib/api";
 import type { InstanceRow, OperationDef, Snapshot, TargetType } from "../lib/types";
 import { ActionBar } from "./ActionBar";
 import { CommandPalette } from "./CommandPalette";
-import { HostDrawer, SystemDrawer } from "./Drawer";
+import { HostDrawer, InstanceDrawer, SystemDrawer } from "./Drawer";
 import { FilterBar } from "./FilterBar";
 import {
   HOST_FILTER_KEYS,
@@ -29,7 +29,7 @@ import { type Toast, Toasts } from "./Toasts";
 import { useApp, useLiveUpdates } from "./ui";
 
 type Tab = "systems" | "hosts";
-type Detail = { kind: "SYSTEM" | "HOST"; id: number } | null;
+type Detail = { kind: "SYSTEM" | "INSTANCE" | "HOST"; id: number } | null;
 
 const EMPTY: Selection = { kind: "SYSTEM", ids: [] };
 
@@ -191,7 +191,9 @@ export function Landscape() {
               selection={selection}
               onSelect={select}
               onOpen={(id) => setDetail({ kind: "SYSTEM", id })}
+              onOpenInstance={(id) => setDetail({ kind: "INSTANCE", id })}
               openId={detail?.kind === "SYSTEM" ? detail.id : null}
+              openInstanceId={detail?.kind === "INSTANCE" ? detail.id : null}
             />
           </>
         ) : (
@@ -221,6 +223,17 @@ export function Landscape() {
           onClose={() => setDetail(null)}
           onRun={execute}
           notify={notify}
+          onOpenInstance={(id) => setDetail({ kind: "INSTANCE", id })}
+        />
+      )}
+      {detail?.kind === "INSTANCE" && (
+        <InstanceDrawer
+          instance={instances.get(detail.id)}
+          system={data.systems.find((s) => s.instances.some((i) => i.id === detail.id))}
+          operations={data.operations}
+          onClose={() => setDetail(null)}
+          onRun={execute}
+          onOpenSystem={(id) => setDetail({ kind: "SYSTEM", id })}
         />
       )}
       {detail?.kind === "HOST" && (

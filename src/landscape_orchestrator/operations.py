@@ -875,13 +875,38 @@ class OperationRunner:
         await session.commit()
 
     @staticmethod
-    def _entry(activity: Activity, level: str, message: str) -> ActivityLogEntry:
+    def _entry(
+        activity: Activity,
+        level: str,
+        message: str,
+        *,
+        event: str | None = None,
+        subject: str | None = None,
+        data: dict[str, str] | None = None,
+    ) -> ActivityLogEntry:
         return ActivityLogEntry(
-            activity_id=activity.id, timestamp=_now(), level=level, message=message
+            activity_id=activity.id,
+            timestamp=_now(),
+            level=level,
+            message=message,
+            event=event,
+            subject=subject,
+            data=json.dumps(data) if data is not None else None,
         )
 
-    async def _log(self, session: AsyncSession, activity: Activity, message: str) -> None:
-        session.add(self._entry(activity, "INFO", message))
+    async def _log(
+        self,
+        session: AsyncSession,
+        activity: Activity,
+        message: str,
+        *,
+        event: str | None = None,
+        subject: str | None = None,
+        data: dict[str, str] | None = None,
+    ) -> None:
+        session.add(
+            self._entry(activity, "INFO", message, event=event, subject=subject, data=data)
+        )
         await session.commit()
 
     async def _execute(self, session: AsyncSession, activity: Activity) -> None:
@@ -1053,11 +1078,14 @@ class OperationRunner:
         255 and the messages so far, a failed one (exit code other than 0) with fault 127.
         """
         prefix = f"{label}: " if label else ""
+        subject = label or activity.target_label
         logged = 0
 
-        async def log(level: str, message: str) -> None:
+        async def log(level: str, message: str, event: str | None = None) -> None:
             async with lock:
-                session.add(self._entry(activity, level, prefix + message))
+                session.add(
+                    self._entry(activity, level, prefix + message, event=event, subject=subject)
+                )
                 await session.commit()
 
         async def log_new(result: OperationResult) -> None:
@@ -1087,7 +1115,7 @@ class OperationRunner:
         operation_id = started.operation_id
         if not operation_id:
             raise OperationFailedError(f"{prefix}the host agent returned no operation ID")
-        await log("INFO", f"Started on {host.name}, operation {operation_id}")
+        await log("INFO", f"Started on {host.name}, operation {operation_id}", "op_started")
 
         try:
             while True:
@@ -1207,7 +1235,14 @@ class OperationRunner:
                 last = status
                 instance.last_status = status
                 instance.status_checked_at = _now()
-                await self._log(session, activity, f"Instance status: {status}")
+                await self._log(
+                    session,
+                    activity,
+                    f"Instance status: {status}",
+                    event="status",
+                    subject=instance.label,
+                    data={instance.label: status},
+                )
             if status == target:
                 return
             if self._deadline_reached(deadline):
@@ -1280,7 +1315,13 @@ class OperationRunner:
         statuses = await self._read_statuses(instances)
         last = self._summary(instances, statuses)
         self._store_statuses(instances, statuses)
-        await self._log(session, activity, f"System {name} status: {last}")
+        await self._log(
+            session,
+            activity,
+            f"System {name} status: {last}",
+            event="status",
+            data=self._status_map(instances, statuses),
+        )
         if all(statuses[i.id] == target for i in instances):
             state = "running" if start else "stopped"
             await self._log(session, activity, f"System {name} is already {state}")
@@ -1316,7 +1357,13 @@ class OperationRunner:
                 if summary != last:
                     last = summary
                     self._store_statuses(instances, statuses)
-                    await self._log(session, activity, f"System {name} status: {summary}")
+                    await self._log(
+                        session,
+                        activity,
+                        f"System {name} status: {summary}",
+                        event="status",
+                        data=self._status_map(instances, statuses),
+                    )
 
     async def _request_via_hostagent(
         self, session: AsyncSession, activity: Activity, instance: Instance, start: bool
@@ -1338,10 +1385,16 @@ class OperationRunner:
             session,
             activity,
             f"{verb} of {label} requested via host agent of {instance.host.name}",
+            event="request_start" if start else "request_stop",
+            subject=label,
         )
 
     async def _read_statuses(self, instances: list[Instance]) -> dict[int, str]:
         return {instance.id: await self._read_instance_status(instance) for instance in instances}
+
+    @staticmethod
+    def _status_map(instances: list[Instance], statuses: dict[int, str]) -> dict[str, str]:
+        return {i.label: statuses[i.id] for i in instances}
 
     @staticmethod
     def _summary(instances: list[Instance], statuses: dict[int, str]) -> str:
