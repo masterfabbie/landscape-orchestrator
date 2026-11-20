@@ -7,7 +7,7 @@
   <span class="buttons">
     {{ ui.status_badge(activity.status, t, "activity") }}
     {% if refresh and can("operator") %}
-    <form method="post" action="/activities/{{ activity.id }}/cancel" data-confirm="{{ t('activity.cancel_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+    <form method="post" action="/activities/{{ activity.id }}/cancel" data-confirm="{{ t('activity.cancel_confirm') }}">
       <button type="submit" class="secondary">{{ t("activity.cancel") }}</button>
     </form>
     {% endif %}

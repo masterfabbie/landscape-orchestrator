@@ -252,13 +252,28 @@ async def test_old_hosts_page_redirects_to_landscape(browser):
     assert response.headers["location"] == "/landscape?tab=hosts"
 
 
-@pytest.mark.parametrize(
-    ("path", "active"),
-    [("/landscape", "Systems"), ("/landscape?tab=hosts", "Hosts"), ("/landscape?tab=x", "Systems")],
-)
-async def test_landscape_tabs(browser, path, active):
-    page = (await browser.get(path)).text
-    assert f'aria-current="page">{active}</a>' in page
+async def landscape_data(browser) -> dict:
+    """What the landscape page shows; it loads this from the API with the session cookie."""
+    response = await browser.get("/api/landscape")
+    assert response.status_code == 200
+    return response.json()
+
+
+def system_names(data: dict) -> list[str]:
+    return [system["name"] for system in data["systems"]]
+
+
+async def test_landscape_page_loads_the_interface(browser):
+    page = await browser.get("/landscape?tab=hosts")
+    assert page.status_code == 200
+    assert '<div id="lo-landscape">' in page.text
+    assert 'src="/static/app/landscape.js?v=' in page.text
+    assert 'href="/static/app/landscape.css?v=' in page.text
+    # Start data for the app: texts and user, as JSON that is read, not run.
+    assert '<script type="application/json" id="lo-boot">' in page.text
+    assert '"nav.landscape": "Landscape"' in page.text and '"role": "admin"' in page.text
+    script = await browser.get("/static/app/landscape.js")
+    assert script.status_code == 200 and "lo-landscape" in script.text
 
 
 # --- overview ----------------------------------------------------------------------------
@@ -301,8 +316,7 @@ async def test_add_host_and_discover(browser):
 
     listing = (await browser.get("/configuration?tab=hosts")).text
     assert "sapapp1" in listing and "devadm (stored)" in listing
-    landscape = (await browser.get("/landscape?tab=hosts")).text
-    assert 'href="/hosts/1"' in landscape
+    assert [h["name"] for h in (await landscape_data(browser))["hosts"]] == ["sapapp1"]
 
 
 async def test_invalid_host_input(browser):
@@ -381,8 +395,7 @@ async def test_discovered_instances_are_unassigned(browser):
     assert "Assign to existing" not in page  # there is no system yet
     assert "No systems yet." in page
     # Unassigned instances are not part of the landscape.
-    landscape = (await browser.get("/landscape")).text
-    assert "DEV/00" not in landscape
+    assert (await landscape_data(browser))["systems"] == []
     host = (await browser.get("/hosts/1")).text
     assert "not assigned" in host and 'action="/instances/1/start"' not in host
 
@@ -460,7 +473,7 @@ async def test_rename_remove_instance_and_delete_system(browser):
     await add_hosts(browser)
     renamed = await browser.post("/configuration/systems/1", data={"name": "Development"})
     assert renamed.headers["location"] == "/configuration/systems/1?notice=system_saved"
-    assert ">Development</a>" in (await browser.get("/landscape")).text
+    assert "Development" in system_names(await landscape_data(browser))
     taken = await browser.post("/configuration/systems/1", data={"name": "HDV"})
     assert taken.headers["location"] == "/configuration/systems/1?error=system_name_taken"
 
@@ -515,12 +528,10 @@ async def test_pools(browser):
     pools = (await browser.get("/configuration?tab=pools")).text
     assert "Development line" in pools and 'href="/configuration/systems/1">DEV</a>' in pools
 
-    landscape = (await browser.get("/landscape")).text
-    assert 'name="pool" value="1"' in landscape and 'name="pool" value="none"' in landscape
-    in_pool = (await browser.get("/landscape?tab=systems&pool=1")).text
-    assert ">DEV</a>" in in_pool and ">HDV</a>" not in in_pool
-    no_pool = (await browser.get("/landscape?tab=systems&pool=none")).text
-    assert ">HDV</a>" in no_pool and ">DEV</a>" not in no_pool
+    data = await landscape_data(browser)
+    assert data["pools"] == [{"id": 1, "name": "xDV"}]
+    pools = {s["name"]: s["pool"] for s in data["systems"]}
+    assert pools == {"DEV": {"id": 1, "name": "xDV"}, "HDV": None}
     assert "xDV" in (await browser.get("/systems/1")).text
 
     cleared = await browser.post("/configuration/systems/1/pool", data={"pool_id": ""})
@@ -544,7 +555,8 @@ async def test_manage_dependencies(browser):
     page = (await browser.get("/configuration/systems/1")).text
     assert 'action="/configuration/systems/1/dependencies/2/delete"' in page
     assert "No other system can be added." in page
-    assert 'href="/systems/2">HDV</a>' in (await browser.get("/landscape")).text
+    data = await landscape_data(browser)
+    assert {s["name"]: s["depends_on"] for s in data["systems"]} == {"DEV": ["HDV"], "HDV": []}
 
     hana = (await browser.get("/configuration/systems/2")).text
     assert 'href="/configuration/systems/1">DEV</a>' in hana
@@ -571,19 +583,12 @@ async def test_configuration_texts_in_german(browser):
 # --- landscape and operations ----------------------------------------------------------
 
 
-def system_rows(page: str) -> list[str]:
-    """The rows of the systems in the landscape tree (without their instance rows)."""
-    return [part.split("</tr>")[0] for part in page.split('<tr class="system-row">')[1:]]
-
-
 async def test_landscape_lists_systems_with_status(browser):
     await add_hosts(browser)
-    page = (await browser.get("/landscape")).text
-    assert ">DEV</a>" in page and ">HDV</a>" in page
-    assert [row.count("badge-gray") for row in system_rows(page)] == [1, 1]
-    assert 'action="/systems/1/start"' in page
-    hosts = (await browser.get("/landscape?tab=hosts")).text
-    assert ">sapapp1</a>" in hosts and ">sapdb1</a>" in hosts
+    data = await landscape_data(browser)
+    assert {s["name"]: s["status"] for s in data["systems"]} == {"DEV": "GRAY", "HDV": "GRAY"}
+    assert "start" in {op["key"] for op in data["operations"]}
+    assert [h["name"] for h in data["hosts"]] == ["sapapp1", "sapdb1"]
 
 
 async def test_detail_pages_link_to_configuration(browser):
@@ -640,10 +645,9 @@ async def test_system_operation_with_dependency_and_conflict(browser, app):
     started = await browser.post("/systems/1/start")
     assert started.headers["location"] == "/activities/1"
 
-    landscape = (await browser.get("/landscape")).text
-    assert landscape.count("Activity running") == 2  # DEV and, through the dependency, HDV
-    assert "disabled" in landscape
-    assert '<meta http-equiv="refresh" content="5">' in landscape
+    running = {s["name"]: s["activity"] for s in (await landscape_data(browser))["systems"]}
+    # DEV and, through the dependency, HDV
+    assert running["DEV"]["id"] == 1 and running["HDV"]["id"] == 1
 
     conflict = await browser.post("/instances/3/stop")
     assert conflict.headers["location"] == "/systems/2?error=conflict"
@@ -652,10 +656,9 @@ async def test_system_operation_with_dependency_and_conflict(browser, app):
 
     gate.set()
     await app.state.runner.wait(1)
-    landscape = (await browser.get("/landscape")).text
-    assert "Activity running" not in landscape
-    assert "http-equiv" not in landscape
-    assert [row.count("badge-green") for row in system_rows(landscape)] == [1, 1]
+    data = await landscape_data(browser)
+    assert [s["activity"] for s in data["systems"]] == [None, None]
+    assert [s["status"] for s in data["systems"]] == ["GREEN", "GREEN"]
     assert "badge-running" in (await browser.get("/hosts/2")).text  # databases follow
     activity = (await browser.get("/activities/1")).text
     assert "Start order including dependencies: HDV, DEV" in activity
@@ -779,16 +782,17 @@ async def test_diagnostics_agents_are_grouped(extended_browser):
     system = (await extended_browser.get("/systems/1")).text
     assert "Diagnostics agents (1)" in system
     assert 'action="/instances/3/start"' in system  # the agent keeps its own operations
-    landscape = (await extended_browser.get("/landscape")).text
-    assert "Diagnostics agents (1)" in landscape
-    assert '<tr class="agent-row">' in landscape and "DAA/98" in landscape
-    assert "DEV/00 (sapapp1)" in landscape and "DEV/00 (sapapp2)" in landscape
+    data = await landscape_data(extended_browser)
+    instances = {i["label"]: i for s in data["systems"] for i in s["instances"]}
+    assert instances["DAA/98"]["agent"] and instances["DAA/98"]["type"] == "agent"
+    assert {"DEV/00 (sapapp1)", "DEV/00 (sapapp2)"} <= set(instances)
+    # Agents come last in the start order of the landscape.
+    assert data["systems"][0]["instances"][-1]["label"] == "DAA/98"
 
 
 async def test_host_agent_version_is_shown(extended_browser):
-    hosts = (await extended_browser.get("/landscape?tab=hosts")).text
-    assert "Host agent" in hosts and hosts.count(">7.22 PL72</td>") == 3
-    assert "saphostexec 722 (EXT), patch 1611" in hosts
+    hosts = (await landscape_data(extended_browser))["hosts"]
+    assert [h["hostagent_version"] for h in hosts] == ["7.22 PL72"] * 3
     assert "7.22 PL72" in (await extended_browser.get("/hosts/1")).text
     assert "7.22 PL72" in (await extended_browser.get("/configuration/hosts/1")).text
 
@@ -812,75 +816,13 @@ async def test_tags_forms(browser):
 
     host = await browser.post("/configuration/hosts/2/tags", data={"tags": "db"})
     assert host.headers["location"] == "/configuration/hosts/2?notice=tags_saved"
-    assert '<span class="tag">db</span>' in (await browser.get("/landscape?tab=hosts")).text
-
-
-async def test_landscape_filters(browser):
-    await add_hosts(browser)
-    await browser.post("/configuration/pools", data={"name": "xDV"})
-    await browser.post("/configuration/systems/1/pool", data={"pool_id": "1"})
-    await browser.post("/configuration/systems/1/tags", data={"tags": "dev, sla=1"})
-    await browser.post("/configuration/systems/2/tags", data={"tags": "sla=2"})
-    await browser.post("/configuration/hosts/2/tags", data={"tags": "db"})
-
-    async def shown(**params) -> set[str]:
-        page = (await browser.get("/landscape", params={"tab": "systems"} | params)).text
-        return {
-            name
-            for name in ("DEV", "HDV")
-            if re.search(rf'class="strong" href="/systems/\d+">{name}</a>', page)
-        }
-
-    assert await shown() == {"DEV", "HDV"}
-    assert await shown(name="d") == {"DEV", "HDV"}
-    assert await shown(name="hd") == {"HDV"}
-    assert await shown(pool="1") == {"DEV"}
-    assert await shown(pool=["1", "none"]) == {"DEV", "HDV"}
-    assert await shown(tag="sla") == {"DEV", "HDV"}
-    assert await shown(tag="sla=2") == {"HDV"}
-    assert await shown(tag=["dev", "sla=2"]) == {"DEV", "HDV"}
-    assert await shown(hosttag="db") == {"HDV"}
-    assert await shown(type="hana") == {"HDV"}
-    assert await shown(type=["scs", "hana"]) == {"DEV", "HDV"}
-    assert await shown(host="sapapp") == {"DEV"}
-    assert await shown(status="GRAY") == {"DEV", "HDV"}
-    assert await shown(status="GREEN") == set()
-    assert await shown(tag="sla", pool="1") == {"DEV"}  # all filters must match
-
-    page = (await browser.get("/landscape", params={"status": "GREEN"})).text
-    assert "Nothing matches the filters." in page
-    page = (await browser.get("/landscape", params={"tag": "sla"})).text
-    assert "Systems: 2, instances: 3" in page
-    assert 'name="tag" value="sla" checked' in page
-
-    hosts = (await browser.get("/landscape", params={"tab": "hosts", "tag": "db"})).text
-    assert ">sapdb1</a>" in hosts and ">sapapp1</a>" not in hosts
-    hosts = (await browser.get("/landscape", params={"tab": "hosts", "name": "app"})).text
-    assert ">sapapp1</a>" in hosts and ">sapdb1</a>" not in hosts
-
-
-async def test_choose_visible_filters(browser):
-    page = (await browser.get("/landscape")).text
-    assert 'name="name"' in page and 'name="hosttag"' not in page
-
-    response = await browser.post(
-        "/landscape/filters", data={"tab": "systems", "field": ["hosttag", "type", "bogus"]}
-    )
-    assert response.headers["location"] == "/landscape?tab=systems"
-    assert "lo_filters_systems" not in response.cookies  # stored per user now
-    page = (await browser.get("/landscape")).text
-    assert 'name="name"' not in page and "Host tags" in page and "Instance type" in page
-    # A filter with a value stays visible even if it is not chosen.
-    page = (await browser.get("/landscape", params={"name": "x"})).text
-    assert 'name="name" value="x"' in page
-    # The language switch keeps the filters.
-    assert "/language/de?next=" in page and "name%3Dx" in page
+    tags = {h["name"]: h["tags"] for h in (await landscape_data(browser))["hosts"]}
+    assert tags["sapdb1"] == ["db"]
 
 
 async def test_refresh_button(browser, landscape):
     await add_hosts(browser)
     assert 'action="/systems/1/refresh"' in (await browser.get("/systems/1")).text
-    assert 'action="/systems/1/refresh"' in (await browser.get("/landscape")).text
     landscape.start_instance(landscape.host("sapapp1").instance(0))
 
     response = await browser.post("/systems/1/refresh")
@@ -894,47 +836,6 @@ async def test_refresh_button(browser, landscape):
 
 
 
-# --- landscape tree and operations menu --------------------------------------------------
-
-
-async def test_landscape_tree(browser):
-    await add_hosts(browser)
-    page = (await browser.get("/landscape")).text
-    # Collapsed at first: the instances are in the page, hidden by CSS until opened.
-    assert page.count('class="tree-toggle toggle-system"') == 2
-    assert "data-forced" not in page
-    dev = page.split('<tbody class="tree-system">')[1]
-    rows = [r for r in dev.split("<tr")[1:]]
-    labels = [re.search(r'mono">([^<]+)</td>', r).group(1) for r in rows[1:]]
-    assert labels == ["DEV/01", "DEV/00"]  # start order
-    assert "Central services" in dev and "ABAP application server" in dev
-    assert dev.count('<details class="menu">') == 3  # system and both instances
-    assert 'action="/instances/2/stop"' in dev and 'action="/systems/1/refresh"' in dev
-    assert 'data-tree-all="open" hidden' in page  # shown by the script
-    assert '<script src="/static/ui.js" defer>' in page
-
-
-async def test_instance_type_filter_opens_and_narrows_the_tree(browser):
-    await add_hosts(browser)
-    page = (await browser.get("/landscape", params={"type": "abap"})).text
-    assert [">DEV</a>" in row for row in system_rows(page)] == [True]
-    assert "data-forced" in page  # opened by the filter
-    assert "DEV/00" in page and "DEV/01" not in page
-    assert "1 more instances do not match the instance type filter." in page
-
-
-async def test_operations_menu_is_disabled_while_running(browser, app):
-    await add_hosts(browser)
-    gate = hold_activities(app)
-    await browser.post("/systems/1/start")
-    page = (await browser.get("/landscape")).text
-    dev = system_rows(page)[0]
-    assert "An activity is running:" in dev and 'href="/activities/1"' in dev
-    assert "disabled" in dev
-    gate.set()
-    await app.state.runner.wait(1)
-
-
 async def test_ui_script_is_served(anonymous):
     response = await anonymous.get("/static/ui.js")
-    assert response.status_code == 200 and "sessionStorage" in response.text
+    assert response.status_code == 200 and "data-confirm" in response.text

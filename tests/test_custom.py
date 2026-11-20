@@ -304,8 +304,10 @@ async def test_custom_operations_in_the_browser(app, api, landscape):
         assert "Test operation" in activity and "PARAM-RC=0" in activity
         assert "PARAM-A" not in activity  # empty optional parameter is not passed
 
-        mass = (await browser.get("/mass?type=abap&operation=lo_test")).text
-        assert 'name="param.RC"' in mass
+        data = (await browser.get("/api/landscape")).json()
+        offered = {op["key"]: op for op in data["operations"]}
+        assert offered["lo_test"]["instance_types"] == ["abap"]
+        assert [p["name"] for p in offered["lo_test"]["parameters"]] == ["RC", "A"]
 
         await browser.post(f"{page_url}/parameters/1/delete")
         assert "PARAM-RC" not in (await browser.get(page_url)).text

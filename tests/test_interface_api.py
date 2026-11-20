@@ -1,0 +1,107 @@
+"""API parts for the browser interface: session cookie, landscape snapshot, processes,
+event stream, texts and security headers."""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+import test_mass
+from conftest import make_user
+from landscape_orchestrator.events import change_events, fingerprint
+from test_mass import client, sign_in
+
+pytestmark = pytest.mark.anyio
+
+app, api, transport = test_mass.app, test_mass.api, test_mass.transport
+
+
+async def test_api_accepts_the_session_cookie(app, api):
+    async with sign_in(app) as web:
+        assert (await web.get("/api/systems")).status_code == 200
+        # Changes need the header that other sites cannot send.
+        refused = await web.post("/api/systems/1/refresh")
+        assert refused.status_code == 403 and "X-LO-Request" in refused.text
+        allowed = await web.post("/api/systems/1/refresh", headers={"X-LO-Request": "1"})
+        assert allowed.status_code == 200
+    async with client(app) as anonymous:
+        assert (await anonymous.get("/api/systems")).status_code == 401
+
+
+async def test_cookie_keeps_the_roles(app, api):
+    await make_user(app, "view", "viewer")
+    async with sign_in(app, "view") as web:
+        headers = {"X-LO-Request": "1"}
+        assert (await web.post("/api/systems/1/start", headers=headers)).status_code == 403
+        assert (await web.get("/api/landscape")).status_code == 200
+
+
+async def test_landscape_snapshot(app, api):
+    data = (await api.get("/api/landscape")).json()
+    assert [s["name"] for s in data["systems"]] == ["A", "B", "C"]
+    system_a = data["systems"][0]
+    assert system_a["depends_on"] == ["C"] and system_a["activity"] is None
+    instance = system_a["instances"][0]
+    assert instance["label"] == "DEV/01" and instance["host"]["name"] == "sapapp1"
+    assert instance["role"] == "central" and instance["type"] == "scs"
+    assert {h["name"] for h in data["hosts"]} == {"sapapp1", "sapdb1"}
+    keys = {op["key"]: op for op in data["operations"]}
+    assert keys["start"]["labels"]["SYSTEM"] == "op.start_system"
+    assert keys["stop"]["danger"] and keys["discover"]["targets"] == ["HOST"]
+    assert data["user"] == {"name": "admin", "role": "admin"}
+
+    async with client(app, await make_user(app, "op", "operator")) as operator:
+        ops = {op["key"] for op in (await operator.get("/api/landscape")).json()["operations"]}
+    assert "start" in ops and "discover" not in ops  # discovery needs a configurator
+
+
+async def test_processes_are_read_live(app, api, transport):
+    ids = {i["label"]: i["id"] for i in (await api.get("/api/instances")).json()}
+    data = (await api.get(f"/api/instances/{ids['DEV/00']}/processes")).json()
+    assert data["error"] is None and data["status"] in ("GREEN", "GRAY")
+    assert data["processes"] and {"name", "status", "text", "pid"} <= set(data["processes"][0])
+    assert (await api.get("/api/instances/99/processes")).status_code == 404
+
+    transport.remove_port(50013)  # sapstartsrv of DEV/00
+    down = (await api.get(f"/api/instances/{ids['DEV/00']}/processes")).json()
+    assert down["status"] == "UNKNOWN" and down["error"] and down["processes"] == []
+
+
+async def test_event_stream(app, api):
+    factory = app.state.context.session_factory
+    before = await fingerprint(factory())
+    seen: list[str] = []
+    changed = False
+
+    async def sleep(_: float) -> None:
+        nonlocal changed
+        if not changed:
+            changed = True
+            await api.post("/api/systems/1/start")
+        await asyncio.sleep(0)
+
+    async def connected() -> bool:
+        return False
+
+    async for event in change_events(
+        factory, sleep, interval=1, disconnected=connected, limit=2
+    ):
+        seen.append(event)
+    assert seen[0].startswith("event: hello") and before in seen[0]
+    assert seen[1].startswith("event: change")
+
+    app.state.events_limit = 1
+    response = await api.get("/api/events")
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text.startswith("event: hello")
+
+
+async def test_texts_and_headers(app, api):
+    response = await api.get("/api/i18n", headers={"Accept-Language": "de"})
+    data = response.json()
+    assert data["language"] == "de" and data["texts"]["nav.landscape"] == "Landscape"
+    assert "script-src 'self'" in response.headers["content-security-policy"]
+    page = await client(app).get("/login")
+    assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
+    assert "onsubmit=" not in page.text and "onclick=" not in page.text

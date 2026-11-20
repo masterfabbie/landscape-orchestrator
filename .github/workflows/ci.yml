@@ -18,3 +18,22 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      # Builds into the Python package; the committed build must match the sources.
+      - run: npm run build
+      - run: git diff --exit-code -- ../src/landscape_orchestrator/web/static/app
+      - run: npm audit --omit=dev --audit-level=high

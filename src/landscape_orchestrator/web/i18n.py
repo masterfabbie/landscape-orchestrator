@@ -738,7 +738,93 @@ TEXTS: dict[str, tuple[str, str]] = {
         "Es gibt schon einen Parameter mit diesem Namen.",
     ),
     "error.parameter_values": ("Invalid parameters: {detail}", "Ungültige Parameter: {detail}"),
+    # browser interface (frontend/), landscape
+    "ui.loading": ("Loading…", "Wird geladen …"),
+    "ui.load_failed": ("The data could not be loaded.", "Die Daten ließen sich nicht laden."),
+    "ui.needs_javascript": (
+        "This page needs JavaScript.",
+        "Diese Seite braucht JavaScript.",
+    ),
+    "ui.activity": ("Activity", "Aktivität"),
+    "ui.busy": (
+        "An activity is already running for this target.",
+        "Für dieses Ziel läuft schon eine Aktivität.",
+    ),
+    "ui.started": ("{operation} started.", "{operation} gestartet."),
+    "ui.show_activity": ("Activity {id}", "Aktivität {id}"),
+    "ui.close": ("Close", "Schließen"),
+    "ui.search": ("Search", "Suchen"),
+    "ui.search_systems": (
+        "System, SID, instance, host or tag",
+        "System, SID, Instanz, Host oder Tag",
+    ),
+    "ui.search_hosts": (
+        "Host, address, OS or tag",
+        "Host, Adresse, Betriebssystem oder Tag",
+    ),
+    "ui.count_systems": (
+        "{systems} systems, {instances} instances",
+        "{systems} Systeme, {instances} Instanzen",
+    ),
+    "ui.count_hosts": ("{hosts} hosts", "{hosts} Hosts"),
+    "ui.instance_count": ("{count} instances", "{count} Instanzen"),
+    "ui.select": ("Select {name}", "{name} auswählen"),
+    "ui.select_all_systems": ("Select all systems shown", "Alle angezeigten Systeme auswählen"),
+    "ui.select_all_hosts": ("Select all hosts shown", "Alle angezeigten Hosts auswählen"),
+    "ui.selection": ("Selection", "Auswahl"),
+    "ui.selected_system": ("{count} system(s) selected", "{count} System(e) ausgewählt"),
+    "ui.selected_instance": ("{count} instance(s) selected", "{count} Instanz(en) ausgewählt"),
+    "ui.selected_host": ("{count} host(s) selected", "{count} Host(s) ausgewählt"),
+    "ui.clear_selection": ("Clear selection", "Auswahl aufheben"),
+    "ui.no_operations": (
+        "No operation fits the whole selection.",
+        "Keine Operation passt zur ganzen Auswahl.",
+    ),
+    "ui.confirm_operation": ("Really: {operation}", "Wirklich: {operation}"),
+    "ui.stop_on_error": ("stop on error", "bei Fehler anhalten"),
+    "ui.role.database": ("Database", "Datenbank"),
+    "ui.role.central": ("Central services", "Zentrale Dienste"),
+    "ui.role.application": ("Application server", "Anwendungsserver"),
+    "ui.role.agent": ("Diagnostics agent", "Diagnostics Agent"),
+    "ui.refresh_status": ("Refresh status", "Status aktualisieren"),
+    "ui.open_page": ("Open page", "Seite öffnen"),
+    "ui.instances_in_order": ("Instances in start order", "Instanzen in Startreihenfolge"),
+    "ui.process": ("Process", "Prozess"),
+    "ui.started_at": ("Started", "Gestartet"),
+    "ui.processes_unavailable": (
+        "The sapstartsrv could not be queried",
+        "Der sapstartsrv ließ sich nicht abfragen",
+    ),
+    "ui.no_processes": ("No processes reported.", "Keine Prozesse gemeldet."),
+    "ui.checked_at": ("Read at {time}", "Gelesen um {time}"),
+    "ui.no_instances_on_host": (
+        "No instances of systems on this host.",
+        "Keine Instanzen von Systemen auf diesem Host.",
+    ),
+    "ui.palette": ("Command palette", "Befehlspalette"),
+    "ui.palette_open": ("Command or system", "Befehl oder System"),
+    "ui.palette_placeholder": (
+        "Find a system, host or operation …",
+        "System, Host oder Operation suchen …",
+    ),
+    "ui.palette_operations": ("Operations on the selection", "Operationen auf der Auswahl"),
+    "ui.palette_pages": ("Go to", "Gehe zu"),
+    "ui.palette_keys": (
+        "↑ ↓ choose · Enter run · Esc close",
+        "↑ ↓ auswählen · Enter ausführen · Esc schließen",
+    ),
+    "ui.account": ("My account", "Mein Konto"),
 }
+
+
+# Cookie with the chosen language of the interface.
+LANGUAGE_COOKIE = "lo_lang"
+
+
+def all_texts(language: str) -> dict[str, str]:
+    """Every text in ``language``, for the browser interface (unformatted templates)."""
+    index = 1 if language == "de" else 0
+    return {key: texts[index] for key, texts in TEXTS.items()}
 
 
 def translate(language: str, key: str, **values: object) -> str:

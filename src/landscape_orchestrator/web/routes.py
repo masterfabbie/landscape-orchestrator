@@ -6,6 +6,7 @@ without internet access. State is changed only by POST forms.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 from collections.abc import AsyncIterator, Callable
@@ -39,19 +40,16 @@ from ..customops import (
 )
 from ..dependencies import DependencyError, load_graph, set_dependencies, would_create_cycle
 from ..discovery import DiscoveryError, discover_host
-from ..filters import FIELDS as FILTER_FIELDS
 from ..filters import PARAMS as FILTER_PARAMS
 from ..filters import (
-    REACH_VALUES,
-    STATUS_VALUES,
     TYPE_VALUES,
-    filter_hosts,
-    filter_systems,
-    read_values,
-    tag_options,
-    visible_fields,
 )
 from ..hosts import Connection, HostChangeError, update_connection
+from ..landscape import active_by_host as _active_by_host
+from ..landscape import active_by_system as _active_by_system
+from ..landscape import all_hosts as _all_hosts
+from ..landscape import all_systems as _all_systems
+from ..landscape import system_status
 from ..models import (
     STATUS_UNKNOWN,
     Activity,
@@ -70,7 +68,6 @@ from ..models import (
 )
 from ..operations import (
     ACTIVE_STATUSES,
-    MAX_PARALLEL,
     NotActiveError,
     NotAssignedError,
     OperationConflictError,
@@ -99,6 +96,7 @@ from ..systems import (
 from ..tags import TagError, parse_tags, replace_tags
 from ..users import (
     ROLE_ORDER,
+    SESSION_COOKIE,
     SESSION_LIFETIME_SECONDS,
     Role,
     UserError,
@@ -106,21 +104,16 @@ from ..users import (
     create_session,
     create_token,
     create_user,
-    get_setting,
     has_role,
     session_user,
     set_password,
-    set_setting,
     update_user,
     user_count,
     verify_password,
 )
-from .i18n import LANGUAGES, instance_type_key, pick_language, translate
-
-SESSION_COOKIE = "lo_session"
+from .i18n import LANGUAGE_COOKIE, LANGUAGES, all_texts, instance_type_key, pick_language, translate
 
 WEB_DIR = Path(__file__).parent
-LANGUAGE_COOKIE = "lo_lang"
 ACTIVITY_REFRESH_SECONDS = 2
 OVERVIEW_REFRESH_SECONDS = 5
 
@@ -385,39 +378,8 @@ async def set_language(code: str, next: str = "/") -> Response:
 # --- shared helpers ---------------------------------------------------------------------
 
 
-async def _active_by_system(session: AsyncSession) -> dict[int, Activity]:
-    """Running activity per system, including systems touched through dependencies."""
-    rows = await session.scalars(
-        select(Activity)
-        .where(Activity.status.in_(ACTIVE_STATUSES))
-        .options(selectinload(Activity.systems))
-    )
-    active: dict[int, Activity] = {}
-    for activity in rows:
-        for system_id in {activity.system_id, *(s.id for s in activity.systems)}:
-            if system_id:
-                active[system_id] = activity
-    return active
 
 
-def system_status(system: System) -> str:
-    """Overall status of a system from the stored status of its instances.
-
-    Diagnostics agents are left out, as in system operations.
-    """
-    instances = [i for i in system.instances if not i.is_agent] or system.instances
-    statuses = {instance.last_status for instance in instances}
-    if not statuses:
-        return STATUS_UNKNOWN
-    if statuses == {"GREEN"}:
-        return "GREEN"
-    if statuses == {"GRAY"}:
-        return "GRAY"
-    if "RED" in statuses:
-        return "RED"
-    if statuses == {STATUS_UNKNOWN}:
-        return STATUS_UNKNOWN
-    return "YELLOW"
 
 
 templates.env.globals["system_status"] = system_status
@@ -427,19 +389,6 @@ def _tab(value: str | None, allowed: tuple[str, ...]) -> str:
     return value if value in allowed else allowed[0]
 
 
-async def _all_systems(session: AsyncSession) -> list[System]:
-    return list(
-        await session.scalars(
-            select(System)
-            .order_by(System.name)
-            .options(
-                selectinload(System.instances).selectinload(Instance.host),
-                selectinload(System.instances).selectinload(Instance.sid),
-                selectinload(System.depends_on),
-                selectinload(System.pool),
-            )
-        )
-    )
 
 
 async def _all_pools(session: AsyncSession) -> list[Pool]:
@@ -447,9 +396,6 @@ async def _all_pools(session: AsyncSession) -> list[Pool]:
     return list(await session.scalars(query))
 
 
-async def _all_hosts(session: AsyncSession) -> list[Host]:
-    query = select(Host).order_by(Host.name).options(selectinload(Host.instances))
-    return list(await session.scalars(query))
 
 
 def _count(values: list[str], keys: tuple[str, ...]) -> list[tuple[str, int]]:
@@ -515,108 +461,39 @@ async def overview(request: Request, session: DbSession) -> HTMLResponse:
 
 # --- landscape --------------------------------------------------------------------------
 
-
-def _instance_type(instance: Instance) -> str | None:
-    key = instance_type_key(instance.features)
-    return key.removeprefix("itype.") if key else None
+APP_DIR = WEB_DIR / "static" / "app"
+_asset_versions: dict[str, tuple[float, str]] = {}
 
 
-@dataclass
-class TreeView:
-    """What the landscape tree shows of one system."""
-
-    instances: list[Instance]
-    agents: list[Instance]
-    # Instances left out because they do not match the instance type filter.
-    hidden: int
-    # Open from the start; set while the instance type filter is active.
-    expanded: bool
-
-
-def _tree_view(system: System, types: list[str] | None) -> TreeView:
-    ordered = sorted(system.instances, key=lambda i: (i.priority, i.label))
-    if types:
-        shown = [i for i in ordered if _instance_type(i) in types]
-    else:
-        shown = ordered
-    return TreeView(
-        instances=[i for i in shown if not i.is_agent],
-        agents=sorted((i for i in shown if i.is_agent), key=lambda i: i.label),
-        hidden=len(ordered) - len(shown),
-        expanded=bool(types),
-    )
+def asset_url(name: str) -> str:
+    """URL of a built file of the browser interface with a content hash, so a new build is
+    loaded at once even though the names stay the same."""
+    path = APP_DIR / name
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return f"/static/app/{name}"
+    cached = _asset_versions.get(name)
+    if cached is None or cached[0] != mtime:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+        cached = _asset_versions[name] = (mtime, digest)
+    return f"/static/app/{name}?v={cached[1]}"
 
 
-def _filter_setting(tab: str) -> str:
-    return f"filters.{tab}"
+templates.env.globals["asset_url"] = asset_url
 
 
 @pages.get("/landscape")
-async def landscape(
-    request: Request, session: DbSession, user: CurrentUser, tab: str | None = None
-) -> HTMLResponse:
-    tab = _tab(tab, ("systems", "hosts"))
-    query = {key: request.query_params.getlist(key) for key in request.query_params}
-    values = read_values(tab, query)
-    active = await _active_by_system(session)
-    context: dict[str, Any] = {
-        "tab": tab,
-        "active": active,
-        "filter_values": values,
-        "filter_fields": [f.name for f in FILTER_FIELDS[tab]],
-        "visible_filters": visible_fields(
-            tab, await get_setting(session, user, _filter_setting(tab)), values
-        ),
+async def landscape(request: Request, user: CurrentUser) -> HTMLResponse:
+    """The landscape is a React page (frontend/src/landscape); it loads its data from
+    /api/landscape. Texts and the user come with the page."""
+    language = _language(request)
+    boot = {
+        "language": language,
+        "texts": all_texts(language),
+        "user": {"name": user.username, "role": user.role},
     }
-    if tab == "systems":
-        all_systems = await _all_systems(session)
-        systems = filter_systems(all_systems, values, system_status, _instance_type)
-        hosts = await _all_hosts(session)
-        options = {
-            "status": [(v, f"status.{v}", True) for v in STATUS_VALUES],
-            "pool": [(str(p.id), p.name, False) for p in await _all_pools(session)]
-            + [("none", "pool.none", True)],
-            "type": [(v, f"itype.{v}", True) for v in TYPE_VALUES],
-            "tag": [(v, v, False) for v in tag_options(all_systems)],
-            "hosttag": [(v, v, False) for v in tag_options(hosts)],
-        }
-        context |= {
-            "systems": systems,
-            "filter_options": options,
-            "instance_count": sum(len(s.instances) for s in systems),
-            "tree": {s.id: _tree_view(s, values.get("type")) for s in systems},
-            "depends": {s.id: depends_on_sids(s) for s in systems},
-        }
-    else:
-        all_hosts = await _all_hosts(session)
-        versions = sorted({h.hostagent_version for h in all_hosts if h.hostagent_version})
-        context |= {
-            "hosts": filter_hosts(all_hosts, values),
-            "host_activities": await _active_by_host(session),
-            "filter_options": {
-                "reach": [(v, f"reach.{v}", True) for v in REACH_VALUES],
-                "agent": [(v, v, False) for v in versions],
-                "tag": [(v, v, False) for v in tag_options(all_hosts)],
-            },
-        }
-    refresh = OVERVIEW_REFRESH_SECONDS if active else None
-    return render(request, "landscape.html", refresh=refresh, **context)
-
-
-@pages.post("/landscape/filters")
-async def choose_filters(
-    session: DbSession,
-    user: CurrentUser,
-    tab: Annotated[str, Form()] = "systems",
-    field: Annotated[list[str], Form()] = [],  # noqa: B006 - FastAPI copies it
-) -> Response:
-    """Remember which filters this user sees."""
-    tab = _tab(tab, ("systems", "hosts"))
-    known = [f.name for f in FILTER_FIELDS[tab]]
-    chosen = ".".join(name for name in known if name in field)
-    await set_setting(session, user, _filter_setting(tab), chosen)
-    await session.commit()
-    return redirect("/landscape", tab=tab)
+    return render(request, "landscape.html", boot=boot, wide=True)
 
 
 @pages.get("/hosts")
@@ -639,12 +516,6 @@ async def _load_host(session: AsyncSession, host_id: int) -> Host:
     return host
 
 
-async def _active_by_host(session: AsyncSession) -> dict[int, Activity]:
-    """Running host operation per host, e.g. a discovery."""
-    rows = await session.scalars(
-        select(Activity).where(Activity.status.in_(ACTIVE_STATUSES), Activity.host_id.is_not(None))
-    )
-    return {activity.host_id: activity for activity in rows}
 
 
 @pages.get("/hosts/{host_id}")
@@ -944,140 +815,6 @@ ACTIVITY_STATUS_ORDER = (
     "FAILED",
     "CANCELLED",
 )
-
-
-# --- mass operations --------------------------------------------------------------------
-
-
-@dataclass
-class MassTarget:
-    id: int
-    label: str
-    detail: str
-    busy: Activity | None
-
-
-async def _mass_targets(
-    request: Request, session: AsyncSession, tab: str, values: dict[str, list[str]]
-) -> tuple[TargetType, list[MassTarget]]:
-    """The targets a mass operation offers for the current landscape filters.
-
-    Systems tab: the filtered systems, or with the instance type filter the matching
-    instances. Hosts tab: the filtered hosts.
-    """
-    language = _language(request)
-    if tab == "hosts":
-        busy = await _active_by_host(session)
-        hosts = filter_hosts(await _all_hosts(session), values)
-        return TargetType.HOST, [MassTarget(h.id, h.name, h.address, busy.get(h.id)) for h in hosts]
-    active = await _active_by_system(session)
-    systems = filter_systems(await _all_systems(session), values, system_status, _instance_type)
-    if values.get("type"):
-        targets = []
-        for system in systems:
-            view = _tree_view(system, values["type"])
-            for instance in view.instances + view.agents:
-                key = instance_type_key(instance.features)
-                kind = translate(language, key) if key else (instance.features or "")
-                detail = f"{system.name} · {kind} · {instance.host.name}"
-                targets.append(
-                    MassTarget(instance.id, instance.label, detail, active.get(system.id))
-                )
-        return TargetType.INSTANCE, targets
-    return TargetType.SYSTEM, [
-        MassTarget(
-            s.id,
-            s.name,
-            translate(language, "tree.instance_one")
-            if len(s.instances) == 1
-            else translate(language, "tree.instances", count=len(s.instances)),
-            active.get(s.id),
-        )
-        for s in systems
-    ]
-
-
-@pages.get("/mass")
-async def mass_form(
-    request: Request,
-    session: DbSession,
-    user: CurrentUser,
-    tab: str | None = None,
-    operation: str | None = None,
-) -> HTMLResponse:
-    """Preview of a mass operation: the filtered targets, the operation and its settings."""
-    tab = _tab(tab, ("systems", "hosts"))
-    query = {key: request.query_params.getlist(key) for key in request.query_params}
-    values = read_values(tab, query)
-    target_type, targets = await _mass_targets(request, session, tab, values)
-    operations = get_context(request).catalog.for_target(target_type, user, mass=True)
-    # A custom operation needs its parameters; the operation is chosen first (GET form).
-    selected = next((op for op in operations if op.key == operation), None)
-    if selected is None and operations:
-        selected = operations[0]
-    back = "/landscape?" + urlencode(
-        [(k, v) for k, v in request.query_params.multi_items() if k == "tab" or k in FILTER_PARAMS]
-    )
-    return render(
-        request,
-        "mass.html",
-        tab=tab,
-        target_type=target_type.value,
-        targets=targets,
-        operations=operations,
-        selected=selected,
-        selected_key=selected.key if selected else "",
-        max_parallel=MAX_PARALLEL,
-        back=back,
-        query_items=[(k, v) for k, v in request.query_params.multi_items() if k != "operation"],
-    )
-
-
-@pages.post("/mass")
-async def mass_submit(
-    request: Request,
-    context: Context,
-    session: DbSession,
-    user: CurrentUser,
-    operation: Annotated[str, Form()] = "",
-    target_type: Annotated[str, Form()] = "",
-    target_id: Annotated[list[int], Form()] = [],  # noqa: B006 - FastAPI copies it
-    parallel: Annotated[int, Form()] = 5,
-    on_error: Annotated[str, Form()] = "continue",
-) -> Response:
-    definition = context.catalog.get(operation)
-    try:
-        kind_of_target = TargetType(target_type)
-    except ValueError as exc:
-        raise HTTPException(422, "Unknown target type") from exc
-    if definition is None or kind_of_target not in definition.targets or not definition.mass:
-        return redirect("/landscape", error="mass_operation")
-    if not has_role(user, definition.role):
-        raise HTTPException(403, f"Requires the role {definition.role}")
-    if not target_id:
-        return redirect("/landscape", error="mass_no_targets")
-    values = None
-    if definition.custom is not None:
-        try:
-            values = parameter_values(definition.custom, await _form_parameters(request))
-        except ParameterError as exc:
-            return redirect("/landscape", error="parameter_values", e_detail=str(exc))
-    try:
-        activity = await context.runner.submit_mass(
-            session,
-            definition.kind,
-            kind_of_target,
-            target_id,
-            parallel=parallel,
-            stop_on_error=on_error == "stop",
-            requested_by=user.username,
-            custom=definition.custom,
-            parameters=values,
-            **({"timeout_seconds": definition.custom.timeout_seconds} if definition.custom else {}),
-        )
-    except (ValueError, TargetNotFoundError):
-        return redirect("/landscape", error="invalid_input")
-    return redirect(f"/activities/{activity.id}")
 
 
 # --- configuration ----------------------------------------------------------------------

@@ -20,7 +20,6 @@ OPERATION_ROUTES = frozenset(
         "/instances/{instance_id}/{operation}",
         "/systems/{system_id}/{operation}",
         "/hosts/{host_id}/{operation}",
-        "/mass",
         "/mass-operations",
         "/instances/{instance_id}/operations/{key}",
         "/systems/{system_id}/operations/{key}",
@@ -42,11 +41,11 @@ def required_role(method: str, path: str) -> Role:
         return Role.VIEWER
     if path.startswith("/configuration"):
         return Role.CONFIGURATOR
-    if path in ("/mass", "/run/{kind}/{target_id}/{key}"):
+    if path == "/run/{kind}/{target_id}/{key}":
         return Role.OPERATOR
     if method in ("GET", "HEAD"):
         return Role.VIEWER
-    if path.endswith("/refresh") or path == "/landscape/filters":
+    if path.endswith("/refresh"):
         return Role.VIEWER
     if path in OPERATION_ROUTES:
         return Role.OPERATOR

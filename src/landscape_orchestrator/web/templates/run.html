@@ -15,8 +15,8 @@
     </dl>
   </section>
   {{ ui.parameter_fields(operation, t) }}
-  <div class="row" data-confirm="{{ t('op.confirm') }}">
-    <button type="submit" onclick="return confirm(this.parentElement.dataset.confirm)">{{ t("custom.run") }}</button>
+  <div class="row">
+    <button type="submit" data-confirm="{{ t('op.confirm') }}">{{ t("custom.run") }}</button>
     <a class="button-link" href="{{ back }}">{{ t("mass.cancel") }}</a>
   </div>
 </form>

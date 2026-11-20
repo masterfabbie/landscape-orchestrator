@@ -78,7 +78,6 @@ def test_roles_build_on_each_other():
         ("GET", "/administration", Role.ADMIN),
         ("POST", "/me/tokens", Role.VIEWER),
         ("POST", "/account/password", Role.VIEWER),
-        ("POST", "/landscape/filters", Role.VIEWER),
     ],
 )
 def test_required_roles(method, path, role):
@@ -382,17 +381,6 @@ async def test_account_tokens(app):
             assert (await script.get("/api/me")).status_code == 401
         bad = await browser.post("/account/tokens", data={"name": "x", "expires_days": "0"})
         assert bad.headers["location"].endswith("error=invalid_input")
-
-
-async def test_filter_choice_is_stored_per_user(app):
-    await make_user(app, "admin", "admin")
-    await make_user(app, "viewer", "viewer")
-    async with client_for(app) as admin, client_for(app) as viewer:
-        await sign_in(admin, "admin")
-        await sign_in(viewer, "viewer")
-        await viewer.post("/landscape/filters", data={"tab": "systems", "field": ["hosttag"]})
-        assert 'name="name"' not in (await viewer.get("/landscape")).text
-        assert 'name="name"' in (await admin.get("/landscape")).text
 
 
 def test_lo_user_command(tmp_path, monkeypatch, capsys):

@@ -16,6 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import ApiToken, User, UserSetting
 
+# Cookie of the signed-in browser session; read by the web pages and the API.
+SESSION_COOKIE = "lo_session"
+# Header the browser interface sends with every API call that changes something. Other
+# sites cannot send it without a CORS preflight, which the server does not allow.
+API_REQUEST_HEADER = "x-lo-request"
+
 MIN_PASSWORD_LENGTH = 12
 MAX_FAILED_LOGINS = 5
 LOCK_SECONDS = 60

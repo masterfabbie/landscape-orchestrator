@@ -159,7 +159,7 @@
         <td>{{ pool.description or "" }}</td>
         <td>{% for system in pool.systems %}<a href="/configuration/systems/{{ system.id }}">{{ system.name }}</a>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">{{ t("deps.none") }}</span>{% endfor %}</td>
         <td>
-          <form method="post" action="/configuration/pools/{{ pool.id }}/delete" data-confirm="{{ t('pool.delete_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+          <form method="post" action="/configuration/pools/{{ pool.id }}/delete" data-confirm="{{ t('pool.delete_confirm') }}">
             <button type="submit" class="danger">{{ t("pool.delete") }}</button>
           </form>
         </td>

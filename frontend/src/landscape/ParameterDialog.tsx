@@ -1,0 +1,84 @@
+// Parameters of a custom operation before it runs, prefilled with the defaults. An empty
+// optional field is not passed (see customops.parameter_values on the server).
+
+import { type FormEvent, useEffect, useRef, useState } from "react";
+import type { OperationDef } from "../lib/types";
+import type { Selection } from "./selection";
+import { useApp } from "./ui";
+
+interface Props {
+  operation: OperationDef;
+  selection: Selection;
+  onCancel: () => void;
+  onRun: (parameters: Record<string, string | boolean>) => void;
+}
+
+export function ParameterDialog({ operation, selection, onCancel, onRun }: Props) {
+  const { t } = useApp();
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [values, setValues] = useState<Record<string, string | boolean>>(() =>
+    Object.fromEntries(
+      operation.parameters.map((p) => [
+        p.name,
+        p.type === "BOOLEAN" ? ["true", "on", "1", "yes"].includes(p.default ?? "") : (p.default ?? ""),
+      ]),
+    ),
+  );
+
+  useEffect(() => {
+    const element = dialog.current;
+    if (element && !element.open) element.showModal?.();
+  }, []);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    onRun(values);
+  };
+
+  return (
+    <dialog ref={dialog} className="lo-dialog" onCancel={onCancel} aria-labelledby="lo-param-title">
+      <form onSubmit={submit}>
+        <h2 id="lo-param-title">{operation.name}</h2>
+        {operation.description && <p>{operation.description}</p>}
+        <p className="lo-muted">{t(`ui.selected_${selection.kind.toLowerCase()}`, { count: selection.ids.length })}</p>
+        <div className="lo-fields">
+          {operation.parameters.map((p) =>
+            p.type === "BOOLEAN" ? (
+              <label key={p.name} className="lo-check-field">
+                <input
+                  type="checkbox"
+                  checked={values[p.name] === true}
+                  onChange={(e) => setValues({ ...values, [p.name]: e.target.checked })}
+                />
+                {p.label} <span className="lo-mono lo-muted">{p.name}</span>
+              </label>
+            ) : (
+              <label key={p.name}>
+                <span>
+                  {p.label}
+                  {p.required ? " *" : ""} <span className="lo-mono lo-muted">{p.name}</span>
+                </span>
+                <input
+                  value={String(values[p.name] ?? "")}
+                  required={p.required}
+                  inputMode={p.type === "INTEGER" ? "numeric" : undefined}
+                  pattern={p.type === "INTEGER" ? "-?[0-9]+" : (p.pattern ?? undefined)}
+                  maxLength={1024}
+                  onChange={(e) => setValues({ ...values, [p.name]: e.target.value })}
+                />
+                {p.help && <small className="lo-muted">{p.help}</small>}
+              </label>
+            ),
+          )}
+        </div>
+        <p className="lo-muted">{t("custom.parameters_hint")}</p>
+        <div className="lo-dialog-buttons">
+          <button type="submit">{t("custom.run")}</button>
+          <button type="button" className="secondary" onClick={onCancel}>
+            {t("mass.cancel")}
+          </button>
+        </div>
+      </form>
+    </dialog>
+  );
+}

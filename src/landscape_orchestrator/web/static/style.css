@@ -66,6 +66,7 @@ a { color: var(--accent); }
 .languages { display: flex; gap: 8px; font-size: 13px; }
 
 main { max-width: 1200px; margin: 0 auto; padding: 20px 24px 48px; }
+main.main-wide { max-width: 1680px; }
 
 h1 { font-size: 22px; margin: 16px 0 8px; }
 h2 { font-size: 17px; margin: 0 0 12px; }
@@ -210,12 +211,12 @@ a.button-link {
 .tile-bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .tile-bars li { display: grid; grid-template-columns: 120px 1fr 36px; align-items: center; gap: 8px; font-size: 13px; }
 .tile-count { text-align: right; font-variant-numeric: tabular-nums; }
-.bar { height: 10px; border-radius: 5px; background: var(--gray-bg); overflow: hidden; }
-.bar-fill { display: block; height: 100%; background: var(--gray-fg); }
-.fill-green, .fill-succeeded { background: var(--green-fg); }
-.fill-yellow, .fill-running, .fill-pending { background: var(--yellow-fg); }
-.fill-red, .fill-failed { background: var(--red-fg); }
-.fill-gray { background: var(--muted); }
+.bar { display: block; width: 100%; height: 10px; border-radius: 5px; background: var(--gray-bg); overflow: hidden; }
+.bar-fill { fill: var(--gray-fg); }
+.fill-green, .fill-succeeded { fill: var(--green-fg); }
+.fill-yellow, .fill-running, .fill-pending { fill: var(--yellow-fg); }
+.fill-red, .fill-failed { fill: var(--red-fg); }
+.fill-gray { fill: var(--muted); }
 
 /* Expandable systems in the configuration */
 .systems-list { display: flex; flex-direction: column; gap: 0.5rem; }

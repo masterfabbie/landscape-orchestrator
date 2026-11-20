@@ -7,6 +7,7 @@
   <title>{% block title %}{% endblock %} · {{ t("app.title") }}</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/ui.js" defer></script>
+  {% block head %}{% endblock %}
 </head>
 <body>
 <header class="topbar">
@@ -32,7 +33,7 @@
     {% endblock %}
   </div>
 </header>
-<main>
+<main{% if wide %} class="main-wide"{% endif %}>
   {% if notice %}<p class="flash notice" role="status">{{ notice }}</p>{% endif %}
   {% if error %}<p class="flash error" role="alert">{{ error }}</p>{% endif %}
   {% if warnings %}

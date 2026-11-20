@@ -226,52 +226,27 @@ async def sign_in(app, username: str = "admin") -> AsyncIterator[httpx.AsyncClie
 
 
 async def test_mass_operation_in_the_browser(app, api):
+    """The landscape page starts mass operations through the API with the session cookie."""
     async with sign_in(app) as browser:
-        landscape = (await browser.get("/landscape")).text
-        assert 'href="/mass?tab=systems"' in landscape
-
-        page = (await browser.get("/mass", params={"tab": "systems", "name": "a"})).text
-        assert 'name="target_type" value="SYSTEM"' in page
-        assert 'name="target_id" value="1" checked' in page
-        assert 'name="target_id" value="3"' not in page  # "C" does not contain "a"
-        assert '<option value="stop" >Stop system</option>' in page
-        assert 'name="operation" value="start"' in page  # the first one is preselected
-        chosen = (
-            await browser.get("/mass", params={"tab": "systems", "operation": "stop"})
-        ).text
-        assert 'name="operation" value="stop"' in chosen
-
-        instances = (await browser.get("/mass", params={"type": "abap"})).text
-        assert 'name="target_type" value="INSTANCE"' in instances
-        assert ">DEV/00</td>" in instances and ">DEV/01</td>" not in instances
-
-        form = {
-            "operation": "start",
-            "target_type": "SYSTEM",
-            "target_id": ["1", "2", "3"],
-            "parallel": "5",
-            "on_error": "continue",
-        }
-        response = await browser.post("/mass", data=form)
-        assert response.headers["location"].startswith("/activities/")
-        parent_id = int(response.headers["location"].rsplit("/", 1)[1])
+        body = {"operation": "start", "target_type": "SYSTEM", "target_ids": [1, 2, 3]}
+        refused = await browser.post("/api/mass-operations", json=body)
+        assert refused.status_code == 403  # without the header of the interface
+        headers = {"X-LO-Request": "1"}
+        response = await browser.post("/api/mass-operations", json=body, headers=headers)
+        assert response.status_code == 202, response.text
+        parent_id = response.json()["id"]
         await app.state.runner.wait(parent_id)
         detail = (await browser.get(f"/activities/{parent_id}")).text
         assert "Mass operation" in detail and "3 targets, 5 at the same time." in detail
         assert detail.count('href="/activities/') >= 3
         child = (await browser.get(f"/activities/{parent_id + 1}")).text
         assert f"Part of mass operation {parent_id}" in child
-
-        none = await browser.post("/mass", data=form | {"target_id": []})
-        assert none.headers["location"].endswith("error=mass_no_targets")
-        wrong = await browser.post("/mass", data=form | {"operation": "discover"})
-        assert wrong.headers["location"].endswith("error=mass_operation")
+        # The old page for mass operations is gone; the landscape does it now.
+        assert (await browser.get("/mass")).status_code == 404
 
 
 async def test_host_operations_in_the_browser(app, api):
     async with sign_in(app) as browser:
-        hosts = (await browser.get("/landscape?tab=hosts")).text
-        assert 'action="/hosts/1/discover"' in hosts and 'href="/mass?tab=hosts"' in hosts
         started = await browser.post("/hosts/1/discover")
         assert started.headers["location"].startswith("/activities/")
         await app.state.runner.wait(int(started.headers["location"].rsplit("/", 1)[1]))
@@ -279,13 +254,11 @@ async def test_host_operations_in_the_browser(app, api):
 
     await make_user(app, "op", "operator")
     async with sign_in(app, "op") as operator:
-        hosts = (await operator.get("/landscape?tab=hosts")).text
-        assert 'action="/hosts/1/discover"' not in hosts and "/mass?tab=hosts" not in hosts
+        data = (await operator.get("/api/landscape")).json()
+        assert "discover" not in {op["key"] for op in data["operations"]}
         assert (await operator.post("/hosts/1/discover")).status_code == 403
-        assert "allows no mass operation" in (await operator.get("/mass?tab=hosts")).text
-        assert (await operator.get("/mass")).status_code == 200
 
     await make_user(app, "view", "viewer")
     async with sign_in(app, "view") as viewer:
-        assert (await viewer.get("/mass")).status_code == 403
-        assert "/mass?" not in (await viewer.get("/landscape")).text
+        data = (await viewer.get("/api/landscape")).json()
+        assert data["operations"] == []  # a viewer may run nothing

@@ -117,6 +117,29 @@ python3 -m venv .venv
 .venv/bin/ruff check .
 ```
 
+Die Landscape-Seite ist eine React-Anwendung (TypeScript, Vite) in `frontend/`. Gebaut wird
+sie nach `src/landscape_orchestrator/web/static/app/`; die gebauten Dateien sind eingecheckt,
+damit der Server ohne Node.js läuft. Nach Änderungen in `frontend/` neu bauen und mit
+einchecken (braucht Node.js 22):
+
+```bash
+npm --prefix frontend ci
+```
+
+```bash
+npm --prefix frontend test
+```
+
+```bash
+npm --prefix frontend run build
+```
+
+Alle Bibliotheken und Schriften werden mitgeliefert, nichts wird zur Laufzeit aus dem
+Internet geladen. Die Versionen stehen fest in `frontend/package-lock.json`; die Lizenzen der
+mitgelieferten Bibliotheken schreibt der Build nach `static/app/THIRD-PARTY-LICENSES.txt`.
+Die CI prüft, dass der eingecheckte Build zu den Quellen passt, und meldet Sicherheitslücken
+(`npm audit`); Dependabot schlägt Updates vor.
+
 ## Server starten
 
 Der Server braucht einen Schlüssel aus einer Umgebungsvariable. `lo-keygen` erzeugt ihn:
@@ -240,7 +263,7 @@ Die Oberfläche hat fünf Bereiche. **Landscape** dient zum Beobachten und Bedie
 | Bereich | Inhalt |
 |---|---|
 | Übersicht | Kennzahlen zu Systemen, Instanzen, Hosts und Aktivitäten der letzten 24 Stunden |
-| Landscape | Tab „Systeme“ als aufklappbarer Baum (System → Instanzen → Diagnostics Agents) mit Status, Pool, Tags, Abhängigkeiten, Knopf „Status aktualisieren“ und Menü „Operationen“ (Start, Stopp, Neustart) je System und Instanz; Tab „Hosts“ mit Version des Host Agents und Tags. Beide Tabs mit Filtern. Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
+| Landscape | Tabelle der Systeme mit aufklappbaren Instanzen und Tabelle der Hosts, Mehrfachauswahl mit Leiste für Operationen, Filter, Detailleiste rechts mit den Prozessen je Instanz, Befehlspalette (siehe unten). Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
 | Activities | Tab „Aktivitäten“ mit allen Operationen und Detailseite mit Protokoll; Tab „Protokolle“ mit den letzten 200 Protokolleinträgen |
 | Configuration | Tab „Hosts“: anlegen, Verbindung ändern, Discovery, Zugangsdaten, Tags, löschen. Tab „Systeme“: nicht zugeordnete Instanzen, Systeme anlegen und zuordnen, Systeme aufklappbar mit ihren Instanzen; Seite eines Systems mit Name, Instanzen, Pool, Abhängigkeiten, Zugangsdaten je SID, Löschen. Tab „Pools“: anlegen und löschen |
 | Administration | Versionsstand und aktuelle Einstellungen; Plattform-Einstellungen folgen |
@@ -251,52 +274,54 @@ Administration; nur „Übersicht“ wird übersetzt.
 **Pools** fassen Systeme zusammen, die zusammengehören, z. B. Entwicklungs-, Test- und
 Produktivsystem eines Produkts. Ein System gehört zu höchstens einem Pool.
 
-### Filter
+### Landscape
 
-Die Listen unter Landscape lassen sich filtern:
+Die Landscape ist eine React-Seite; ohne JavaScript zeigt sie nur einen Hinweis. Die übrigen
+Seiten funktionieren weiter ohne JavaScript.
 
-| Tab | Filter |
-|---|---|
-| Systeme | Name, Status, Pool, Host, Instanztyp, Tags, Host-Tags |
-| Hosts | Name, Erreichbar, Betriebssystem, Host Agent (Version), Tags |
-
-- Innerhalb eines Filters reicht ein Treffer (Pool A oder B, Tag `dev` oder `sla=2`); alle
-  gesetzten Filter müssen zutreffen.
-- Textfilter suchen ohne Groß-/Kleinschreibung nach enthaltenem Text. „Host“ prüft Hostname
-  und Instanz-Hostname aller Instanzen des Systems; „Host-Tags“ findet Systeme mit einer
-  Instanz auf einem Host mit dem Tag.
-- Die Filterwerte stehen in der Adresse; eine gefilterte Ansicht lässt sich als Lesezeichen
-  speichern.
-- Unter „Filter anpassen“ wählt man, welche Filter angezeigt werden. Die Auswahl wird pro
-  Benutzer gespeichert. Filter mit einem Wert werden immer angezeigt.
-
-### Systembaum und Menü „Operationen“
-
-- Systeme sind zunächst zugeklappt. Aufgeklappt zeigen sie ihre Instanzen in Startreihenfolge
-  mit Typ, Host, Status und „Hängt ab von“; Diagnostics Agents stehen in einer eigenen,
-  zuklappbaren Untergruppe. „Alle aufklappen“ und „Alle zuklappen“ gibt es über der Tabelle.
-- Welche Systeme offen sind, merkt sich der Browser für diesen Tab, damit das automatische
-  Neuladen während einer Aktivität nichts zuklappt.
-- Mit dem Filter „Instanztyp“ sind die passenden Systeme gleich aufgeklappt und zeigen **nur
-  die passenden Instanzen**; ein Hinweis nennt, wie viele ausgeblendet sind.
-- Start, Stopp und Neustart liegen im Menü „Operationen“ jeder Zeile (System, Instanz,
-  Diagnostics Agent), auch auf System- und Hostseite. Läuft eine Aktivität, sind die Einträge
-  ausgegraut und das Menü verweist auf sie. Das Menü sehen Operator, Configurator und Admin.
+- **Tabellen:** Tab „Systeme“ mit Status, Instanzen (je Instanz ein farbiges Kästchen), Pool,
+  „Hängt ab von“, Tags und laufender Aktivität. Systeme sind zunächst zugeklappt;
+  aufgeklappt zeigen sie ihre Instanzen in Startreihenfolge mit Typ, Host und Status,
+  Diagnostics Agents zuletzt. Welche Systeme offen sind, merkt sich der Browser für diesen
+  Tab. Tab „Hosts“ mit Erreichbarkeit, Version des Host Agents, Betriebssystem, Tags und
+  letzter Discovery.
+- **Auswählen:** Systeme, Instanzen oder Hosts lassen sich ankreuzen, auch alle angezeigten
+  auf einmal; gemischt wird nicht (eine Instanz anzukreuzen hebt eine Auswahl von Systemen
+  nicht auf, sie wird nur nicht ergänzt). Esc hebt die Auswahl auf.
+- **Leiste unten:** Sie zeigt die Operationen, die zur ganzen Auswahl passen (Zieltyp,
+  Rolle des Benutzers, Instanztypen eigener Operationen). Ein Ziel läuft direkt, mehrere als
+  Massenoperation, dann mit Einstellung „gleichzeitig“ (Standard 5) und „bei Fehler
+  anhalten“. Stopp und Neustart brauchen einen zweiten Klick auf denselben Knopf
+  („Wirklich: …“). Eigene Operationen mit Parametern öffnen erst ein Formular. Danach
+  erscheint eine Meldung mit Link zur Aktivität.
+- **Detailleiste rechts:** Ein Klick auf den Namen öffnet sie. Für ein System zeigt sie Pool,
+  Abhängigkeiten, Tags, die Operationen und die Instanzen in Startreihenfolge; je Instanz die
+  **Prozesse aus `GetProcessList`** mit Farbe, Text, Startzeit und PID, frisch gelesen und alle
+  15 Sekunden erneuert (der gespeicherte Status der Instanz wird dabei aktualisiert). „Status
+  aktualisieren“ liest alle Instanzen neu. Für einen Host: Adresse, Host Agent,
+  Betriebssystem, letzte Discovery und die Instanzen darauf.
+- **Befehlspalette:** Strg+K (Mac: Cmd+K) sucht Systeme, Hosts und Seiten und bietet die
+  Operationen der aktuellen Auswahl an; Pfeiltasten wählen, Enter führt aus.
+- **Live:** Die Seite bekommt Änderungen über `/api/events` mit und lädt dann neu, ohne die
+  Seite neu aufzubauen; Auswahl, Filter und offene Systeme bleiben erhalten.
+- **Filter:** Suchfeld (Taste `/`) für System, Beschreibung, SID, Instanz, Host und Tags;
+  dazu Listen für Status, Pool, Instanztyp, Tags und Host-Tags (Hosts: Erreichbar, Host
+  Agent, Tags). Innerhalb eines Filters reicht ein Treffer (Pool A oder B, Tag `dev` oder
+  `sla=2`; `sla` passt zu jedem Wert), alle gesetzten Filter müssen zutreffen. Mit dem Filter
+  „Instanztyp“ sind die passenden Systeme aufgeklappt und zeigen nur die passenden Instanzen,
+  z. B. um alle ABAP-Anwendungsserver auszuwählen. Die Filter stehen in der Adresse; eine
+  gefilterte Ansicht lässt sich als Lesezeichen speichern.
+- Auf den Seiten eines Systems und eines Hosts bleibt das Menü „Operationen“.
 
 ### Massenoperationen
 
-Der Knopf **„Massenoperation“** über der Systemliste bzw. Hostliste nimmt die aktuellen Filter
-mit und öffnet eine Vorschau:
+Mehrere ausgewählte Systeme, Instanzen oder Hosts laufen als Massenoperation (Leiste unten in
+der Landscape oder `POST /api/mass-operations`). Typische Auswahl: alle gefilterten Systeme,
+mit dem Filter „Instanztyp“ z. B. alle ABAP-Anwendungsserver, oder Hosts für eine Discovery.
 
-| Ansicht | Ziele |
-|---|---|
-| Systeme ohne Filter „Instanztyp“ | die gefilterten Systeme |
-| Systeme mit Filter „Instanztyp“ | die passenden Instanzen, z. B. alle ABAP-Anwendungsserver |
-| Hosts | die gefilterten Hosts (bisher: Discovery) |
-
-In der Vorschau wählt man die Ziele (alle vorausgewählt), die Operation, wie viele Ziele
-gleichzeitig laufen (Standard 5, höchstens 20) und ob bei einem Fehler weitergemacht (Standard)
-oder angehalten wird. Daraus entsteht eine **Sammelaktivität** mit einer Teilaktivität je Ziel:
+Einstellbar ist, wie viele Ziele gleichzeitig laufen (Standard 5, höchstens 20) und ob bei
+einem Fehler weitergemacht (Standard) oder angehalten wird. Daraus entsteht eine
+**Sammelaktivität** mit einer Teilaktivität je Ziel:
 
 - Ausgewählte Systeme, die voneinander abhängen, laufen in Reihenfolge: beim Start und Neustart
   zuerst die Abhängigkeiten, beim Stopp zuerst die abhängigen Systeme. Scheitert eine
@@ -309,13 +334,11 @@ oder angehalten wird. Daraus entsteht eine **Sammelaktivität** mit einer Teilak
   „10 succeeded, 1 failed, 1 skipped“.
 - Welche Operationen angeboten werden, steht im **Katalog der Operationen**, zusammen mit
   Zielen und nötiger Rolle. Start, Stopp und Neustart brauchen Operator, die Discovery
-  Configurator. Eigene Operationen (siehe unten) erscheinen automatisch in Menüs und
-  Massenoperationen; ihre Parameter stehen dann in der Vorschau. Die Operation wählt man dort
-  zuerst und übernimmt sie mit „Auswählen“, damit die passenden Felder erscheinen.
+  Configurator. Eigene Operationen (siehe unten) erscheinen automatisch in Menüs, in der Leiste
+  und in der Befehlspalette; ihre Parameter fragt ein Formular ab.
 
-**Host-Operationen:** Hosts haben jetzt ebenfalls ein Menü „Operationen“ (Landscape → Hosts und
-Hostseite). Es enthält die Discovery, die dort als Aktivität mit Protokoll läuft, und eigene
-Operationen für Hosts.
+**Host-Operationen:** Die Discovery und eigene Operationen für Hosts laufen als Aktivität mit
+Protokoll (Landscape → Hosts, Hostseite).
 
 ### Eigene Operationen
 
@@ -438,6 +461,11 @@ Startpriorität. Systeme legt man selbst aus Instanzen an (siehe „Systeme anle
 Alle Aufrufe unter `/api` verlangen ein persönliches API-Token im Header
 `Authorization: Bearer <token>`. Tokens legt man unter „Mein Konto“ an; sie haben die Rechte
 der Rolle ihres Benutzers und können ein Ablaufdatum haben. Gespeichert wird nur ein Hash.
+Die Oberfläche im Browser ruft die API mit dem Sitzungs-Cookie auf; Aufrufe, die etwas
+ändern, brauchen dann zusätzlich den Header `X-LO-Request: 1`. Andere Websites können ihn
+nicht mitschicken (kein CORS) und so nicht im Namen des angemeldeten Benutzers handeln.
+Alle Antworten tragen eine strikte Content-Security-Policy: Skripte, Stile, Schriften und
+Verbindungen nur vom Server selbst, keine Inline-Skripte, keine Einbettung in fremde Seiten.
 Die interaktive Schnittstellenbeschreibung unter `/api/docs` ist ohne Token lesbar; sie enthält
 keine Inventardaten.
 
@@ -480,6 +508,10 @@ keine Inventardaten.
 | GET | `/api/activities` | Aktivitäten, neueste zuerst (`?limit=`) |
 | GET | `/api/activities/{id}` | Aktivität mit Protokoll; bei einer Massenoperation mit `children` |
 | GET | `/api/operations` | Katalog der Operationen, die der eigene Benutzer ausführen darf, eigene mit Parametern |
+| GET | `/api/landscape` | alles, was die Landscape zeigt: Systeme mit Instanzen, Status und laufender Aktivität, Hosts, Pools, die Operationen des Benutzers |
+| GET | `/api/instances/{id}/processes` | Prozesse einer Instanz, jetzt gelesen per `GetProcessList`; aktualisiert den gespeicherten Status |
+| GET | `/api/events` | Server-Sent Events: `hello`, dann `change`, sobald sich Aktivitäten, Status oder Inventar ändern (Datenbank wird alle 2 Sekunden geprüft) |
+| GET | `/api/i18n` | alle Texte der Oberfläche in der Sprache des Benutzers |
 | GET, POST | `/api/custom-operations` | eigene Operationen auflisten bzw. anlegen (nur Admin), mit `parameters` |
 | GET, PUT, DELETE | `/api/custom-operations/{id}` | eigene Operation lesen, ersetzen (samt Parametern) bzw. löschen (nur Admin) |
 | POST | `/api/instances/{id}/operations/{key}`, `/api/systems/{id}/operations/{key}`, `/api/hosts/{id}/operations/{key}` | eigene Operation ausführen (`{"parameters": {"KRNLREL": "793", "ONLYPREPARE": true}}`, `?timeout=` überschreibt das Zeitlimit) |

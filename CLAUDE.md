@@ -47,6 +47,18 @@ Benutzer ohne Oberfläche anlegen (fragt das Passwort ab):
 .venv/bin/lo-user add chief --role admin
 ```
 
+Frontend (React, TypeScript, Vite in `frontend/`): Tests und Build; der Build schreibt nach
+`src/landscape_orchestrator/web/static/app/` und wird mit eingecheckt (der Server braucht kein
+Node.js). Nach jeder Änderung in `frontend/` neu bauen, sonst schlägt die CI fehl:
+
+```bash
+npm --prefix frontend test
+```
+
+```bash
+npm --prefix frontend run build
+```
+
 Schema der Datenbank aus `LO_DATABASE_URL` anzeigen bzw. migrieren (macht der Server beim Start
 auch selbst):
 
@@ -54,7 +66,9 @@ auch selbst):
 .venv/bin/lo-db current
 ```
 
-Vor jedem Commit müssen Tests und Lint grün sein. Die CI prüft beides auf Python 3.11 und 3.13.
+Vor jedem Commit müssen Tests und Lint grün sein. Die CI prüft beides auf Python 3.11 und 3.13,
+dazu im Job `frontend` Vitest, TypeScript, den Build (eingecheckter Build muss gleich sein) und
+`npm audit`.
 
 ## Aufbau
 
@@ -76,7 +90,9 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `dependencies.py` | Abhängigkeiten zwischen Systemen, Reihenfolge von Start und Stopp |
 | `roles.py` | Rolle einer Instanz aus ihren Features: Datenbank, zentrale Dienste, Anwendungsserver, Diagnostics Agent; Instanztyp für Filter (`instance_type_key`) |
 | `tags.py` | Tags von Hosts und Systemen (Schlüssel mit optionalem Wert): prüfen, ersetzen, vergleichen |
-| `filters.py` | Filter der Landscape-Listen (Werte aus der Adresse, sichtbare Filter) |
+| `filters.py` | Werte der Landscape-Filter; gefiltert wird im Browser (`frontend/src/landscape/filter.ts`) |
+| `landscape.py` | Daten der Landscape-Seite (`landscape_snapshot`), Gesamtstatus eines Systems, laufende Aktivitäten je System und Host, Prozesse einer Instanz live (`read_processes`) |
+| `events.py` | Änderungen als Server-Sent Events (`/api/events`): Fingerabdruck der Datenbank, alle 2 Sekunden geprüft |
 | `status.py` | Status lesen ohne Aktivität: Instanzen eines Systems (Knopf „Status aktualisieren“) und Datenbanken |
 | `systems.py` | Systeme als Gruppen von Instanzen: anlegen, zuordnen, entfernen, löschen, Namens- und Zuordnungsvorschläge, abgeleitete „Hängt ab von“-SIDs |
 | `pools.py` | Zuordnung von Systemen zu Pools |
@@ -87,6 +103,11 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `api/` | REST-API unter `/api`, geschützt durch persönliche API-Tokens; `create_app` baut die Anwendung |
 | `web/` | servergerenderte Oberfläche (Jinja2), Anmeldung, Einrichtung, Konto, Übersetzungen |
 | `mock/` | simulierter Host Agent und sapstartsrv für Entwicklung und Tests |
+
+Außerhalb des Pakets: `frontend/` mit der Landscape-Seite (`src/landscape/`: `Landscape.tsx`
+Seite und Zustand, `SystemsTable`, `HostsTable`, `FilterBar`, `ActionBar`, `Drawer`
+Detailleiste, `CommandPalette`, `ParameterDialog`; `filter.ts` und `selection.ts` reine Logik
+mit Tests; `src/lib/` API-Aufrufe, Texte, Typen).
 
 Wichtige Entwurfsentscheidungen:
 
@@ -168,9 +189,8 @@ Wichtige Entwurfsentscheidungen:
 - **Discovery löscht nichts**, sie meldet fehlende Einträge nur.
 - **JavaScript ist erlaubt** (Entscheidung des Eigentümers, 2026-11-20), auch ein Framework wie
   React, wo es echten Nutzen bringt: Mehrfachauswahl mit Aktionsleiste, Live-Ansichten,
-  Drag-and-drop. Die bisherige Oberfläche funktioniert noch ohne JavaScript; `static/ui.js`
-  ergänzt dort nur: offene Systeme im Baum merken (sessionStorage), „Alle auf-/zuklappen“,
-  Menüs schließen. Eine neue Oberfläche baut auf der REST-API auf. Größere Umbauten erst
+  Drag-and-drop. Die Jinja-Seiten funktionieren noch ohne JavaScript; `static/ui.js` ergänzt
+  dort nur: Menüs schließen und Rückfragen (`data-confirm`). Eine neue Oberfläche baut auf der REST-API auf. Größere Umbauten erst
   vorschlagen.
 - **Bibliotheken und Schriften werden mitgeliefert** (Entscheidung des Eigentümers,
   2026-11-20): gebaut und vom LO-Server ausgeliefert, nie von einem CDN oder aus dem
@@ -192,10 +212,26 @@ Wichtige Entwurfsentscheidungen:
     erscheint, muss konfigurierbar sein (z. B. stündlich geplante Operationen ausblenden).
   - Operationsvorlagen als Kette von Bausteinen mit Parametern je Schritt, Verhalten bei
     Fehler und Einplanen: genau so umsetzen.
-- **Systembaum der Landscape:** je System ein `<tbody class="tree-system">`; Auf- und
-  Zuklappen per Checkbox und CSS `:has()`, ohne Server. Zugeklappt zu Beginn (Wunsch des
-  Eigentümers). Der Filter „Instanztyp“ klappt auf und zeigt nur passende Instanzen
-  (`TreeView` in `web/routes.py`), als Grundlage für Massenoperationen.
+- **Landscape als React-Seite** (Phase 1 des Umstiegs, ersetzt die alte Seite direkt;
+  Wunsch des Eigentümers): `/landscape` liefert nur eine Hülle (`landscape.html` mit
+  `base.html`, Startdaten als `<script type="application/json" id="lo-boot">`: Sprache, alle
+  Texte, Benutzer) und lädt `static/app/landscape.js`; die Daten kommen aus `/api/landscape`.
+  Dateinamen ohne Hash, `asset_url()` hängt `?v=<Inhalts-Hash>` an. Filter, Auswahl und
+  welche Operation passt, rechnet der Browser (`filter.ts`, `selection.ts`). Ein Ziel läuft
+  über die einzelnen Endpunkte, mehrere und Host-Operationen über `/api/mass-operations`.
+  Stopp und Neustart brauchen in der Leiste einen zweiten Klick (für Massenoperationen keine
+  weitere Rückfrage, Wunsch des Eigentümers). Systeme sind zu Beginn zugeklappt; der Filter
+  „Instanztyp“ klappt auf und zeigt nur passende Instanzen. Live über `/api/events`
+  (React Query lädt neu). Die alte Seite `/mass` und `/landscape/filters` (sichtbare Filter
+  pro Benutzer) gibt es nicht mehr. Die übrigen Seiten bleiben Jinja2 bis zu ihrer Phase.
+- **API mit Sitzungs-Cookie:** `require_user` nimmt ein Token oder das Sitzungs-Cookie; mit
+  Cookie brauchen ändernde Aufrufe den Header `X-LO-Request: 1` (Schutz gegen fremde Seiten,
+  es gibt kein CORS), ein Startpasswort sperrt die API. Rollen wie bisher über
+  `permissions.required_role`.
+- **Content-Security-Policy** auf allen Antworten (Middleware in `create_app`): nur `'self'`,
+  keine Inline-Skripte oder -Stile. Rückfragen der Jinja-Seiten laufen deshalb über
+  `data-confirm` und `static/ui.js`, nicht über `onsubmit`; Balken der Übersicht sind SVG.
+  Neue Vorlagen dürfen keine `style=`-Attribute und keine Inline-Handler enthalten.
 - **Menü „Operationen“** (`operation_buttons` in `macros.html`, ein `<details class="menu">`)
   statt einzelner Knöpfe; „Status aktualisieren“ bleibt ein eigener Knopf. Die Einträge kommen
   aus dem **Katalog** (`catalog.py`, im Template über `ops("SYSTEM")` usw., gefiltert nach
@@ -275,6 +311,11 @@ Wichtige Entwurfsentscheidungen:
   ohne es kann die Aktivität mit der falschen Uhr schon fertig sein (wackelige Tests).
 - Zeit wird über eine falsche Uhr gesteuert (`FakeClock` in `tests/conftest.py`). Tests, die
   Operationen ausführen, übergeben `sleep` und `clock` an `create_app`.
+- Die neuen API-Teile für die Oberfläche (Cookie, Landscape-Daten, Prozesse, Ereignisse,
+  Texte, Header) testet `tests/test_interface_api.py`; was die Landscape zeigt, prüfen die
+  Web-Tests über `/api/landscape`. Das Frontend hat eigene Tests (Vitest, `*.test.ts(x)` in
+  `frontend/src`): Filter mit denselben Fällen wie früher auf dem Server, Auswahllogik,
+  Aktionsleiste. Ende-zu-Ende-Tests im Browser gibt es noch nicht.
 - Eigene Operationen testet `tests/test_custom.py` mit den Fixtures von `test_mass.py` und der
   simulierten Operation `LO_TEST` (`PARAM-SLEEP` Laufzeit, `PARAM-RC` Exit-Code).
 - Neue Funktionen brauchen Tests, auch für Fehlerfälle. Verhalten, das der Mock simulieren
@@ -385,3 +426,5 @@ Abschnitt „Teststand gegen echte Hosts“ hier und im README aktualisieren.
 - Protokollmeldungen der Aktivitäten sind nur englisch
 - kein Verschieben von Instanzen (Adaptive Computing)
 - Übersicht nur mit einfachen Kennzahlen; Diagramme und Diagnosenachrichten fehlen noch
+- keine Ende-zu-Ende-Tests der Oberfläche im Browser (geprüft wurde die Landscape von Hand
+  mit Playwright gegen `lo-server --mock`)

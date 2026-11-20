@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -33,7 +34,9 @@ from ..customops import (
 from ..db import create_engine, create_session_factory, upgrade_database
 from ..dependencies import DependencyError, set_dependencies
 from ..discovery import DiscoveryError, discover_host
+from ..events import change_events
 from ..hosts import Connection, HostChangeError, update_connection
+from ..landscape import landscape_snapshot, read_processes
 from ..models import (
     Activity,
     ApiToken,
@@ -72,16 +75,20 @@ from ..systems import (
 )
 from ..tags import TagError, matches, parse_tags, replace_tags
 from ..users import (
+    API_REQUEST_HEADER,
+    SESSION_COOKIE,
     UserError,
     create_token,
     create_user,
     has_role,
+    session_user,
     set_password,
     token_user,
     update_user,
     user_count,
 )
 from ..web import AppContext, register_web
+from ..web.i18n import LANGUAGE_COOKIE, all_texts, pick_language
 from .schemas import (
     ActivityDetail,
     ActivityOut,
@@ -133,6 +140,13 @@ def _systems_query():
             selectinload(System.pool),
         )
     )
+
+
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+    "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; "
+    "form-action 'self'; frame-ancestors 'none'"
+)
 
 
 def create_app(
@@ -191,15 +205,36 @@ def create_app(
         session: Session,
         credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     ) -> User:
-        """The user of the personal API token, if the route allows the user's role."""
-        user = await token_user(session, credentials.credentials if credentials else "")
+        """The user of the personal API token or, for the browser interface, of the session
+        cookie, if the route allows the user's role.
+
+        With the cookie, calls that change something must carry the header X-LO-Request:
+        other sites cannot send it (no CORS), so they cannot act in the user's name.
+        """
+        if credentials is not None:
+            user = await token_user(session, credentials.credentials)
+            await session.commit()  # records when the token was last used
+        else:
+            user = await session_user(
+                session, settings.secret_key, request.cookies.get(SESSION_COOKIE)
+            )
+            if user is not None:
+                if request.method not in ("GET", "HEAD") and (
+                    request.headers.get(API_REQUEST_HEADER) != "1"
+                ):
+                    raise HTTPException(
+                        status.HTTP_403_FORBIDDEN, "Missing header X-LO-Request"
+                    )
+                if user.must_change_password:
+                    raise HTTPException(
+                        status.HTTP_403_FORBIDDEN, "Change the start password first"
+                    )
         if user is None:
             raise HTTPException(
                 status.HTTP_401_UNAUTHORIZED,
                 "Missing, invalid or expired API token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        await session.commit()  # records when the token was last used
         route = request.scope.get("route")
         needed = required_role(request.method, getattr(route, "path", request.url.path))
         if not has_role(user, needed):
@@ -578,6 +613,52 @@ def create_app(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Activity not found")
         return activity
 
+    # --- browser interface ----------------------------------------------------------------
+
+    @api.get("/landscape")
+    async def get_landscape(session: Session, user: CurrentUser) -> dict[str, object]:
+        """Systems with instances, hosts, pools and the operations this user may run, as the
+        landscape page shows them."""
+        return await landscape_snapshot(session, catalog, user)
+
+    @api.get("/instances/{instance_id}/processes")
+    async def get_processes(instance_id: int, session: Session) -> dict[str, object]:
+        """Processes of an instance, read now from GetProcessList of its sapstartsrv; the
+        stored status of the instance is updated."""
+        instance = await session.scalar(
+            select(Instance)
+            .where(Instance.id == instance_id)
+            .options(selectinload(Instance.host), selectinload(Instance.sid))
+        )
+        if instance is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Instance not found")
+        return await read_processes(session, instance, clients)
+
+    @api.get("/events")
+    async def events(request: Request, user: CurrentUser) -> StreamingResponse:
+        """Server-Sent Events: "hello" at once, then "change" whenever activities, status or
+        inventory change. The interface reloads what it shows."""
+        stream = change_events(
+            session_factory,
+            app.state.events_sleep,
+            interval=app.state.events_interval,
+            disconnected=request.is_disconnected,
+            limit=app.state.events_limit,
+        )
+        return StreamingResponse(
+            stream,
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @api.get("/i18n")
+    async def texts(request: Request, user: CurrentUser) -> dict[str, object]:
+        """All texts of the interface in the user's language."""
+        language = pick_language(
+            request.cookies.get(LANGUAGE_COOKIE), request.headers.get("accept-language")
+        )
+        return {"language": language, "texts": all_texts(language)}
+
     @api.get("/operations", response_model=list[OperationOut])
     async def list_operations(user: CurrentUser) -> list[dict[str, object]]:
         """The operations of the catalog this user may run, custom ones with parameters."""
@@ -929,6 +1010,19 @@ def create_app(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     app.state.runner = runner
+    # Event stream: how often the database is checked for changes; limit only for tests.
+    app.state.events_interval = 2.0
+    app.state.events_sleep = asyncio.sleep
+    app.state.events_limit = None
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        # Everything comes from this server; no inline scripts or styles, no frames.
+        response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        return response
     app.state.catalog = catalog
     app.state.setup_code = None
     app.state.session_factory = session_factory

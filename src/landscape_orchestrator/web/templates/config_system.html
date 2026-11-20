@@ -103,7 +103,7 @@
 
 <section class="card">
   <h2>{{ t("system.delete") }}</h2>
-  <form method="post" action="/configuration/systems/{{ system.id }}/delete" data-confirm="{{ t('system.delete_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+  <form method="post" action="/configuration/systems/{{ system.id }}/delete" data-confirm="{{ t('system.delete_confirm') }}">
     <button type="submit" class="danger">{{ t("system.delete") }}</button>
   </form>
 </section>

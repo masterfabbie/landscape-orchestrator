@@ -21,7 +21,7 @@
     {% if disabled %}<span class="menu-item disabled" aria-disabled="true">{{ operation.custom.name }}</span>
     {% else %}<a class="menu-item" href="/run{{ action }}/{{ operation.key }}">{{ operation.custom.name }}…</a>{% endif %}
     {% else %}
-    <form method="post" action="{{ action }}/{{ operation.key }}" data-confirm="{{ t('op.confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+    <form method="post" action="{{ action }}/{{ operation.key }}" data-confirm="{{ t('op.confirm') }}">
       <button type="submit" class="menu-item{{ ' danger' if operation.danger else '' }}" {% if disabled %}disabled{% endif %}>
         {{ t(operation.label_key(target)) }}
       </button>
@@ -146,7 +146,7 @@
     <td class="mono">{{ depends.get(instance.id, []) | join(", ") }}</td>
     {% if show_pool %}<td>{{ system.pool.name if system.pool else "" }}</td>{% endif %}
     <td>
-      <form method="post" action="/configuration/systems/{{ system.id }}/instances/{{ instance.id }}/remove" data-confirm="{{ t('system.remove_instance_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+      <form method="post" action="/configuration/systems/{{ system.id }}/instances/{{ instance.id }}/remove" data-confirm="{{ t('system.remove_instance_confirm') }}">
         {% if back %}<input type="hidden" name="back" value="{{ back }}">{% endif %}
         <button type="submit" class="link">{{ t("system.remove_instance") }}</button>
       </form>

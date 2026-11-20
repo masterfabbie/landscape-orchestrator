@@ -12,7 +12,7 @@
       {% for status, count in counts %}
       <li>
         <span class="tile-label">{{ t(kind ~ "." ~ status) }}</span>
-        <span class="bar"><span class="bar-fill fill-{{ status | lower }}" style="width: {{ (100 * count / total) | round(1) }}%"></span></span>
+        <svg class="bar" viewBox="0 0 100 1" preserveAspectRatio="none" aria-hidden="true"><rect class="bar-fill fill-{{ status | lower }}" width="{{ (100 * count / total) | round(1) }}" height="1"></rect></svg>
         <span class="tile-count">{{ count }}</span>
       </li>
       {% endfor %}

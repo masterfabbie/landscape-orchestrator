@@ -5,7 +5,7 @@
 <p class="crumbs"><a href="/configuration?tab=operations">{{ t("nav.configuration") }}</a> / {{ t("tab.operations") }}</p>
 <div class="card-head">
   <h1>{{ operation.name }} <span class="mono muted">{{ operation.key }}</span></h1>
-  <form method="post" action="/configuration/operations/{{ operation.id }}/delete" data-confirm="{{ t('custom.delete_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+  <form method="post" action="/configuration/operations/{{ operation.id }}/delete" data-confirm="{{ t('custom.delete_confirm') }}">
     <button type="submit" class="danger">{{ t("custom.delete") }}</button>
   </form>
 </div>
@@ -22,7 +22,7 @@
   <details class="system-row">
     <summary><span class="mono strong">PARAM-{{ p.name }}</span> {{ p.label }} · {{ t("custom.type." ~ p.type) }}{% if p.required %} · {{ t("custom.required") }}{% endif %}{% if p.default %} · {{ t("custom.default") }}: <span class="mono">{{ p.default }}</span>{% endif %}</summary>
     {{ ui.parameter_form("/configuration/operations/" ~ operation.id ~ "/parameters/" ~ p.id, p, t, parameter_types) }}
-    <form method="post" action="/configuration/operations/{{ operation.id }}/parameters/{{ p.id }}/delete" data-confirm="{{ t('custom.parameter_delete_confirm') }}" onsubmit="return confirm(this.dataset.confirm)">
+    <form method="post" action="/configuration/operations/{{ operation.id }}/parameters/{{ p.id }}/delete" data-confirm="{{ t('custom.parameter_delete_confirm') }}">
       <button type="submit" class="danger">{{ t("custom.parameter_delete") }}</button>
     </form>
   </details>
