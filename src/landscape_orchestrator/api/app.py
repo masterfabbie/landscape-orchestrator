@@ -24,6 +24,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import __version__
+from ..attention import (
+    DEFAULT_RULES,
+    Exceptions,
+    RuleError,
+    load_exceptions,
+    load_rules,
+    save_exceptions,
+    save_rules,
+)
 from ..catalog import Catalog, OperationDef
 from ..connections import ClientFactory
 from ..crypto import SecretBox
@@ -39,7 +48,7 @@ from ..dependencies import DependencyError, set_dependencies
 from ..discovery import DiscoveryError, discover_host
 from ..events import change_events
 from ..hosts import Connection, HostChangeError, update_connection
-from ..landscape import landscape_snapshot, operation_row, read_processes
+from ..landscape import landscape_snapshot, operation_row, overview_snapshot, read_processes
 from ..models import (
     Activity,
     ApiToken,
@@ -102,6 +111,8 @@ from ..web.i18n import LANGUAGE_COOKIE, all_texts, pick_language
 from .schemas import (
     ActivityDetail,
     ActivityOut,
+    AttentionExceptionsIn,
+    AttentionRulesIn,
     BuildingBlocksOut,
     Credentials,
     CustomOperationIn,
@@ -146,7 +157,13 @@ from .schemas import (
 FAVORITES = "favorites.operations"
 
 # Status codes of SystemChangeError.code; everything else is 422.
-_CHANGE_STATUS = {"unknown_system": 404, "name_taken": 409, "assigned": 409, "busy": 409}
+_CHANGE_STATUS = {
+    "unknown_system": 404,
+    "unknown_stage": 422,
+    "name_taken": 409,
+    "assigned": 409,
+    "busy": 409,
+}
 
 
 def _systems_query():
@@ -514,7 +531,10 @@ def create_app(
 
     @api.patch("/systems/{system_id}", response_model=SystemOut)
     async def update_system_route(system_id: int, body: SystemUpdate, session: Session) -> System:
-        await change(session, update_system(session, system_id, body.name, body.description))
+        stage = body.stage if "stage" in body.model_fields_set else ...
+        await change(
+            session, update_system(session, system_id, body.name, body.description, stage)
+        )
         return await load_system(session, system_id)
 
     @api.delete("/systems/{system_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -952,6 +972,43 @@ def create_app(
         """Systems with instances, hosts, pools and the operations this user may run, as the
         landscape page shows them."""
         return await landscape_snapshot(session, catalog, user)
+
+    @api.get("/overview")
+    async def get_overview(session: Session, user: CurrentUser) -> dict[str, object]:
+        """The overview: key figures, systems as a matrix of pools and stages, and what
+        needs attention by the rules and this user's exceptions."""
+        return await overview_snapshot(session, catalog, user)
+
+    @api.get("/attention-rules")
+    async def get_attention_rules(session: Session, user: CurrentUser) -> dict[str, object]:
+        """The rules of "needs attention", the same for everyone."""
+        return {"rules": await load_rules(session), "defaults": DEFAULT_RULES}
+
+    @api.put("/attention-rules")
+    async def put_attention_rules(body: AttentionRulesIn, session: Session) -> dict[str, object]:
+        """Change the rules (admin)."""
+        try:
+            rules = await save_rules(session, body.rules)
+        except RuleError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        await session.commit()
+        return {"rules": rules, "defaults": DEFAULT_RULES}
+
+    @api.get("/me/attention")
+    async def get_my_attention(session: Session, user: CurrentUser) -> dict[str, object]:
+        """The user's exceptions: rules switched off, systems and pools hidden."""
+        return (await load_exceptions(session, user)).to_dict()
+
+    @api.put("/me/attention")
+    async def put_my_attention(
+        body: AttentionExceptionsIn, session: Session, user: CurrentUser
+    ) -> dict[str, object]:
+        try:
+            await save_exceptions(session, user, Exceptions(**body.model_dump()))
+        except RuleError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        await session.commit()
+        return (await load_exceptions(session, user)).to_dict()
 
     @api.get("/instances/{instance_id}/processes")
     async def get_processes(instance_id: int, session: Session) -> dict[str, object]:

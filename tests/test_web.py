@@ -326,24 +326,10 @@ async def test_landscape_page_loads_the_interface(browser):
 # --- overview ----------------------------------------------------------------------------
 
 
-async def test_empty_overview(browser):
+async def test_overview_is_a_react_page(browser):
     page = (await browser.get("/")).text
-    assert page.count('class="tile-total">0<') == 4
-    assert "Nothing yet." in page
-
-
-async def test_overview_counts(browser, app):
-    await add_hosts(browser)
-    page = (await browser.get("/")).text
-    assert '<p class="tile-total">2</p>' in page  # systems and hosts
-    assert '<p class="tile-total">3</p>' in page  # instances
-    assert "stopped" in page and "reachable" in page
-
-    await browser.post("/systems/1/start")
-    await app.state.runner.wait(1)
-    page = (await browser.get("/")).text
-    assert "running" in page and "succeeded" in page
-    assert '<p class="tile-total">1</p>' in page  # activities in the last 24 hours
+    # The figures come from /api/overview (tests/test_overview.py).
+    assert 'src="/static/app/overview.js?v=' in page and '"texts":' in page
 
 
 # --- configuration: hosts ----------------------------------------------------------------

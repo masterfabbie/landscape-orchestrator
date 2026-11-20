@@ -18,6 +18,7 @@ export default defineConfig({
         landscape: "src/landscape/main.tsx",
         activity: "src/activity/main.tsx",
         templates: "src/templates/main.tsx",
+        overview: "src/overview/main.tsx",
       },
       output: {
         entryFileNames: "[name].js",

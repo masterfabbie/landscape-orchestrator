@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from .models import Activity, Instance, Sid, System, activity_systems
+from .models import STAGES, Activity, Instance, Sid, System, activity_systems
 from .operations import ACTIVE_STATUSES
 from .pools import assign_pool
 from .roles import Role
@@ -186,13 +186,22 @@ async def unassign_instance(session: AsyncSession, system_id: int, instance_id: 
 
 
 async def update_system(
-    session: AsyncSession, system_id: int, name: str, description: str | None
+    session: AsyncSession,
+    system_id: int,
+    name: str,
+    description: str | None,
+    stage: str | None | object = ...,
 ) -> None:
+    """Name, description and stage (one of STAGES or None; left out: unchanged)."""
     system = await session.get(System, system_id)
     if system is None:
         raise SystemChangeError("unknown_system", "System not found")
+    if stage is not ... and stage not in (None, *STAGES):
+        raise SystemChangeError("unknown_stage", f"Unknown stage {stage}")
     system.name = await _check_name(session, name, system_id)
     system.description = (description or "").strip() or None
+    if stage is not ...:
+        system.stage = stage
     await session.flush()
 
 

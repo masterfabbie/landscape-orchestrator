@@ -124,6 +124,7 @@ class SystemOut(BaseModel):
     description: str | None
     tags: list[str] = Field(validation_alias=AliasChoices("tag_list", "tags"))
     pool_id: int | None
+    stage: str | None = None
     depends_on_ids: list[int]
     required_by_ids: list[int]
     instances: list[InstanceOut]
@@ -272,9 +273,14 @@ class SystemCreate(BaseModel):
     pool_id: int | None = None
 
 
+Stage = Literal["sandbox", "development", "quality", "preprod", "production"]
+
+
 class SystemUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     description: str | None = Field(default=None, max_length=1000)
+    # Left out: unchanged; null: no stage.
+    stage: Stage | None = None
 
 
 class InstanceIds(BaseModel):
@@ -468,3 +474,14 @@ class BuildingBlocksOut(BaseModel):
 
 class FavoritesIn(BaseModel):
     operations: list[str] = Field(default=[], max_length=100)
+
+
+class AttentionRulesIn(BaseModel):
+    # Rule -> settings; see attention.DEFAULT_RULES. Missing rules and settings: defaults.
+    rules: dict[str, dict]
+
+
+class AttentionExceptionsIn(BaseModel):
+    disabled_rules: list[str] = Field(default=[], max_length=20)
+    hidden_systems: list[int] = Field(default=[], max_length=1000)
+    hidden_pools: list[int] = Field(default=[], max_length=1000)

@@ -56,7 +56,15 @@ export function Landscape() {
     readFilter(currentParams(), emptyHostFilter(), HOST_FILTER_KEYS, "hq"),
   );
   const [selection, setSelection] = useState<Selection>(EMPTY);
-  const [detail, setDetail] = useState<Detail>(null);
+  // ?system=, ?instance= or ?host= open the detail panel, e.g. from the overview.
+  const [detail, setDetail] = useState<Detail>(() => {
+    const params = currentParams();
+    for (const [key, kind] of [["system", "SYSTEM"], ["instance", "INSTANCE"], ["host", "HOST"]] as const) {
+      const id = Number(params.get(key));
+      if (id > 0) return { kind, id };
+    }
+    return null;
+  });
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [asking, setAsking] = useState<{
     op: OperationDef;
@@ -68,6 +76,7 @@ export function Landscape() {
   // Keep tab and filters in the address, so a view can be bookmarked or shared.
   useEffect(() => {
     let params = currentParams();
+    for (const key of ["system", "instance", "host"]) params.delete(key);
     params.set("tab", tab);
     params = writeFilter(params, systemFilter as never, SYSTEM_FILTER_KEYS);
     params = writeFilter(params, hostFilter as never, HOST_FILTER_KEYS, "hq");

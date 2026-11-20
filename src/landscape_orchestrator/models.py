@@ -33,6 +33,8 @@ from sqlalchemy.orm import (
 
 from .roles import Role, instance_role
 
+# Stages of systems, in the order of the overview's columns.
+STAGES = ("sandbox", "development", "quality", "preprod", "production")
 STATUS_UNKNOWN = "UNKNOWN"
 
 
@@ -188,6 +190,8 @@ class System(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True)
     description: Mapped[str | None] = mapped_column(Text)
+    # Stage in the overview: sandbox, development, quality, preprod or production (STAGES).
+    stage: Mapped[str | None] = mapped_column(String(16))
 
     instances: Mapped[list[Instance]] = relationship(
         back_populates="system", order_by="Instance.number"
@@ -498,6 +502,16 @@ class UserSetting(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+
+
+class PlatformSetting(Base):
+    """Settings of the whole platform that admins change, e.g. the rules of the overview's
+    "needs attention" list (key "attention.rules", JSON)."""
+
+    __tablename__ = "platform_settings"
+
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
 

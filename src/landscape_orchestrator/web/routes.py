@@ -441,53 +441,9 @@ STATUS_ORDER = ("GREEN", "YELLOW", "RED", "GRAY", STATUS_UNKNOWN)
 
 
 @pages.get("/")
-async def overview(request: Request, session: DbSession) -> HTMLResponse:
-    systems = await _all_systems(session)
-    hosts = await _all_hosts(session)
-    # Only instances of systems; unassigned instances are not part of the landscape yet.
-    instances = [instance for system in systems for instance in system.instances]
-    host_states = [
-        "UNKNOWN" if host.reachable is None else ("GREEN" if host.reachable else "RED")
-        for host in hosts
-    ]
-    since = datetime.now(UTC) - timedelta(hours=24)
-    recent = list(await session.scalars(select(Activity).where(Activity.requested_at >= since)))
-    active = await _active_by_system(session)
-    return render(
-        request,
-        "overview.html",
-        tiles=[
-            (
-                "overview.systems",
-                "/landscape",
-                len(systems),
-                _count([system_status(s) for s in systems], STATUS_ORDER),
-                "status",
-            ),
-            (
-                "overview.instances",
-                "/landscape",
-                len(instances),
-                _count([i.last_status for i in instances], STATUS_ORDER),
-                "status",
-            ),
-            (
-                "overview.hosts",
-                "/landscape?tab=hosts",
-                len(hosts),
-                _count(host_states, ("GREEN", "RED", "UNKNOWN")),
-                "reach",
-            ),
-            (
-                "overview.activities_24h",
-                "/activities",
-                len(recent),
-                _count([a.status for a in recent], ("RUNNING", "PENDING", "SUCCEEDED", "FAILED")),
-                "activity",
-            ),
-        ],
-        refresh=OVERVIEW_REFRESH_SECONDS if active else None,
-    )
+async def overview(request: Request, user: CurrentUser) -> HTMLResponse:
+    """The overview, a React page (frontend/src/overview) with data from /api/overview."""
+    return app_page(request, user, "overview", "nav.overview")
 
 
 # --- landscape --------------------------------------------------------------------------
@@ -524,6 +480,21 @@ async def landscape(request: Request, user: CurrentUser) -> HTMLResponse:
         title=translate(_language(request), "nav.landscape"),
         app="landscape",
         boot=_boot(request, user),
+        wide=True,
+    )
+
+
+def app_page(
+    request: Request, user: User, app: str, title_key: str, **extra: Any
+) -> HTMLResponse:
+    """A page rendered by a React app (frontend/src/<app>); ``extra`` goes to its start
+    data."""
+    return render(
+        request,
+        "app_page.html",
+        title=translate(_language(request), title_key),
+        app=app,
+        boot=_boot(request, user, **extra),
         wide=True,
     )
 

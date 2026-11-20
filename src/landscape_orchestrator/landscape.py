@@ -6,13 +6,14 @@ is reloaded when the event stream (``events.py``) reports a change.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from .attention import attention_items, load_exceptions, load_rules, overview_columns
 from .catalog import Catalog, OperationDef
 from .clients import SoapError
 from .connections import ClientFactory
@@ -159,6 +160,7 @@ async def landscape_snapshot(session: AsyncSession, catalog: Catalog, user: User
                 "description": system.description,
                 "status": system_status(system),
                 "pool": {"id": system.pool.id, "name": system.pool.name} if system.pool else None,
+                "stage": system.stage,
                 "tags": system.tag_list,
                 "depends_on": [names.get(d.id, d.name) for d in system.depends_on],
                 "activity": _activity(active.get(system.id)),
@@ -243,4 +245,74 @@ async def read_processes(
             for p in processes
         ],
         "error": None,
+    }
+
+
+def _counts(values: list[str]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for value in values:
+        result[value] = result.get(value, 0) + 1
+    return result
+
+
+async def overview_snapshot(session: AsyncSession, catalog: Catalog, user: User) -> dict[str, Any]:
+    """The overview: key figures, the status matrix (pools × stages) and what needs
+    attention by the rules (attention.py) and the user's exceptions."""
+    systems = await all_systems(session)
+    hosts = await all_hosts(session)
+    pools = list(await session.scalars(select(Pool).order_by(Pool.name)))
+    active = await active_by_system(session)
+    statuses = {s.id: system_status(s) for s in systems}
+    since = datetime.now(UTC) - timedelta(hours=24)
+    recent = list(
+        await session.scalars(
+            select(Activity.status).where(
+                Activity.requested_at >= since, Activity.parent_id.is_(None)
+            )
+        )
+    )
+    instances = [i for s in systems for i in s.instances]
+    rules = await load_rules(session)
+    exceptions = await load_exceptions(session, user)
+    items = await attention_items(
+        session, catalog, systems, hosts, statuses, set(active), rules, exceptions
+    )
+    return {
+        "kpis": {
+            "systems": {"total": len(systems), "by": _counts(list(statuses.values()))},
+            "instances": {
+                "total": len(instances),
+                "by": _counts([i.last_status for i in instances]),
+            },
+            "hosts": {
+                "total": len(hosts),
+                "by": _counts(
+                    [
+                        "UNKNOWN" if h.reachable is None else ("GREEN" if h.reachable else "RED")
+                        for h in hosts
+                    ]
+                ),
+            },
+            "activities": {"total": len(recent), "by": _counts(recent)},
+        },
+        "columns": overview_columns(systems),
+        "pools": [{"id": p.id, "name": p.name, "description": p.description} for p in pools],
+        "systems": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "pool_id": s.pool.id if s.pool else None,
+                "stage": s.stage,
+                "status": statuses[s.id],
+                "activity": _activity(active.get(s.id)),
+                "instances": [
+                    {"id": i.id, "label": i.label, "status": i.last_status, "agent": i.is_agent}
+                    for i in sorted(s.instances, key=lambda i: (i.is_agent, i.priority, i.label))
+                ],
+            }
+            for s in systems
+        ],
+        "attention": [item.to_dict() for item in items],
+        "exceptions": exceptions.to_dict(),
+        "rules": {name: rule["enabled"] for name, rule in rules.items()},
     }
