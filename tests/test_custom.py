@@ -260,7 +260,7 @@ async def test_cancel_mass_operation(app, api):
 
 async def test_custom_operations_in_the_browser(app, api, landscape):
     async with sign_in(app) as browser:
-        tab = (await browser.get("/configuration?tab=operations")).text
+        tab = (await browser.get("/operations/custom")).text
         assert "No custom operations yet." in tab
         form = {
             "key": "lo_test",
@@ -273,10 +273,10 @@ async def test_custom_operations_in_the_browser(app, api, landscape):
             "mass": "true",
             "timeout_seconds": "60",
         }
-        created = await browser.post("/configuration/operations", data=form)
+        created = await browser.post("/operations/custom", data=form)
         page_url = created.headers["location"].split("?")[0]
-        assert page_url == "/configuration/operations/1"
-        taken = await browser.post("/configuration/operations", data=form)
+        assert page_url == "/operations/custom/1"
+        taken = await browser.post("/operations/custom", data=form)
         assert taken.headers["location"].endswith("error=operation_key_taken")
 
         parameter = {"name": "rc", "label": "Exit code", "type": "INTEGER", "default": "0"}
@@ -319,9 +319,10 @@ async def test_custom_operations_in_the_browser(app, api, landscape):
 
     await make_user(app, "conf", "configurator")
     async with sign_in(app, "conf") as configurator:
-        assert (await configurator.get("/configuration?tab=operations")).status_code == 403
-        page = (await configurator.get("/configuration")).text
-        assert "tab=operations" not in page
+        assert (await configurator.get("/operations/custom")).status_code == 403
+        assert (await configurator.get("/operations/templates")).status_code == 403
+        page = (await configurator.get("/configuration/hosts")).text
+        assert 'href="/operations"' not in page
 
 
 async def test_cancel_in_the_browser(app, api):

@@ -35,7 +35,9 @@ def required_role(method: str, path: str) -> Role:
     "/api" prefix for API routes."""
     if path.startswith(("/administration", "/users", "/custom-operations", "/templates")):
         return Role.ADMIN
-    if path.startswith(("/configuration/operations", "/configuration/templates")):
+    # Web area "Operations": custom operations and templates. "/operations" alone is the
+    # catalog in the API (and a redirect on the web).
+    if path.startswith("/operations/"):
         return Role.ADMIN
     if path.startswith(("/account", "/me")):
         return Role.VIEWER

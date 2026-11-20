@@ -221,6 +221,7 @@ Server einen neuen aus.
 | Übersicht, Landscape, Activities ansehen, Status aktualisieren | ✓ | ✓ | ✓ | ✓ |
 | Start, Stopp, Neustart | | ✓ | ✓ | ✓ |
 | Configuration: Hosts, Discovery, Systeme, Pools, Tags, Zugangsdaten | | | ✓ | ✓ |
+| Operations: eigene Operationen, Operationsvorlagen | | | | ✓ |
 | Administration: Benutzer, Plattform-Einstellungen | | | | ✓ |
 
 Knöpfe ohne Berechtigung werden nicht angezeigt; direkte Aufrufe werden mit HTTP 403
@@ -257,19 +258,25 @@ ab; `passwd` entsperrt und aktiviert das Konto auch):
 
 Nach dem Start ist die Oberfläche unter `http://127.0.0.1:8000/` erreichbar.
 
-Die Oberfläche hat fünf Bereiche. **Landscape** dient zum Beobachten und Bedienen,
-**Configuration** zum Einrichten.
+Die Oberfläche hat sechs Bereiche. **Landscape** dient zum Beobachten und Bedienen,
+**Configuration** und **Operations** zum Einrichten. Diese beiden haben links eine
+Seitennavigation mit ihren Unterbereichen; jeder Unterbereich zeigt oben die Überschrift mit
+dem Knopf zum Anlegen rechts („Host anlegen“, „System anlegen“, „Pool anlegen“, „Operation
+anlegen“, „Vorlage anlegen“) und darunter Reiter, zuerst „Übersicht“. Angelegt wird auf einer
+eigenen Seite, danach geht es zur Seite des neuen Eintrags (bei Pools zur Liste).
 
 | Bereich | Inhalt |
 |---|---|
 | Übersicht | Kennzahlen zu Systemen, Instanzen, Hosts und Aktivitäten der letzten 24 Stunden |
 | Landscape | Tabelle der Systeme mit aufklappbaren Instanzen und Tabelle der Hosts, Mehrfachauswahl mit Leiste für Operationen, Filter, Detailleiste rechts mit den Prozessen je Instanz, Befehlspalette (siehe unten). Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
 | Activities | Tab „Aktivitäten“ mit allen Operationen und Detailseite mit Protokoll; Tab „Protokolle“ mit den letzten 200 Protokolleinträgen |
-| Configuration | Tab „Hosts“: anlegen, Verbindung ändern, Discovery, Zugangsdaten, Tags, löschen. Tab „Systeme“: nicht zugeordnete Instanzen, Systeme anlegen und zuordnen, Systeme aufklappbar mit ihren Instanzen; Seite eines Systems mit Name, Instanzen, Pool, Abhängigkeiten, Zugangsdaten je SID, Löschen. Tab „Pools“: anlegen und löschen |
+| Configuration | „Hosts“ (`/configuration/hosts`): anlegen, Verbindung ändern, Discovery, Zugangsdaten, Tags, löschen. „Systeme“: Reiter „Übersicht“ mit den Systemen, aufklappbar mit ihren Instanzen, und Reiter „Nicht zugeordnete Instanzen“ zum Zuordnen; „System anlegen“ wählt die Instanzen aus allen nicht zugeordneten; Seite eines Systems mit Name, Instanzen, Pool, Abhängigkeiten, Zugangsdaten je SID, Löschen. „Pools“: anlegen und löschen |
+| Operations | Nur Admins. „Eigene Operationen“ (`/operations/custom`) und „Operationsvorlagen“ (`/operations/templates`), siehe unten |
 | Administration | Versionsstand und aktuelle Einstellungen; Plattform-Einstellungen folgen |
 
-Die Hauptmenüpunkte heißen in beiden Sprachen Landscape, Activities, Configuration und
-Administration; nur „Übersicht“ wird übersetzt.
+Die Hauptmenüpunkte heißen auf Englisch Overview, Landscape, Activities, Configuration,
+Operations und Administration, auf Deutsch Übersicht, Landschaft, Aktivitäten, Konfiguration,
+Operationen und Administration. Alte Adressen wie `/configuration?tab=systems` leiten weiter.
 
 **Pools** fassen Systeme zusammen, die zusammengehören, z. B. Entwicklungs-, Test- und
 Produktivsystem eines Produkts. Ein System gehört zu höchstens einem Pool.
@@ -344,7 +351,7 @@ Aktivität ohne Neuladen:
 
 Eine **Operationsvorlage** verkettet Operationen, die nacheinander auf einem System oder Host
 laufen, z. B. Kernel vorbereiten, stoppen, Kernel kopieren, starten (vgl. die
-Operationsvorlagen in LaMa). Anlegen dürfen nur Admins: Configuration → Operationsvorlagen.
+Operationsvorlagen in LaMa). Anlegen dürfen nur Admins: Operations → Operationsvorlagen.
 
 - **Baukasten:** links die Bausteine (eingebaute und eigene Operationen für das Ziel), in der
   Mitte die Kette (per Drag-and-drop oder mit den Pfeilen ordnen), rechts der gewählte
@@ -409,7 +416,7 @@ Konfigurationsdatei eingerichtet ist (`Name:`, `Command:` mit Platzhaltern wie
 kundendefinierten Operationen in LaMa. Das Tool ruft sie über `ExecuteOperation` asynchron
 auf und liest die Ausgabe laufend ins Protokoll.
 
-- **Anlegen** dürfen nur Admins: Configuration → Operationen. Je Operation: Name, Schlüssel
+- **Anlegen** dürfen nur Admins: Operations → Eigene Operationen. Je Operation: Name, Schlüssel
   (für URLs und API), Host-Agent-Operation (der `Name:` der Konfigurationsdatei), Ziel
   (Instanz, System oder Host), Instanztypen, Reihenfolge bei Systemen, Rolle zum Ausführen,
   Zeitlimit und ob sie als Massenoperation erlaubt ist.
@@ -465,11 +472,11 @@ ein ABAP-System mit der HANA-Instanz seiner Datenbank. Die Instanzen dürfen ver
 haben. Die Discovery legt keine Systeme an; neue Instanzen sind zunächst nicht zugeordnet.
 
 1. Configuration → Hosts: Host anlegen und Discovery starten.
-2. Configuration → Systeme: Unter „Nicht zugeordnete Instanzen“ die Instanzen anhaken und
-   **Create System** wählen. Die folgende Seite schlägt als Namen die SID der
-   Anwendungsinstanzen vor (sonst die erste SID); Name, Beschreibung und Pool lassen sich
-   dort festlegen.
-3. Weitere Instanzen lassen sich mit **Assign to existing** einem bestehenden System
+2. Configuration → Systeme: Im Reiter „Nicht zugeordnete Instanzen“ die Instanzen anhaken
+   und **System anlegen** wählen (oder oben rechts **System anlegen** und dort die Instanzen
+   anhaken). Die folgende Seite schlägt als Namen die SID der Anwendungsinstanzen vor (sonst
+   die erste SID); Name, Beschreibung und Pool lassen sich dort festlegen.
+3. Weitere Instanzen lassen sich mit **Vorhandenem System zuordnen** einem bestehenden System
    zuordnen.
 
 Gehören Instanzen einer SID bereits zu genau einem System, schlägt die Liste für neu

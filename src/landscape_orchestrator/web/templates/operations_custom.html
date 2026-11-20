@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui with context %}
+{% block title %}{{ t("tab.custom_operations") }}{% endblock %}
+{% block content %}
+{{ ui.page_head(t("tab.custom_operations"), "/operations/custom/new", t("custom.add"), [("overview", "/operations/custom", t("tab.overview"))], "overview", t("tab.custom_operations")) }}
+<p class="muted">{{ t("custom.intro") }}</p>
+<section class="card">
+  {% if operations %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("custom.key") }}</th><th>{{ t("custom.agent_operation") }}</th><th>{{ t("field.target") }}</th><th>{{ t("custom.role") }}</th><th>{{ t("custom.parameters") }}</th></tr></thead>
+    <tbody>
+    {% for op in operations %}
+      <tr>
+        <td><a class="strong" href="/operations/custom/{{ op.id }}">{{ op.name }}</a></td>
+        <td class="mono">{{ op.key }}</td>
+        <td class="mono">{{ op.agent_operation }}</td>
+        <td>{{ t("target." ~ op.target) }}</td>
+        <td>{{ t("role." ~ op.role) }}</td>
+        <td class="mono">{{ op.parameters | map(attribute="name") | join(", ") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>{{ t("custom.empty") }}</p>
+  {% endif %}
+</section>
+{% endblock %}

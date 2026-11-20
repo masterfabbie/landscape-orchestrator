@@ -2,7 +2,7 @@
 {% import "macros.html" as ui with context %}
 {% block title %}{{ system.name }}{% endblock %}
 {% block content %}
-<p class="crumbs"><a href="/configuration?tab=systems">{{ t("nav.configuration") }}</a> / {{ t("tab.systems") }}</p>
+<p class="crumbs"><a href="/configuration/systems">{{ t("tab.systems") }}</a></p>
 <div class="card-head">
   <h1>{{ t("field.system") }} {{ system.name }}</h1>
   <span class="buttons"><a class="button-link" href="/systems/{{ system.id }}">{{ t("action.view") }}</a></span>
@@ -32,7 +32,7 @@
   {% else %}
   <p class="muted">{{ t("system.no_instances") }}</p>
   {% endif %}
-  <p><a href="/configuration?tab=systems">{{ t("unassigned.title") }}</a></p>
+  <p><a href="/configuration/systems/unassigned">{{ t("unassigned.title") }}</a></p>
 </section>
 
 <section class="card">
@@ -46,7 +46,7 @@
     </label>
     <button type="submit">{{ t("action.save") }}</button>
   </form>
-  {% if not pools %}<p class="muted">{{ t("pool.none_defined") }} <a href="/configuration?tab=pools">{{ t("pool.add") }}</a></p>{% endif %}
+  {% if not pools %}<p class="muted">{{ t("pool.none_defined") }} <a href="/configuration/pools/new">{{ t("pool.add") }}</a></p>{% endif %}
 </section>
 
 <section class="card">

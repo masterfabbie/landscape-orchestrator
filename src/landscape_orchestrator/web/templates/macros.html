@@ -66,7 +66,7 @@
   <tbody>
   {% for instance in instances %}
     <tr>
-      {% if show_system %}<td>{% if instance.system %}<a href="/systems/{{ instance.system_id }}">{{ instance.system.name }}</a>{% elif can("configurator") %}<a class="muted" href="/configuration?tab=systems">{{ t("unassigned.label") }}</a>{% else %}<span class="muted">{{ t("unassigned.label") }}</span>{% endif %}</td>{% endif %}
+      {% if show_system %}<td>{% if instance.system %}<a href="/systems/{{ instance.system_id }}">{{ instance.system.name }}</a>{% elif can("configurator") %}<a class="muted" href="/configuration/systems/unassigned">{{ t("unassigned.label") }}</a>{% else %}<span class="muted">{{ t("unassigned.label") }}</span>{% endif %}</td>{% endif %}
       <td class="mono">{{ instance.label }}</td>
       <td>{{ instance_type(instance.features) }}</td>
       {% if depends is not none %}<td class="mono">{{ depends.get(instance.id, []) | join(", ") }}</td>{% endif %}
@@ -101,6 +101,15 @@
   <a href="{{ href }}" {% if key == current %}aria-current="page"{% endif %}>{{ text }}</a>
   {% endfor %}
 </nav>
+{% endmacro %}
+
+{# Head of a page in an area with sub-areas: title, create button on the right, tabs. #}
+{% macro page_head(title, action_href=none, action_text=none, tab_items=none, current="overview", label="") %}
+<div class="page-head">
+  <h1>{{ title }}</h1>
+  {% if action_href %}<span class="buttons"><a class="button-primary" href="{{ action_href }}">{{ action_text }}</a></span>{% endif %}
+</div>
+{% if tab_items %}{{ tabs(tab_items, current, label) }}{% endif %}
 {% endmacro %}
 
 {% macro reach_badge(host, t) %}

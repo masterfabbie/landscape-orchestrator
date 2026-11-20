@@ -2,7 +2,7 @@
 {% import "macros.html" as ui with context %}
 {% block title %}{{ host.name }}{% endblock %}
 {% block content %}
-<p class="crumbs"><a href="/configuration?tab=hosts">{{ t("nav.configuration") }}</a> / {{ t("tab.hosts") }}</p>
+<p class="crumbs"><a href="/configuration/hosts">{{ t("tab.hosts") }}</a></p>
 <div class="card-head">
   <h1>{{ t("field.host") }} {{ host.name }}</h1>
   <span class="buttons">
@@ -51,7 +51,7 @@
   <h2>{{ t("field.instances") }}</h2>
   {% if host.instances %}
   <ul class="plain">
-    {% for instance in host.instances %}<li><span class="mono">{{ instance.label }}</span> · {{ instance_type(instance.features) }} · {% if instance.system %}<a href="/configuration/systems/{{ instance.system_id }}">{{ instance.system.name }}</a>{% else %}<a class="muted" href="/configuration?tab=systems">{{ t("unassigned.label") }}</a>{% endif %}</li>{% endfor %}
+    {% for instance in host.instances %}<li><span class="mono">{{ instance.label }}</span> · {{ instance_type(instance.features) }} · {% if instance.system %}<a href="/configuration/systems/{{ instance.system_id }}">{{ instance.system.name }}</a>{% else %}<a class="muted" href="/configuration/systems/unassigned">{{ t("unassigned.label") }}</a>{% endif %}</li>{% endfor %}
   </ul>
   {% else %}
   <p>{{ t("host.no_instances") }}</p>

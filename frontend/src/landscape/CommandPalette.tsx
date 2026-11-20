@@ -88,6 +88,7 @@ export function CommandPalette(props: Props) {
       ["/", "nav.overview", "viewer"],
       ["/activities", "nav.activities", "viewer"],
       ["/configuration", "nav.configuration", "configurator"],
+      ["/operations", "nav.operations", "admin"],
       ["/administration", "nav.administration", "admin"],
       ["/account", "ui.account", "viewer"],
     ];

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui with context %}
+{% block title %}{{ t("custom.add") }}{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/operations/custom">{{ t("tab.custom_operations") }}</a></p>
+<h1>{{ t("custom.add") }}</h1>
+<p class="muted">{{ t("custom.intro") }}</p>
+<section class="card">
+  {{ ui.custom_operation_form("/operations/custom", none, t, custom_targets, orderings, instance_types, roles) }}
+</section>
+{% endblock %}

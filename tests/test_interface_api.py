@@ -98,7 +98,7 @@ async def test_event_stream(app, api):
 async def test_texts_and_headers(app, api):
     response = await api.get("/api/i18n", headers={"Accept-Language": "de"})
     data = response.json()
-    assert data["language"] == "de" and data["texts"]["nav.landscape"] == "Landscape"
+    assert data["language"] == "de" and data["texts"]["nav.landscape"] == "Landschaft"
     assert "script-src 'self'" in response.headers["content-security-policy"]
     page = await client(app).get("/login")
     assert "frame-ancestors 'none'" in page.headers["content-security-policy"]

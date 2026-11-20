@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui with context %}
+{% block title %}{{ t("tab.pools") }}{% endblock %}
+{% block content %}
+{{ ui.page_head(t("tab.pools"), "/configuration/pools/new", t("pool.add"), [("overview", "/configuration/pools", t("tab.overview"))], "overview", t("tab.pools")) }}
+<p class="muted">{{ t("pool.explanation") }}</p>
+<section class="card">
+  {% if pools %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>{{ t("field.name") }}</th><th>{{ t("field.description") }}</th><th>{{ t("tab.systems") }}</th><th>{{ t("field.actions") }}</th></tr></thead>
+    <tbody>
+    {% for pool in pools %}
+      <tr>
+        <td class="strong">{{ pool.name }}</td>
+        <td>{{ pool.description or "" }}</td>
+        <td>{% for system in pool.systems %}<a href="/configuration/systems/{{ system.id }}">{{ system.name }}</a>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">{{ t("deps.none") }}</span>{% endfor %}</td>
+        <td>
+          <form method="post" action="/configuration/pools/{{ pool.id }}/delete" data-confirm="{{ t('pool.delete_confirm') }}">
+            <button type="submit" class="danger">{{ t("pool.delete") }}</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>{{ t("pool.empty") }}</p>
+  {% endif %}
+</section>
+{% endblock %}

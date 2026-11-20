@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ t("hosts.add") }}{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/configuration/hosts">{{ t("tab.hosts") }}</a></p>
+<h1>{{ t("hosts.add") }}</h1>
+<section class="card">
+  <form method="post" action="/configuration/hosts" class="stack">
+    <div class="fields">
+      <label>{{ t("field.name") }} <input name="name" required maxlength="255" autofocus></label>
+      <label>{{ t("field.address") }} <input name="address" maxlength="255" placeholder="{{ t('field.address_hint') }}"></label>
+      <label>{{ t("field.hostagent_port") }} <input name="hostagent_port" type="number" min="1" max="65535" placeholder="1128"></label>
+      <label>{{ t("field.port_offset") }} <input name="sapcontrol_port_offset" type="number" min="0" max="15000" placeholder="{{ t('field.port_offset_hint') }}"></label>
+      <label>{{ t("field.username") }} <input name="username" autocomplete="off" placeholder="sapadm"></label>
+      <label>{{ t("field.password") }} <input name="password" type="password" autocomplete="new-password"></label>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" name="https"> {{ t("field.https") }}</label>
+      <label><input type="checkbox" name="verify_tls" checked> {{ t("field.verify_tls") }}</label>
+    </div>
+    <div class="row">
+      <button type="submit">{{ t("hosts.add") }}</button>
+      <a href="/configuration/hosts">{{ t("mass.cancel") }}</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

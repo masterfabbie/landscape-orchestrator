@@ -85,9 +85,7 @@ async def add_hosts(browser: httpx.AsyncClient, systems: bool = True) -> None:
         for name, ids in (("DEV", ["1", "2"]), ("HDV", ["3"])):
             data = {"name": name, "instance_id": ids}
             response = await browser.post("/configuration/systems", data=data)
-            assert response.headers["location"].startswith(
-                "/configuration?tab=systems&notice=system_created"
-            ), response.headers["location"]
+            assert "notice=system_created" in response.headers["location"]
 
 
 # --- sessions and translations -----------------------------------------------------------
@@ -126,9 +124,16 @@ PAGES = [
     "/landscape?tab=hosts",
     "/activities",
     "/activities?tab=logs",
-    "/configuration",
-    "/configuration?tab=systems",
-    "/configuration?tab=pools",
+    "/configuration/hosts",
+    "/configuration/hosts/new",
+    "/configuration/systems",
+    "/configuration/systems/unassigned",
+    "/configuration/systems/new",
+    "/configuration/pools",
+    "/configuration/pools/new",
+    "/operations/custom",
+    "/operations/custom/new",
+    "/operations/templates",
     "/administration",
     "/hosts/1",
     "/systems/1",
@@ -223,23 +228,58 @@ async def test_detail_pages_render(browser):
 async def test_navigation_names_in_german(browser):
     await browser.get("/language/de")
     page = (await browser.get("/")).text
-    assert ">Übersicht</a>" in page
-    for item in ("Landscape", "Activities", "Configuration", "Administration"):
+    for item in ("Übersicht", "Landschaft", "Aktivitäten", "Konfiguration", "Operationen"):
+        assert f">{item}</a>" in page
+    assert ">Administration</a>" in page
+    await browser.get("/language/en")
+    page = (await browser.get("/")).text
+    for item in ("Overview", "Landscape", "Activities", "Configuration", "Operations"):
         assert f">{item}</a>" in page
 
 
 async def test_language_switch_keeps_the_tab(browser):
-    page = (await browser.get("/configuration?tab=pools&notice=pool_created")).text
-    assert 'href="/language/de?next=/configuration%3Ftab%3Dpools"' in page
-    response = await browser.get("/language/de?next=/configuration?tab=pools")
-    assert response.headers["location"] == "/configuration?tab=pools"
-    assert "Pool anlegen" in (await browser.get("/configuration?tab=pools")).text
+    page = (await browser.get("/activities?tab=logs&notice=pool_created")).text
+    assert 'href="/language/de?next=/activities%3Ftab%3Dlogs"' in page
+    response = await browser.get("/language/de?next=/activities?tab=logs")
+    assert response.headers["location"] == "/activities?tab=logs"
+    assert "Pool anlegen" in (await browser.get("/configuration/pools")).text
 
     await browser.get("/language/en")
-    assert "Add pool" in (await browser.get("/configuration?tab=pools")).text
+    assert "Create pool" in (await browser.get("/configuration/pools")).text
     unknown = await browser.get("/language/xx")
     assert unknown.status_code == 303
-    assert "Add pool" in (await browser.get("/configuration?tab=pools")).text
+    assert "Create pool" in (await browser.get("/configuration/pools")).text
+
+
+async def test_areas_have_a_navigation_on_the_left(browser):
+    hosts = (await browser.get("/configuration/hosts")).text
+    assert 'class="section-nav"' in hosts
+    assert '<a href="/configuration/hosts" aria-current="page">Hosts</a>' in hosts
+    assert '<a href="/configuration/systems" >Systems</a>' in hosts
+    assert 'class="button-primary" href="/configuration/hosts/new">Create host</a>' in hosts
+    assert 'aria-current="page">Overview</a>' in hosts
+    # Detail pages keep the sub-area marked.
+    new = (await browser.get("/configuration/hosts/new")).text
+    assert '<a href="/configuration/hosts" aria-current="page">Hosts</a>' in new
+    operations = (await browser.get("/operations/custom")).text
+    assert '<a href="/operations/custom" aria-current="page">Custom operations</a>' in operations
+    assert '<a href="/operations/templates" >Operation templates</a>' in operations
+    assert 'href="/operations/custom/new">Create operation</a>' in operations
+    templates = (await browser.get("/operations/templates")).text
+    assert '<a href="/operations/templates" aria-current="page">' in templates
+    # Pages outside the areas have no such navigation.
+    assert "section-nav" not in (await browser.get("/activities")).text
+
+
+async def test_old_configuration_links_redirect(browser):
+    for old, new in (
+        ("/configuration", "/configuration/hosts"),
+        ("/configuration?tab=systems", "/configuration/systems"),
+        ("/configuration?tab=pools", "/configuration/pools"),
+        ("/configuration?tab=operations", "/operations/custom"),
+        ("/operations", "/operations/custom"),
+    ):
+        assert (await browser.get(old)).headers["location"] == new
 
 
 async def test_accept_language_header_selects_german(anonymous):
@@ -321,7 +361,7 @@ async def test_add_host_and_discover(browser):
     assert "Discovery finished: 2 new, 0 updated, 0 missing." in page.text
     assert "ABAP application server" in page.text and "Central services" in page.text
 
-    listing = (await browser.get("/configuration?tab=hosts")).text
+    listing = (await browser.get("/configuration/hosts")).text
     assert "sapapp1" in listing and "devadm (stored)" in listing
     assert [h["name"] for h in (await landscape_data(browser))["hosts"]] == ["sapapp1"]
 
@@ -333,10 +373,10 @@ async def test_invalid_host_input(browser):
         ({"name": "  "}, "invalid_input"),
     ]:
         response = await browser.post("/configuration/hosts", data=body)
-        assert response.headers["location"] == f"/configuration?tab=hosts&error={error}"
+        assert response.headers["location"] == f"/configuration/hosts/new?error={error}"
     await browser.post("/configuration/hosts", data=APP_HOST)
     duplicate = await browser.post("/configuration/hosts", data=APP_HOST)
-    assert duplicate.headers["location"] == "/configuration?tab=hosts&error=host_exists"
+    assert duplicate.headers["location"] == "/configuration/hosts/new?error=host_exists"
     assert "already exists" in (await browser.get(duplicate.headers["location"])).text
 
 
@@ -360,7 +400,7 @@ async def test_discovery_warning_is_shown(browser, app):
 
 async def test_host_values_are_escaped(browser):
     await browser.post("/configuration/hosts", data={"name": "<script>alert(1)</script>"})
-    page = (await browser.get("/configuration?tab=hosts")).text
+    page = (await browser.get("/configuration/hosts")).text
     assert "<script>alert(1)</script>" not in page
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
 
@@ -394,13 +434,13 @@ async def test_credentials_forms(browser):
 
 async def test_discovered_instances_are_unassigned(browser):
     await add_hosts(browser, systems=False)
-    page = (await browser.get("/configuration?tab=systems")).text
-    assert "Unassigned instances" in page
+    page = (await browser.get("/configuration/systems/unassigned")).text
+    assert "Unassigned instances (3)" in page
     for number in ("1", "2", "3"):
         assert f'name="instance_id" value="{number}"' in page
     assert 'formaction="/configuration/systems/new"' in page
     assert "Assign to existing" not in page  # there is no system yet
-    assert "No systems yet." in page
+    assert "No systems yet." in (await browser.get("/configuration/systems")).text
     # Unassigned instances are not part of the landscape.
     assert (await landscape_data(browser))["systems"] == []
     host = (await browser.get("/hosts/1")).text
@@ -413,14 +453,17 @@ async def test_create_system_suggests_a_name(browser):
     assert page.status_code == 200
     # The SID of the application instance, not that of the HANA database.
     assert 'name="name" required maxlength="64" value="DEV"' in page.text
-    assert 'type="hidden" name="instance_id" value="2"' in page.text
-    assert 'type="hidden" name="instance_id" value="3"' in page.text
+    # All unassigned instances can be chosen; the selected ones are preselected.
+    assert 'name="instance_id" value="1" aria-label="DEV/01" >' in page.text
+    assert 'name="instance_id" value="2" aria-label="DEV/00" checked>' in page.text
+    assert 'name="instance_id" value="3" aria-label="HDV/02" checked>' in page.text
 
     hana_only = (await browser.get("/configuration/systems/new?instance_id=3")).text
     assert 'value="HDV"' in hana_only
 
-    nothing = await browser.get("/configuration/systems/new")
-    assert nothing.headers["location"] == "/configuration?tab=systems&error=system_no_instances"
+    nothing = (await browser.get("/configuration/systems/new")).text
+    assert 'name="name" required maxlength="64" value=""' in nothing
+    assert 'value="1" aria-label="DEV/01" >' in nothing
 
 
 async def test_create_system_with_pool_and_errors(browser):
@@ -431,10 +474,10 @@ async def test_create_system_with_pool_and_errors(browser):
         data={"name": " XDV ", "instance_id": ["2", "3"], "pool_id": "1", "description": "d"},
     )
     assert created.headers["location"] == (
-        "/configuration?tab=systems&notice=system_created&n_name=XDV"
+        "/configuration/systems/1?notice=system_created&n_name=XDV"
     )
-    page = (await browser.get(created.headers["location"])).text
-    assert "System XDV created." in page
+    assert "System XDV created." in (await browser.get(created.headers["location"])).text
+    page = (await browser.get("/configuration/systems")).text
     assert "<details" in page and "xPool" in page
     # Derived dependency: the DEV instance starts after the HANA instance of HDV.
     assert re.search(r"DEV/00</td>.*?<td class=\"mono\">HDV</td>", page, re.S)
@@ -443,37 +486,40 @@ async def test_create_system_with_pool_and_errors(browser):
         return response.headers["location"]
 
     taken = await browser.post("/configuration/systems", data={"name": "xdv", "instance_id": "1"})
-    assert location(taken) == "/configuration?tab=systems&error=system_name_taken"
+    assert location(taken) == "/configuration/systems/new?error=system_name_taken"
     assigned = await browser.post("/configuration/systems", data={"name": "X", "instance_id": "2"})
-    assert location(assigned) == "/configuration?tab=systems&error=system_assigned"
+    assert location(assigned) == "/configuration/systems/new?error=system_assigned"
     empty = await browser.post("/configuration/systems", data={"name": "X"})
-    assert location(empty) == "/configuration?tab=systems&error=system_no_instances"
+    assert location(empty) == "/configuration/systems/new?error=system_no_instances"
     nameless = await browser.post("/configuration/systems", data={"name": " ", "instance_id": "1"})
-    assert location(nameless) == "/configuration?tab=systems&error=system_name_missing"
+    assert location(nameless) == "/configuration/systems/new?error=system_name_missing"
+
+
+UNASSIGNED = "/configuration/systems/unassigned"
 
 
 async def test_suggestion_and_assign_to_existing(browser):
     await add_hosts(browser, systems=False)
     await browser.post("/configuration/systems", data={"name": "DEV", "instance_id": "2"})
-    page = (await browser.get("/configuration?tab=systems")).text
+    page = (await browser.get("/configuration/systems/unassigned")).text
     # DEV/01 has the SID of system DEV: suggested, but not assigned yet.
     assert 'formaction="/configuration/systems/1/assign/1"' in page
     assert "Assign to DEV" in page
     assert "/configuration/systems/1/assign/3" not in page  # HDV has no system yet
 
     accepted = await browser.post("/configuration/systems/1/assign/1")
-    assert accepted.headers["location"] == "/configuration?tab=systems&notice=instances_assigned"
+    assert accepted.headers["location"] == f"{UNASSIGNED}?notice=instances_assigned"
     again = await browser.post("/configuration/systems/1/assign/1")
-    assert again.headers["location"] == "/configuration?tab=systems&error=system_assigned"
+    assert again.headers["location"] == f"{UNASSIGNED}?error=system_assigned"
 
     assigned = await browser.post(
         "/configuration/systems/assign", data={"system_id": "1", "instance_id": ["3"]}
     )
-    assert assigned.headers["location"] == "/configuration?tab=systems&notice=instances_assigned"
-    page = (await browser.get("/configuration?tab=systems")).text
+    assert assigned.headers["location"] == f"{UNASSIGNED}?notice=instances_assigned"
+    page = (await browser.get("/configuration/systems/unassigned")).text
     assert "All known instances belong to a system." in page
     missing = await browser.post("/configuration/systems/assign", data={"instance_id": ["3"]})
-    assert missing.headers["location"] == "/configuration?tab=systems&error=system_unknown_system"
+    assert missing.headers["location"] == f"{UNASSIGNED}?error=system_unknown_system"
 
 
 async def test_rename_remove_instance_and_delete_system(browser):
@@ -488,12 +534,12 @@ async def test_rename_remove_instance_and_delete_system(browser):
         "/configuration/systems/1/instances/2/remove", data={"back": "system"}
     )
     assert removed.headers["location"] == "/configuration/systems/1?notice=instance_removed"
-    page = (await browser.get("/configuration?tab=systems")).text
+    page = (await browser.get("/configuration/systems/unassigned")).text
     assert 'name="instance_id" value="2"' in page
 
     deleted = await browser.post("/configuration/systems/1/delete")
-    assert deleted.headers["location"] == "/configuration?tab=systems&notice=system_deleted"
-    page = (await browser.get("/configuration?tab=systems")).text
+    assert deleted.headers["location"] == "/configuration/systems?notice=system_deleted"
+    page = (await browser.get("/configuration/systems/unassigned")).text
     assert 'name="instance_id" value="1"' in page
     assert (await browser.get("/systems/1")).status_code == 404
 
@@ -508,8 +554,8 @@ async def test_unassigned_instance_cannot_be_started(browser):
 async def test_delete_host(browser):
     await add_hosts(browser)
     response = await browser.post("/configuration/hosts/1/delete")
-    assert response.headers["location"] == "/configuration?tab=hosts&notice=host_deleted"
-    page = (await browser.get("/configuration?tab=hosts")).text
+    assert response.headers["location"] == "/configuration/hosts?notice=host_deleted"
+    page = (await browser.get("/configuration/hosts")).text
     assert "sapapp1" not in page and "sapdb1" in page
 
 
@@ -518,21 +564,21 @@ async def test_delete_host(browser):
 
 async def test_pools(browser):
     await add_hosts(browser)
-    assert "No pools yet." in (await browser.get("/configuration?tab=pools")).text
+    assert "No pools yet." in (await browser.get("/configuration/pools")).text
 
     created = await browser.post(
         "/configuration/pools", data={"name": "xDV", "description": "Development line"}
     )
-    assert created.headers["location"] == "/configuration?tab=pools&notice=pool_created"
+    assert created.headers["location"] == "/configuration/pools?notice=pool_created"
     duplicate = await browser.post("/configuration/pools", data={"name": "xDV"})
-    assert duplicate.headers["location"] == "/configuration?tab=pools&error=pool_exists"
+    assert duplicate.headers["location"] == "/configuration/pools/new?error=pool_exists"
     assert (await browser.post("/configuration/pools", data={"name": " "})).headers[
         "location"
-    ] == "/configuration?tab=pools&error=invalid_input"
+    ] == "/configuration/pools/new?error=invalid_input"
 
     saved = await browser.post("/configuration/systems/1/pool", data={"pool_id": "1"})
     assert saved.headers["location"] == "/configuration/systems/1?notice=pool_saved"
-    pools = (await browser.get("/configuration?tab=pools")).text
+    pools = (await browser.get("/configuration/pools")).text
     assert "Development line" in pools and 'href="/configuration/systems/1">DEV</a>' in pools
 
     data = await landscape_data(browser)
@@ -548,7 +594,7 @@ async def test_pools(browser):
 
     await browser.post("/configuration/systems/1/pool", data={"pool_id": "1"})
     deleted = await browser.post("/configuration/pools/1/delete")
-    assert deleted.headers["location"] == "/configuration?tab=pools&notice=pool_deleted"
+    assert deleted.headers["location"] == "/configuration/pools?notice=pool_deleted"
     assert "No pool" in (await browser.get("/systems/1")).text
 
 
@@ -783,7 +829,7 @@ async def extended_browser(settings, extended_landscape, clock):
 
 
 async def test_diagnostics_agents_are_grouped(extended_browser):
-    page = (await extended_browser.get("/configuration?tab=systems")).text
+    page = (await extended_browser.get("/configuration/systems")).text
     assert 'class="agent-group"' in page and "Diagnostics agents (1)" in page
     assert "Diagnostics agent</td>" in page
     # Central services need nothing, application servers need database and central services.

@@ -112,7 +112,7 @@ Seite und Zustand, `SystemsTable`, `HostsTable`, `FilterBar`, `ActionBar`, `Draw
 `ParameterDialog`; `filter.ts` und `selection.ts` reine Logik mit Tests. `src/activity/`:
 `ActivityPage.tsx` (Live-Ansicht einer Aktivität), `timeline.ts` (Zeitplan aus den
 strukturierten Protokolleinträgen, mit Tests). `src/templates/`: `TemplatesPage.tsx` (Liste
-und Baukasten unter `/configuration/templates`), `Schedules.tsx` (Einplanen). `src/lib/` API-Aufrufe, Texte, Typen. Ein
+und Baukasten unter `/operations/templates`), `Schedules.tsx` (Einplanen). `src/lib/` API-Aufrufe, Texte, Typen. Ein
 Stylesheet für alle Seiten (`app.css`), gemeinsamer Code in `shared-*.js`.
 
 Wichtige Entwurfsentscheidungen:
@@ -319,10 +319,21 @@ Wichtige Entwurfsentscheidungen:
   Vergleichstest ignoriert deshalb das nicht zurückgelesene `ON DELETE` dieser Spalten.
 - **Aufbau der Oberfläche:** Übersicht (Kennzahlen), Landscape (beobachten und bedienen:
   Systeme, Hosts), Activities (Aktivitäten, Protokolle), Configuration (einrichten: Hosts,
-  Systeme, Pools), Administration (Benutzer; Plattform-Einstellungen folgen), „Mein Konto“
-  (Passwort, API-Tokens). Die
-  Menüpunkte außer „Übersicht“ heißen in beiden Sprachen englisch, wie vom Eigentümer
-  gewünscht.
+  Systeme, Pools), Operations (nur Admins: eigene Operationen unter `/operations/custom`,
+  Operationsvorlagen unter `/operations/templates`), Administration (Benutzer;
+  Plattform-Einstellungen folgen), „Mein Konto“ (Passwort, API-Tokens). Menüpunkte deutsch:
+  Übersicht, Landschaft, Aktivitäten, Konfiguration, Operationen, Administration; englisch
+  unverändert (Wunsch des Eigentümers, 2026-11-20).
+- **Bereiche mit Unterbereichen** (Wunsch des Eigentümers nach LaMa-Vorbild): Configuration
+  und Operations haben links eine Seitennavigation (`SECTIONS` in `web/routes.py`, gerendert
+  in `base.html`, sobald der Pfad mit `/configuration` oder `/operations` beginnt; auf
+  schmalen Bildschirmen über dem Inhalt). Jeder Unterbereich hat oben Überschrift und
+  Anlegen-Knopf rechts, darunter Reiter mit „Übersicht“ zuerst (Makro `page_head`; die
+  React-Seite der Vorlagen baut denselben Kopf mit `.page-head` und `.tabs`). Anlegen läuft
+  über eigene Seiten (`…/new`), keine Formulare unter Listen. Nicht zugeordnete Instanzen sind
+  ein eigener Reiter (`/configuration/systems/unassigned`). Alte Links
+  (`/configuration?tab=…`, `/operations`) leiten weiter. Rechte: `/operations/…` nur Admin;
+  `/operations` allein ist in der API der Katalog (viewer).
 - **Pools** gruppieren zusammengehörige Systeme (z. B. Entwicklung, Test, Produktion eines
   Produkts). Ein System gehört zu höchstens einem Pool (Tabelle `pool_systems`).
 - In `api/app.py` steht bewusst kein `from __future__ import annotations`: FastAPI löst die

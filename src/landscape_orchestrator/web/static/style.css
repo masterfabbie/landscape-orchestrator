@@ -290,3 +290,34 @@ td.indent2 { padding-left: 4rem; }
 .choices { display: flex; flex-wrap: wrap; gap: 8px 24px; }
 .choices label { display: flex; flex-direction: row; align-items: center; gap: 6px; }
 .choices input { width: auto; margin: 0; }
+
+/* Areas with sub-areas (configuration, operations): navigation on the left, then a head with
+   the title and the create button, then the tabs of the page. */
+.section-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 24px; align-items: start; }
+.section-nav { position: sticky; top: 12px; padding-top: 8px; }
+.section-nav h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px 12px; }
+.section-nav nav { display: flex; flex-direction: column; gap: 2px; }
+.section-nav a { padding: 7px 12px; border-radius: 6px; color: var(--text); text-decoration: none; border-left: 3px solid transparent; }
+.section-nav a:hover { background: var(--surface); }
+.section-nav a[aria-current="page"] { background: var(--blue-bg); color: var(--blue-fg); font-weight: 600; border-left-color: var(--accent); }
+.section-main { min-width: 0; }
+.page-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 8px 0 4px; }
+.page-head h1 { margin: 0; }
+.page-head .buttons { margin-left: auto; display: flex; gap: 8px; }
+a.button-primary {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+  text-decoration: none;
+  font-weight: 600;
+}
+@media (max-width: 899px) {
+  .section-layout { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .section-nav { position: static; padding-top: 0; }
+  .section-nav h2 { display: none; }
+  .section-nav nav { flex-direction: row; flex-wrap: wrap; }
+  .section-nav a { border-left: none; }
+}

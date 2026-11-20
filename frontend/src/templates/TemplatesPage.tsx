@@ -54,15 +54,26 @@ function TemplateList({ onOpen }: { onOpen: (id: number | "new") => void }) {
   const { data, isPending } = useQuery({ queryKey: ["templates"], queryFn: () => api<Template[]>("/templates") });
   return (
     <div className="lo-templates">
-      <p className="crumbs">
-        <a href="/configuration">{t("nav.configuration")}</a>
-      </p>
-      <div className="lo-activity-head">
+      <div className="page-head">
         <h1>{t("tpl.title")}</h1>
-        <button type="button" className="lo-primary" onClick={() => onOpen("new")}>
-          {t("tpl.new")}
-        </button>
+        <span className="buttons">
+          <a
+            className="button-primary"
+            href="?new"
+            onClick={(event) => {
+              event.preventDefault();
+              onOpen("new");
+            }}
+          >
+            {t("tpl.new")}
+          </a>
+        </span>
       </div>
+      <nav className="tabs" aria-label={t("tpl.title")}>
+        <a href={window.location.pathname} aria-current="page">
+          {t("tab.overview")}
+        </a>
+      </nav>
       <p className="lo-muted">{t("tpl.intro")}</p>
       {isPending ? (
         <p className="lo-muted">{t("ui.loading")}</p>
@@ -215,8 +226,6 @@ function Composer({ id, onOpen }: { id: number | "new"; onOpen: (id: number | "n
   return (
     <div className="lo-templates">
       <p className="crumbs">
-        <a href="/configuration">{t("nav.configuration")}</a>
-        {" / "}
         <a
           href="?"
           onClick={(event) => {
@@ -228,7 +237,7 @@ function Composer({ id, onOpen }: { id: number | "new"; onOpen: (id: number | "n
         </a>
       </p>
       <div className="lo-activity-head">
-        <h1>{draft.name || t("tpl.new")}</h1>
+        <h1>{draft.name || t("tpl.new_title")}</h1>
         <span className="lo-muted">{dirty ? t("tpl.unsaved") : draft.id !== null ? t("tpl.saved") : ""}</span>
         <span className="lo-head-buttons">
           {draft.id !== null && (

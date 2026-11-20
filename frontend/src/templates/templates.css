@@ -42,3 +42,6 @@
 .lo-segmented button { padding: 6px 12px; border: 0; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
 .lo-segmented button.lo-on { background: var(--accent); color: var(--accent-text); }
 .lo-dialog .lo-steps-preview { margin: 8px 0 0; padding-left: 20px; }
+/* Same head as the server-rendered pages of the area (style.css: .page-head, .tabs). */
+.lo-templates > .page-head { margin-bottom: -8px; }
+.lo-templates > .tabs { margin-top: 0; }

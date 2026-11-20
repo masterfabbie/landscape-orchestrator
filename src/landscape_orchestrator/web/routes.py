@@ -216,6 +216,33 @@ templates.env.filters["time"] = _format_time
 templates.env.filters["memory"] = _format_memory
 
 
+# Areas with a navigation on the left: path prefix -> (title, [(href, text key)]).
+SECTIONS: dict[str, dict[str, Any]] = {
+    "/configuration": {
+        "title": "nav.configuration",
+        "items": [
+            ("/configuration/hosts", "tab.hosts"),
+            ("/configuration/systems", "tab.systems"),
+            ("/configuration/pools", "tab.pools"),
+        ],
+    },
+    "/operations": {
+        "title": "nav.operations",
+        "items": [
+            ("/operations/custom", "tab.custom_operations"),
+            ("/operations/templates", "tpl.title"),
+        ],
+    },
+}
+
+
+def _section(path: str) -> dict[str, Any] | None:
+    for prefix, section in SECTIONS.items():
+        if path == prefix or path.startswith(prefix + "/"):
+            return section
+    return None
+
+
 def render(request: Request, name: str, status_code: int = 200, **context: Any) -> HTMLResponse:
     language = _language(request)
 
@@ -252,6 +279,7 @@ def render(request: Request, name: str, status_code: int = 200, **context: Any) 
         "language": language,
         "languages": LANGUAGES,
         "path": request.url.path,
+        "section": _section(request.url.path),
         # Current page for the language switch, without one-off notices.
         "here": request.url.path + (f"?{urlencode(kept)}" if kept else ""),
         "notice": notice,
@@ -512,7 +540,7 @@ def _boot(request: Request, user: User, **extra: Any) -> dict[str, Any]:
     } | extra
 
 
-@pages.get("/configuration/templates")
+@pages.get("/operations/templates")
 async def templates_page(request: Request, user: CurrentUser) -> HTMLResponse:
     """Operation templates (admin): list and composer, a React page (frontend/src/templates)."""
     return render(
@@ -833,40 +861,69 @@ ACTIVITY_STATUS_ORDER = (
 
 
 @pages.get("/configuration")
-async def configuration(
-    request: Request, session: DbSession, tab: str | None = None
-) -> HTMLResponse:
-    tab = _tab(tab, ("hosts", "systems", "pools", "operations"))
-    context: dict[str, Any] = {"tab": tab}
+async def configuration(tab: str | None = None) -> Response:
+    """The configuration starts with the hosts; ``tab`` keeps old links working."""
     if tab == "operations":
-        # Custom operations are defined by admins only.
-        user = request.state.user
-        if not has_role(user, Role.ADMIN):
-            raise HTTPException(403, "Requires the role admin")
-        context |= {
-            "operations": list(
-                await session.scalars(select(CustomOperation).order_by(CustomOperation.key))
-            ),
-            **_operation_choices(),
-        }
-    elif tab == "hosts":
-        context["hosts"] = await _all_hosts(session)
-    elif tab == "systems":
-        systems = await _all_systems(session)
-        context |= {
-            "systems": systems,
-            "unassigned": await unassigned_instances(session),
-            "suggested": await suggestions(session),
-            "depends": {s.id: depends_on_sids(s) for s in systems},
-        }
-    else:
-        context["pools"] = await _all_pools(session)
-    return render(request, "configuration.html", **context)
+        return RedirectResponse("/operations/custom", status_code=303)
+    tab = _tab(tab, ("hosts", "systems", "pools"))
+    return RedirectResponse(f"/configuration/{tab}", status_code=303)
+
+
+@pages.get("/configuration/hosts")
+async def configuration_hosts(request: Request, session: DbSession) -> HTMLResponse:
+    return render(request, "config_hosts.html", hosts=await _all_hosts(session))
+
+
+@pages.get("/configuration/hosts/new")
+async def new_host(request: Request) -> HTMLResponse:
+    return render(request, "config_host_new.html")
+
+
+@pages.get("/configuration/systems")
+async def configuration_systems(request: Request, session: DbSession) -> HTMLResponse:
+    systems = await _all_systems(session)
+    return render(
+        request,
+        "config_systems.html",
+        tab="overview",
+        systems=systems,
+        unassigned_count=len(await unassigned_instances(session)),
+        depends={s.id: depends_on_sids(s) for s in systems},
+    )
+
+
+@pages.get("/configuration/systems/unassigned")
+async def configuration_unassigned(request: Request, session: DbSession) -> HTMLResponse:
+    unassigned = await unassigned_instances(session)
+    return render(
+        request,
+        "config_systems.html",
+        tab="unassigned",
+        systems=await _all_systems(session),
+        unassigned=unassigned,
+        unassigned_count=len(unassigned),
+        suggested=await suggestions(session),
+    )
+
+
+@pages.get("/configuration/pools")
+async def configuration_pools(request: Request, session: DbSession) -> HTMLResponse:
+    return render(request, "config_pools.html", pools=await _all_pools(session))
+
+
+@pages.get("/configuration/pools/new")
+async def new_pool(request: Request) -> HTMLResponse:
+    return render(request, "config_pool_new.html")
+
+
+@pages.get("/operations")
+async def operations_area() -> Response:
+    return RedirectResponse("/operations/custom", status_code=303)
 
 
 # --- configuration: custom operations ---------------------------------------------------
 
-OPERATIONS_TAB = "/configuration?tab=operations"
+OPERATIONS_PAGE = "/operations/custom"
 # Context parameters the tool passes along with the own ones (see customspec.py).
 INSTANCE_CONTEXT = (
     "SAPSYSTEMNAME",
@@ -948,7 +1005,7 @@ class ParameterForm:
         }
 
 
-@pages.post("/configuration/operations")
+@pages.post("/operations/custom")
 async def create_custom_operation(
     context: Context, session: DbSession, form: Annotated[OperationForm, Depends()]
 ) -> Response:
@@ -956,13 +1013,24 @@ async def create_custom_operation(
         operation = await save_operation(session, None, **form.values)
     except CustomOperationError as exc:
         await session.rollback()
-        return redirect(OPERATIONS_TAB, error=exc.code)
+        return redirect(OPERATIONS_PAGE, error=exc.code)
     await session.commit()
     await context.catalog.reload(session)
-    return redirect(f"/configuration/operations/{operation.id}", notice="operation_saved")
+    return redirect(f"/operations/custom/{operation.id}", notice="operation_saved")
 
 
-@pages.get("/configuration/operations/{operation_id}")
+@pages.get("/operations/custom")
+async def custom_operations(request: Request, session: DbSession) -> HTMLResponse:
+    operations = await session.scalars(select(CustomOperation).order_by(CustomOperation.key))
+    return render(request, "operations_custom.html", operations=list(operations))
+
+
+@pages.get("/operations/custom/new")
+async def new_custom_operation(request: Request) -> HTMLResponse:
+    return render(request, "operations_custom_new.html", **_operation_choices())
+
+
+@pages.get("/operations/custom/{operation_id}")
 async def custom_operation_detail(
     request: Request, operation_id: int, session: DbSession
 ) -> HTMLResponse:
@@ -970,21 +1038,21 @@ async def custom_operation_detail(
     context = INSTANCE_CONTEXT if operation.target != "HOST" else HOST_CONTEXT
     return render(
         request,
-        "config_operation.html",
+        "operations_custom_detail.html",
         operation=operation,
         context_parameters=context,
         **_operation_choices(),
     )
 
 
-@pages.post("/configuration/operations/{operation_id}")
+@pages.post("/operations/custom/{operation_id}")
 async def update_custom_operation(
     operation_id: int,
     context: Context,
     session: DbSession,
     form: Annotated[OperationForm, Depends()],
 ) -> Response:
-    page = f"/configuration/operations/{operation_id}"
+    page = f"/operations/custom/{operation_id}"
     operation = await _load_custom(session, operation_id)
     try:
         await save_operation(session, operation, **form.values)
@@ -996,14 +1064,14 @@ async def update_custom_operation(
     return redirect(page, notice="operation_saved")
 
 
-@pages.post("/configuration/operations/{operation_id}/delete")
+@pages.post("/operations/custom/{operation_id}/delete")
 async def delete_custom_operation(
     operation_id: int, context: Context, session: DbSession
 ) -> Response:
     await session.delete(await _load_custom(session, operation_id))
     await session.commit()
     await context.catalog.reload(session)
-    return redirect(OPERATIONS_TAB, notice="operation_deleted")
+    return redirect(OPERATIONS_PAGE, notice="operation_deleted")
 
 
 async def _save_parameter(
@@ -1013,7 +1081,7 @@ async def _save_parameter(
     parameter_id: int | None,
     form: ParameterForm,
 ) -> Response:
-    page = f"/configuration/operations/{operation_id}"
+    page = f"/operations/custom/{operation_id}"
     operation = await _load_custom(session, operation_id)
     parameter = None
     if parameter_id is not None:
@@ -1030,7 +1098,7 @@ async def _save_parameter(
     return redirect(page, notice="parameter_saved")
 
 
-@pages.post("/configuration/operations/{operation_id}/parameters")
+@pages.post("/operations/custom/{operation_id}/parameters")
 async def add_custom_parameter(
     operation_id: int,
     context: Context,
@@ -1040,7 +1108,7 @@ async def add_custom_parameter(
     return await _save_parameter(context, session, operation_id, None, form)
 
 
-@pages.post("/configuration/operations/{operation_id}/parameters/{parameter_id}")
+@pages.post("/operations/custom/{operation_id}/parameters/{parameter_id}")
 async def update_custom_parameter(
     operation_id: int,
     parameter_id: int,
@@ -1051,7 +1119,7 @@ async def update_custom_parameter(
     return await _save_parameter(context, session, operation_id, parameter_id, form)
 
 
-@pages.post("/configuration/operations/{operation_id}/parameters/{parameter_id}/delete")
+@pages.post("/operations/custom/{operation_id}/parameters/{parameter_id}/delete")
 async def delete_custom_parameter(
     operation_id: int, parameter_id: int, context: Context, session: DbSession
 ) -> Response:
@@ -1062,7 +1130,7 @@ async def delete_custom_parameter(
     await session.commit()
     session.expire_all()
     await context.catalog.reload(session)
-    return redirect(f"/configuration/operations/{operation_id}", notice="parameter_deleted")
+    return redirect(f"/operations/custom/{operation_id}", notice="parameter_deleted")
 
 
 def _optional_int(value: str, minimum: int, maximum: int) -> int | None:
@@ -1074,7 +1142,7 @@ def _optional_int(value: str, minimum: int, maximum: int) -> int | None:
     return number
 
 
-HOSTS_TAB = "/configuration?tab=hosts"
+NEW_HOST = "/configuration/hosts/new"
 
 
 @pages.post("/configuration/hosts")
@@ -1095,11 +1163,11 @@ async def create_host(
         port = _optional_int(hostagent_port, 1, 65535)
         offset = _optional_int(sapcontrol_port_offset, 0, 15000) or 0
     except ValueError:
-        return redirect(HOSTS_TAB, error="invalid_input")
+        return redirect(NEW_HOST, error="invalid_input")
     if not name or len(name) > 255:
-        return redirect(HOSTS_TAB, error="invalid_input")
+        return redirect(NEW_HOST, error="invalid_input")
     if bool(username) != bool(password):
-        return redirect(HOSTS_TAB, error="credentials_incomplete")
+        return redirect(NEW_HOST, error="credentials_incomplete")
     host = Host(
         name=name,
         address=address or name,
@@ -1116,7 +1184,7 @@ async def create_host(
     try:
         await session.commit()
     except IntegrityError:
-        return redirect(HOSTS_TAB, error="host_exists")
+        return redirect(NEW_HOST, error="host_exists")
     return redirect(f"/configuration/hosts/{host.id}", notice="host_created")
 
 
@@ -1221,10 +1289,12 @@ async def delete_host(host_id: int, session: DbSession) -> Response:
     host = await _load_host(session, host_id)
     await session.delete(host)
     await session.commit()
-    return redirect("/configuration", tab="hosts", notice="host_deleted")
+    return redirect("/configuration/hosts", notice="host_deleted")
 
 
-SYSTEMS_TAB = "/configuration?tab=systems"
+SYSTEMS_PAGE = "/configuration/systems"
+UNASSIGNED_PAGE = "/configuration/systems/unassigned"
+NEW_SYSTEM = "/configuration/systems/new"
 
 
 def _change_error(target: str, exc: SystemChangeError | UnknownPoolError) -> Response:
@@ -1238,16 +1308,16 @@ async def new_system(
     session: DbSession,
     instance_id: Annotated[list[int], Query()] = [],  # noqa: B006 - FastAPI copies it
 ) -> Response:
-    """Confirmation page for a new system from the selected unassigned instances."""
-    selected = [i for i in await unassigned_instances(session) if i.id in set(instance_id)]
-    if not selected:
-        return redirect(SYSTEMS_TAB, error="system_no_instances")
+    """A new system from unassigned instances; those selected on the list come preselected."""
+    unassigned = await unassigned_instances(session)
+    selected = [i for i in unassigned if i.id in set(instance_id)]
     pools = list(await session.scalars(select(Pool).order_by(Pool.name)))
     return render(
         request,
         "config_system_new.html",
-        instances=selected,
-        suggested_name=suggest_name(selected),
+        instances=unassigned,
+        selected={i.id for i in selected},
+        suggested_name=suggest_name(selected) if selected else "",
         pools=pools,
     )
 
@@ -1270,9 +1340,9 @@ async def create_system_form(
         )
     except (SystemChangeError, UnknownPoolError) as exc:
         await session.rollback()
-        return _change_error(SYSTEMS_TAB, exc)
+        return _change_error(NEW_SYSTEM, exc)
     await session.commit()
-    return redirect(SYSTEMS_TAB, notice="system_created", n_name=system.name)
+    return redirect(f"{SYSTEMS_PAGE}/{system.id}", notice="system_created", n_name=system.name)
 
 
 @pages.post("/configuration/systems/assign")
@@ -1283,14 +1353,14 @@ async def assign_selected(
 ) -> Response:
     """Assign the selected unassigned instances to an existing system."""
     if not system_id.isdigit():
-        return redirect(SYSTEMS_TAB, error="system_unknown_system")
+        return redirect(UNASSIGNED_PAGE, error="system_unknown_system")
     try:
         await assign_instances(session, int(system_id), instance_id)
     except SystemChangeError as exc:
         await session.rollback()
-        return _change_error(SYSTEMS_TAB, exc)
+        return _change_error(UNASSIGNED_PAGE, exc)
     await session.commit()
-    return redirect(SYSTEMS_TAB, notice="instances_assigned")
+    return redirect(UNASSIGNED_PAGE, notice="instances_assigned")
 
 
 @pages.post("/configuration/systems/{system_id}/assign/{instance_id}")
@@ -1300,9 +1370,9 @@ async def assign_suggested(system_id: int, instance_id: int, session: DbSession)
         await assign_instances(session, system_id, [instance_id])
     except SystemChangeError as exc:
         await session.rollback()
-        return _change_error(SYSTEMS_TAB, exc)
+        return _change_error(UNASSIGNED_PAGE, exc)
     await session.commit()
-    return redirect(SYSTEMS_TAB, notice="instances_assigned")
+    return redirect(UNASSIGNED_PAGE, notice="instances_assigned")
 
 
 @pages.get("/configuration/systems/{system_id}")
@@ -1367,14 +1437,14 @@ async def delete_system_form(system_id: int, session: DbSession) -> Response:
             raise HTTPException(404, "System not found") from exc
         return _change_error(f"/configuration/systems/{system_id}", exc)
     await session.commit()
-    return redirect(SYSTEMS_TAB, notice="system_deleted")
+    return redirect(SYSTEMS_PAGE, notice="system_deleted")
 
 
 @pages.post("/configuration/systems/{system_id}/instances/{instance_id}/remove")
 async def remove_instance(
     system_id: int, instance_id: int, session: DbSession, back: Annotated[str, Form()] = ""
 ) -> Response:
-    target = f"/configuration/systems/{system_id}" if back == "system" else SYSTEMS_TAB
+    target = f"/configuration/systems/{system_id}" if back == "system" else SYSTEMS_PAGE
     try:
         await unassign_instance(session, system_id, instance_id)
     except SystemChangeError as exc:
@@ -1455,13 +1525,13 @@ async def create_pool(
 ) -> Response:
     name = name.strip()
     if not name or len(name) > 64:
-        return redirect("/configuration", tab="pools", error="invalid_input")
+        return redirect("/configuration/pools/new", error="invalid_input")
     session.add(Pool(name=name, description=description.strip() or None))
     try:
         await session.commit()
     except IntegrityError:
-        return redirect("/configuration", tab="pools", error="pool_exists")
-    return redirect("/configuration", tab="pools", notice="pool_created")
+        return redirect("/configuration/pools/new", error="pool_exists")
+    return redirect("/configuration/pools", notice="pool_created")
 
 
 @pages.post("/configuration/pools/{pool_id}/delete")
@@ -1471,7 +1541,7 @@ async def delete_pool(pool_id: int, session: DbSession) -> Response:
         raise HTTPException(404, "Pool not found")
     await session.delete(pool)
     await session.commit()
-    return redirect("/configuration", tab="pools", notice="pool_deleted")
+    return redirect("/configuration/pools", notice="pool_deleted")
 
 
 # --- administration ---------------------------------------------------------------------
