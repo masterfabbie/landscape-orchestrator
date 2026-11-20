@@ -234,8 +234,8 @@ abgelehnt.
 - **Anmeldung:** Benutzername und Passwort. Nach 5 Fehlversuchen ist das Konto eine Minute
   gesperrt. Ändern sich Passwort oder Rolle oder wird der Benutzer deaktiviert, enden seine
   Sitzungen.
-- **Mein Konto** (Name oben rechts): eigenes Passwort ändern, persönliche API-Tokens anlegen
-  und löschen.
+- **Mein Konto** (Name oben rechts): eigenes Passwort ändern (eigene, servergerenderte Seite,
+  auch bei der ersten Anmeldung mit Startpasswort), persönliche API-Tokens anlegen und löschen.
 - **Nachvollziehbarkeit:** Jede Aktivität vermerkt, wer sie angefordert hat.
 - **Filterauswahl** in der Landscape wird pro Benutzer gespeichert.
 
@@ -259,7 +259,7 @@ ab; `passwd` entsperrt und aktiviert das Konto auch):
 Nach dem Start ist die Oberfläche unter `http://127.0.0.1:8000/` erreichbar.
 
 Die Oberfläche hat sechs Bereiche. **Landscape** dient zum Beobachten und Bedienen,
-**Configuration** und **Operations** zum Einrichten. Diese beiden haben links eine
+**Configuration** und **Operations** zum Einrichten. Diese beiden und **Administration** haben links eine
 Seitennavigation mit ihren Unterbereichen; jeder Unterbereich zeigt oben die Überschrift mit
 dem Knopf zum Anlegen rechts („Host anlegen“, „System anlegen“, „Pool anlegen“, „Operation
 anlegen“, „Vorlage anlegen“) und darunter Reiter, zuerst „Übersicht“. Angelegt wird auf einer
@@ -267,12 +267,12 @@ eigenen Seite, danach geht es zur Seite des neuen Eintrags (bei Pools zur Liste)
 
 | Bereich | Inhalt |
 |---|---|
-| Übersicht | Kennzahlen zu Systemen, Instanzen, Hosts und Aktivitäten der letzten 24 Stunden |
-| Landscape | Tabelle der Systeme mit aufklappbaren Instanzen und Tabelle der Hosts, Mehrfachauswahl mit Leiste für Operationen, Filter, Detailleiste rechts mit den Prozessen je Instanz, Befehlspalette (siehe unten). Detailseiten für System (Instanzen, Operationen) und Host (Systeminformationen, Instanzen, Datenbanken). Instanzen ohne System erscheinen hier nicht, nur auf der Hostseite ohne Operationen |
-| Activities | Tab „Aktivitäten“ mit allen Operationen und Detailseite mit Protokoll; Tab „Protokolle“ mit den letzten 200 Protokolleinträgen |
-| Configuration | „Hosts“ (`/configuration/hosts`): anlegen, Verbindung ändern, Discovery, Zugangsdaten, Tags, löschen. „Systeme“: Reiter „Übersicht“ mit den Systemen, aufklappbar mit ihren Instanzen, und Reiter „Nicht zugeordnete Instanzen“ zum Zuordnen; „System anlegen“ wählt die Instanzen aus allen nicht zugeordneten; Seite eines Systems mit Name, Instanzen, Pool, Abhängigkeiten, Zugangsdaten je SID, Löschen. „Pools“: anlegen und löschen |
+| Übersicht | Kennzahlen, Statusmatrix Produkte × Stufen und „Braucht Aufmerksamkeit“ (siehe unten) |
+| Landscape | Tabelle der Systeme mit aufklappbaren Instanzen und Tabelle der Hosts, Mehrfachauswahl mit Leiste für Operationen, Filter, Detailleiste rechts für System, Instanz (mit den Prozessen) und Host (Systeminformationen, Instanzen), Befehlspalette (siehe unten). Instanzen ohne System erscheinen hier nicht |
+| Activities | Tab „Aktivitäten“ mit Filtern (Status, Suche, Teilaktivitäten) und Live-Ansicht je Aktivität; Tab „Protokolle“ mit den letzten 200 Protokolleinträgen |
+| Configuration | „Hosts“ (`/configuration/hosts`): anlegen, Verbindung ändern, Discovery, Zugangsdaten, Tags, Instanzen, Datenbanken, löschen. „Systeme“: Reiter „Übersicht“ mit den Systemen, aufklappbar mit ihren Instanzen, und Reiter „Nicht zugeordnete Instanzen“ zum Zuordnen; „System anlegen“ wählt die Instanzen aus allen nicht zugeordneten und schlägt den Namen vor; Seite eines Systems mit Name, Stufe, Beschreibung, Pool, Tags, Abhängigkeiten, Instanzen, Zugangsdaten je SID, Löschen. „Pools“: anlegen und löschen |
 | Operations | Nur Admins. „Eigene Operationen“ (`/operations/custom`) und „Operationsvorlagen“ (`/operations/templates`), siehe unten |
-| Administration | Versionsstand und aktuelle Einstellungen; Plattform-Einstellungen folgen |
+| Administration | „Allgemein“: Version und Einstellungen; „Benutzer“: anlegen, bearbeiten, Passwort zurücksetzen; „Braucht Aufmerksamkeit“: die Regeln der Übersicht |
 
 Die Hauptmenüpunkte heißen auf Englisch Overview, Landscape, Activities, Configuration,
 Operations und Administration, auf Deutsch Übersicht, Landschaft, Aktivitäten, Konfiguration,
@@ -281,10 +281,35 @@ Operationen und Administration. Alte Adressen wie `/configuration?tab=systems` l
 **Pools** fassen Systeme zusammen, die zusammengehören, z. B. Entwicklungs-, Test- und
 Produktivsystem eines Produkts. Ein System gehört zu höchstens einem Pool.
 
+### Übersicht
+
+- **Statusmatrix:** Zeilen sind die Produkte (Pools, dazu „ohne Pool“), Spalten die Stufen
+  der Systeme: Entwicklung, Qualität und Produktion immer, Sandbox und PreProd nur, wenn ein
+  System sie hat, „Ohne Stufe“ bei Bedarf. Die Stufe stellt man auf der Seite eines Systems ein
+  (Configuration → Systeme). Jede Instanz ist ein farbiges Kästchen; ein Klick öffnet das System
+  in der Landschaft. Darüber Kennzahlen zu Systemen, Instanzen, Hosts und Aktivitäten der
+  letzten 24 Stunden.
+- **Braucht Aufmerksamkeit:** eine Liste aus Regeln, die Admins für alle festlegen
+  (Administration → Braucht Aufmerksamkeit):
+
+  | Regel | Einstellungen (Standard) |
+  |---|---|
+  | Fehlgeschlagene Aktivitäten | der letzten 24 Stunden; ausblenden: Einplanungen, die mindestens alle 60 Minuten laufen (z. B. stündliche), gewählte Operationen, Fehler, auf die ein erfolgreicher Lauf derselben Operation auf demselben Ziel folgte; nur gewählte Stufen |
+  | Systeme mit Fehlern | Status Fehler und im Übergang (nicht während einer Aktivität); nur gewählte Stufen |
+  | Gestoppte Systeme | Stufe Produktion |
+  | Lang laufende Aktivitäten | länger als 60 Minuten |
+  | Nicht erreichbare Hosts | – |
+  | Einplanungen ohne Start | letzter Lauf konnte nicht starten |
+  | Hosts ohne aktuelle Discovery | seit 7 Tagen (Standard aus) |
+
+  Jeder Benutzer kann unter „Anpassen“ Regeln für sich abschalten und Systeme oder Pools
+  ausblenden; an jedem Eintrag gibt es „System für mich ausblenden“ und „Regel für mich
+  abschalten“.
+
 ### Landscape
 
-Die Landscape ist eine React-Seite; ohne JavaScript zeigt sie nur einen Hinweis. Die übrigen
-Seiten funktionieren weiter ohne JavaScript.
+Alle Seiten außer Anmeldung, Einrichtung und Passwortwechsel sind React-Seiten auf der
+REST-API; ohne JavaScript zeigen sie nur einen Hinweis.
 
 - **Tabellen:** Tab „Systeme“ mit Status, Instanzen (je Instanz ein farbiges Kästchen), Pool,
   „Hängt ab von“, Tags und laufender Aktivität. Systeme sind zunächst zugeklappt;
@@ -325,7 +350,8 @@ Seiten funktionieren weiter ohne JavaScript.
   „Instanztyp“ sind die passenden Systeme aufgeklappt und zeigen nur die passenden Instanzen,
   z. B. um alle ABAP-Anwendungsserver auszuwählen. Die Filter stehen in der Adresse; eine
   gefilterte Ansicht lässt sich als Lesezeichen speichern.
-- Auf den Seiten eines Systems und eines Hosts bleibt das Menü „Operationen“.
+- **Adresse:** `?system=<id>`, `?instance=<id>` oder `?host=<id>` öffnen die Detailleiste;
+  die früheren Seiten `/systems/<id>` und `/hosts/<id>` leiten dorthin.
 
 ### Aktivität live
 
@@ -397,7 +423,6 @@ Operations → Operationsvorlagen.
   „Beim Start fragen“; sie verhalten sich wie bisher.
 - Eine eigene Operation, die eine Vorlage nutzt, lässt sich nicht löschen; eine eingeplante
   Vorlage auch nicht.
-- In den Menüs der Seiten von System und Host (noch Jinja2) erscheinen Vorlagen nicht.
 
 **Einplanen** (im Editor im Reiter „Einplanen“; per API für jede Operation): einmalig zu einem
 Zeitpunkt, täglich zu einer Uhrzeit an gewählten Wochentagen oder alle N Minuten (mindestens 5).
@@ -470,8 +495,8 @@ auf und liest die Ausgabe laufend ins Protokoll.
   (`Instance_Application_Server`, `Instance_SCS`, `Instance_ERS`, `Instance_System_HDB`,
   `Instance_Diag_Agnt/SolMan`), der Teil danach (`ABAP`, `J2EE`, `Shared`) aus den
   Anwendungsservern des Systems.
-- **Ausführen:** Im Menü „Operationen“ führen eigene Operationen auf ein Formular mit den
-  Parametern. Auf einem System laufen sie auf allen passenden Instanzen: gleichzeitig, nach
+- **Ausführen:** In der Landschaft (Leiste, Detailleiste, Befehlspalette) fragt ein Dialog die
+  Parameter ab. Auf einem System laufen sie auf allen passenden Instanzen: gleichzeitig, nach
   Rollen wie ein Start (Datenbank und zentrale Dienste vor den Anwendungsservern) oder
   nacheinander. Ohne gewählte Instanztypen gilt die Operation für alle Instanzen, bei Systemen
   ohne Diagnostics Agents.
@@ -535,12 +560,12 @@ lässt es sich nicht ändern.
 
 - **Sprache:** Deutsch und Englisch, umschaltbar oben rechts. Ohne Auswahl gilt die Sprache
   des Browsers. Protokollmeldungen der Aktivitäten werden auf Englisch aufgezeichnet.
-- **Aktualisierung:** Die Seite einer laufenden Aktivität lädt sich alle 2 Sekunden neu,
-  Übersicht, Landscape und Systemseite alle 5 Sekunden, solange eine Aktivität läuft.
-- **Keine externen Dateien:** Die Oberfläche lädt nichts aus dem Internet und nutzt kein
-  JavaScript-Framework. Ein kleines eigenes Skript (`static/ui.js`) merkt sich offene Systeme
-  im Baum und schließt Menüs beim Klick daneben; ohne JavaScript funktioniert alles, nur
-  ohne diese Annehmlichkeiten (die Rückfrage vor Operationen braucht JavaScript).
+- **Aktualisierung:** Übersicht, Landschaft, Aktivitäten und die Live-Ansicht einer Aktivität
+  laden neu, sobald der Server eine Änderung meldet (Server-Sent Events).
+- **Keine externen Dateien:** Die Oberfläche lädt nichts aus dem Internet. React und die
+  übrigen Bibliotheken werden mitgebaut und vom Server ausgeliefert (Lizenztexte in
+  `static/app/THIRD-PARTY-LICENSES.txt`); eine strikte Content-Security-Policy erlaubt nur
+  eigene Dateien.
 - **Sitzung:** Ein signiertes Sitzungs-Cookie, 8 Stunden gültig, `HttpOnly` und
   `SameSite=Strict`. Wird `LO_SECRET_KEY` geändert, sind alle Sitzungen ungültig.
   Formulare von fremden Websites werden abgelehnt.
@@ -595,7 +620,7 @@ keine Inventardaten.
 | POST | `/api/systems/{id}/refresh` | Status aller Instanzen einmal neu lesen; liefert System und Warnungen |
 | POST | `/api/systems` | System aus nicht zugeordneten Instanzen anlegen (`{"name": "...", "instance_ids": [ids], "pool_id": id, "description": "..."}`) |
 | GET | `/api/systems/{id}` | ein System |
-| PATCH | `/api/systems/{id}` | Name und Beschreibung ändern |
+| PATCH | `/api/systems/{id}` | Name, Beschreibung und Stufe ändern (`stage`: `sandbox`, `development`, `quality`, `preprod`, `production` oder `null`; weggelassen: unverändert) |
 | DELETE | `/api/systems/{id}` | System löschen; seine Instanzen werden wieder nicht zugeordnet |
 | POST | `/api/systems/{id}/instances` | nicht zugeordnete Instanzen zuordnen (`{"instance_ids": [ids]}`) |
 | DELETE | `/api/systems/{id}/instances/{instance_id}` | Instanz aus dem System entfernen |
@@ -610,6 +635,12 @@ keine Inventardaten.
 | GET | `/api/activities/{id}` | Aktivität mit Protokoll (Einträge mit `event`, `subject`, `data` für den Zeitplan) und `options` (Einstellungen der Massenoperation bzw. Beschreibung und Parameter einer eigenen Operation); bei einer Massenoperation mit `children` |
 | GET | `/api/operations` | Katalog der Operationen, die der eigene Benutzer ausführen darf, eigene mit Parametern |
 | GET | `/api/landscape` | alles, was die Landscape zeigt: Systeme mit Instanzen, Status und laufender Aktivität, Hosts, Pools, die Operationen des Benutzers |
+| GET | `/api/overview` | die Übersicht: Kennzahlen, Spalten (Stufen), Pools, Systeme mit Instanzen, „Braucht Aufmerksamkeit“ nach den Regeln und den Ausnahmen des Benutzers |
+| GET, PUT | `/api/attention-rules` | Regeln von „Braucht Aufmerksamkeit“ lesen bzw. ändern (nur Admin): `{"rules": {"failed_activities": {"hours": 24, "hide_operations": ["read_logs"]}}}` |
+| GET, PUT | `/api/me/attention` | eigene Ausnahmen: `{"disabled_rules": [], "hidden_systems": [], "hidden_pools": []}` |
+| GET | `/api/activity-log?limit=200` | die neuesten Protokolleinträge aller Aktivitäten |
+| GET | `/api/systems/suggestion?instance_ids=1&instance_ids=2` | Namensvorschlag für ein neues System |
+| GET | `/api/platform` | Version und Einstellungen (nur Admin) |
 | GET | `/api/instances/{id}/processes` | Prozesse einer Instanz, jetzt gelesen per `GetProcessList`; aktualisiert den gespeicherten Status |
 | GET | `/api/events` | Server-Sent Events: `hello`, dann `change`, sobald sich Aktivitäten, Status oder Inventar ändern (Datenbank wird alle 2 Sekunden geprüft) |
 | GET | `/api/i18n` | alle Texte der Oberfläche in der Sprache des Benutzers |

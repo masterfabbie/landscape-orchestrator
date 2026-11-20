@@ -296,63 +296,33 @@ async def test_cancel_mass_operation(app, api):
 
 
 async def test_custom_operations_in_the_browser(app, api, landscape):
+    """The pages of custom operations use the API with the session cookie."""
+    headers = {"X-LO-Request": "1"}
     async with sign_in(app) as browser:
-        tab = (await browser.get("/operations/custom")).text
-        assert "No custom operations yet." in tab
-        form = {
-            "key": "lo_test",
-            "name": "Test operation",
-            "agent_operation": "LO_TEST",
-            "target": "INSTANCE",
-            "instance_type": ["abap"],
-            "ordering": "parallel",
-            "role": "operator",
-            "mass": "true",
-            "timeout_seconds": "60",
-        }
-        created = await browser.post("/operations/custom", data=form)
-        page_url = created.headers["location"].split("?")[0]
-        assert page_url == "/operations/custom/1"
-        taken = await browser.post("/operations/custom", data=form)
-        assert taken.headers["location"].endswith("error=operation_key_taken")
+        assert (await browser.get("/operations/custom")).status_code == 200
+        body = LO_TEST | {"instance_types": ["abap"]}
+        created = await browser.post("/api/custom-operations", json=body, headers=headers)
+        assert created.status_code == 201, created.text
+        assert (await browser.get(f"/operations/custom/{created.json()['id']}")).status_code == 200
+        taken = await browser.post("/api/custom-operations", json=body, headers=headers)
+        assert taken.status_code == 409
 
-        parameter = {"name": "rc", "label": "Exit code", "type": "INTEGER", "default": "0"}
-        await browser.post(f"{page_url}/parameters", data=parameter)
-        await browser.post(f"{page_url}/parameters", data={"name": "A", "label": "Text"})
-        bad = await browser.post(f"{page_url}/parameters", data={"name": "A", "label": "x"})
-        assert bad.headers["location"].endswith("error=parameter_taken")
-        detail = (await browser.get(page_url)).text
-        assert "PARAM-RC" in detail and "SERVICE_SUBTYPE" in detail
-
-        # Only the ABAP application server gets the operation in its menu.
-        system = (await browser.get("/systems/2")).text
-        assert 'href="/run/instances/2/lo_test"' in system
-        assert 'href="/run/instances/1/lo_test"' not in (await browser.get("/systems/1")).text
-        assert (await browser.get("/run/instances/1/lo_test")).status_code == 404
-
-        run_form = (await browser.get("/run/instances/2/lo_test")).text
-        assert 'name="param.RC" value="0"' in run_form and 'name="param.A" value=""' in run_form
-        invalid = await browser.post("/run/instances/2/lo_test", data={"param.RC": "x"})
-        assert "error=parameter_values" in invalid.headers["location"]
-        started = await browser.post("/run/instances/2/lo_test", data={"param.RC": "0"})
-        activity_id = int(started.headers["location"].rsplit("/", 1)[1])
-        await app.state.runner.wait(activity_id)
-        activity = (await browser.get(f"/api/activities/{activity_id}")).json()
-        assert activity["options"]["custom"]["name"] == "Test operation"
-        # The empty optional parameter A is not passed.
-        assert activity["options"]["parameters"] == {"PARAM-RC": "0"}
-        started_line = next(e for e in activity["entries"] if e["event"] == "op_started")
-        assert started_line["subject"] == "DEV/00"
-
+        # Only the ABAP application server (instance 2) gets the operation.
+        refused = await browser.post(
+            "/api/instances/1/operations/lo_test", json={"parameters": {"RC": 0}}, headers=headers
+        )
+        assert refused.status_code == 422
+        started = await browser.post(
+            "/api/instances/2/operations/lo_test", json={"parameters": {"RC": 0}}, headers=headers
+        )
+        assert started.status_code == 202
+        await app.state.runner.wait(started.json()["id"])
+        activity = (await browser.get(f"/api/activities/{started.json()['id']}")).json()
+        assert activity["status"] == "SUCCEEDED"
+        assert activity["options"]["parameters"] == {"PARAM-SLEEP": "2", "PARAM-RC": "0"}
         data = (await browser.get("/api/landscape")).json()
         offered = {op["key"]: op for op in data["operations"]}
         assert offered["lo_test"]["instance_types"] == ["abap"]
-        assert [p["name"] for p in offered["lo_test"]["parameters"]] == ["RC", "A"]
-
-        await browser.post(f"{page_url}/parameters/1/delete")
-        assert "PARAM-RC" not in (await browser.get(page_url)).text
-        await browser.post(f"{page_url}/delete")
-        assert app.state.catalog.get("lo_test") is None
 
     await make_user(app, "conf", "configurator")
     async with sign_in(app, "conf") as configurator:

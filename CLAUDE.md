@@ -103,7 +103,8 @@ Alles liegt unter `src/landscape_orchestrator/`.
 | `schedules.py` | Einplanungen (einmalig, täglich, Intervall), nächster Lauf (`next_run`), Start einer Katalog-Operation (`start_operation`), `Scheduler` |
 | `customops.py` | eigene Operationen und Parameter anlegen und prüfen, Parameterwerte prüfen (`parameter_values`) |
 | `api/` | REST-API unter `/api`, geschützt durch persönliche API-Tokens; `create_app` baut die Anwendung |
-| `web/` | servergerenderte Oberfläche (Jinja2), Anmeldung, Einrichtung, Konto, Übersetzungen |
+| `web/` | Anmeldung, Einrichtung und Passwortwechsel (Jinja2), Hüllen der React-Seiten (`app_page.html`, `routes.app_page`), Seitennavigation der Bereiche, Übersetzungen |
+| `attention.py` | Regeln für „Braucht Aufmerksamkeit“ (global in `platform_settings`, Ausnahmen je Benutzer), Spalten der Statusmatrix |
 | `mock/` | simulierter Host Agent und sapstartsrv für Entwicklung und Tests |
 
 Außerhalb des Pakets: `frontend/` mit den React-Seiten. `src/landscape/`: `Landscape.tsx`
@@ -112,8 +113,13 @@ Seite und Zustand, `SystemsTable`, `HostsTable`, `FilterBar`, `ActionBar`, `Draw
 `ParameterDialog`; `filter.ts` und `selection.ts` reine Logik mit Tests. `src/activity/`:
 `ActivityPage.tsx` (Live-Ansicht einer Aktivität), `timeline.ts` (Zeitplan aus den
 strukturierten Protokolleinträgen, mit Tests). `src/templates/`: `TemplatesPage.tsx` (Liste
-und Baukasten unter `/operations/templates`), `Schedules.tsx` (Einplanen). `src/lib/` API-Aufrufe, Texte, Typen. Ein
-Stylesheet für alle Seiten (`app.css`), gemeinsamer Code in `shared-*.js`.
+und Graph-Editor unter `/operations/templates`), `graph.ts` (Anordnung, Vorgänger, mit Tests),
+`OperationPicker.tsx`, `Schedules.tsx` (Einplanen). `src/overview/` (Übersicht),
+`src/activities/` (Liste und Protokolle), `src/configuration/` (Hosts, Systeme, Pools),
+`src/operations/` (eigene Operationen), `src/administration/` (Allgemein, Benutzer, Regeln),
+`src/account/` (Mein Konto). `src/lib/` API-Aufrufe, Texte, Typen, `mount.tsx` (Start einer
+Seite), `forms.tsx` und `forms.css` (Seitenkopf, Formulare, Tags, Zugangsdaten). Ein Stylesheet
+für alle Seiten (`app.css`), gemeinsamer Code in `shared-*.js`.
 
 Wichtige Entwurfsentscheidungen:
 
@@ -195,9 +201,8 @@ Wichtige Entwurfsentscheidungen:
 - **Discovery löscht nichts**, sie meldet fehlende Einträge nur.
 - **JavaScript ist erlaubt** (Entscheidung des Eigentümers, 2026-11-20), auch ein Framework wie
   React, wo es echten Nutzen bringt: Mehrfachauswahl mit Aktionsleiste, Live-Ansichten,
-  Drag-and-drop. Die Jinja-Seiten funktionieren noch ohne JavaScript; `static/ui.js` ergänzt
-  dort nur: Menüs schließen und Rückfragen (`data-confirm`). Eine neue Oberfläche baut auf der REST-API auf. Größere Umbauten erst
-  vorschlagen.
+  Drag-and-drop. Seit Phase 5 sind alle Seiten außer Anmeldung, Einrichtung und
+  Passwortwechsel React-Seiten auf der REST-API. Größere Umbauten erst vorschlagen.
 - **Bibliotheken und Schriften werden mitgeliefert** (Entscheidung des Eigentümers,
   2026-11-20): gebaut und vom LO-Server ausgeliefert, nie von einem CDN oder aus dem
   Internet geladen. Gründe: LO muss in abgeschotteten Admin-Netzen und im Störfall laufen; ein
@@ -230,7 +235,9 @@ Wichtige Entwurfsentscheidungen:
   weitere Rückfrage, Wunsch des Eigentümers). Systeme sind zu Beginn zugeklappt; der Filter
   „Instanztyp“ klappt auf und zeigt nur passende Instanzen. Live über `/api/events`
   (React Query lädt neu). Die alte Seite `/mass` und `/landscape/filters` (sichtbare Filter
-  pro Benutzer) gibt es nicht mehr. Die übrigen Seiten bleiben Jinja2 bis zu ihrer Phase.
+  pro Benutzer) gibt es nicht mehr. `?system=`, `?instance=` und `?host=` öffnen die
+  Detailleiste; sie ersetzt die früheren Seiten `/systems/<id>` und `/hosts/<id>`, die dorthin
+  weiterleiten.
 - **Detailleiste** (Wunsch des Eigentümers): Ein System zeigt nur eine Übersicht (Status
   grob, Instanzen als Zeilen, letzte 5 Aktivitäten über `/api/activities?system_id=`), erst
   eine Instanz zeigt Details in Reitern (Allgemein, Status mit `GetProcessList`, Aktivitäten).
@@ -268,8 +275,7 @@ Wichtige Entwurfsentscheidungen:
   liest `StepSpec.from_dict` als Kette auf der Auswahl. Editor: React Flow
   (`@xyflow/react` 12, mitgeliefert), Anordnung in `frontend/src/templates/graph.ts`,
   Operationsauswahl mit Favoriten (`user_settings` `favorites.operations`) und den 5
-  meistgenutzten der letzten 90 Tage (`/api/templates-blocks`). Jinja-Menüs zeigen Vorlagen
-  nicht. Annahme: kein Probelauf.
+  meistgenutzten der letzten 90 Tage (`/api/templates-blocks`). Annahme: kein Probelauf.
 - **Merkmale eigener Operationen** (Wunsch des Eigentümers, wie in LaMa): `locks` („Sperrt
   Instanz oder Host“, Standard an; aus: läuft neben anderen Aktivitäten und blockiert keine,
   Spalte `activities.locks`, die Konfliktprüfung in `_submit` beachtet nur sperrende) und
@@ -288,15 +294,13 @@ Wichtige Entwurfsentscheidungen:
   es gibt kein CORS), ein Startpasswort sperrt die API. Rollen wie bisher über
   `permissions.required_role`.
 - **Content-Security-Policy** auf allen Antworten (Middleware in `create_app`): nur `'self'`,
-  keine Inline-Skripte oder -Stile. Rückfragen der Jinja-Seiten laufen deshalb über
-  `data-confirm` und `static/ui.js`, nicht über `onsubmit`; Balken der Übersicht sind SVG.
-  Neue Vorlagen dürfen keine `style=`-Attribute und keine Inline-Handler enthalten.
-- **Menü „Operationen“** (`operation_buttons` in `macros.html`, ein `<details class="menu">`)
-  statt einzelner Knöpfe; „Status aktualisieren“ bleibt ein eigener Knopf. Die Einträge kommen
-  aus dem **Katalog** (`catalog.py`, im Template über `ops("SYSTEM")` usw., gefiltert nach
-  Rolle und, bei Instanzen, nach Instanztyp: `ops("INSTANCE", instance)`). Neue eingebaute
-  Operationen werden dort eingetragen; eigene kommen aus der Datenbank. Beide erscheinen in
-  Menüs, Massenoperationen und `/api/operations`. Routen für
+  keine Inline-Skripte oder -Stile. Die Jinja-Vorlagen (Anmeldung, Einrichtung, Passwort)
+  dürfen keine `style=`-Attribute und keine Inline-Handler enthalten; React setzt Stile per
+  CSSOM, das erlaubt die Policy.
+- **Katalog der Operationen** (`catalog.py`): Neue eingebaute Operationen werden dort
+  eingetragen; eigene und Vorlagen kommen aus der Datenbank. Alle erscheinen in der Landschaft
+  (Leiste, Detailleiste, Befehlspalette; gefiltert nach Rolle und Instanztyp),
+  Massenoperationen und `/api/operations`. Routen für
   Operationen brauchen mindestens Operator (`permissions.OPERATION_ROUTES`); die Rolle der
   einzelnen Operation prüft der Handler.
 - **Eigene Operationen** (Wunsch des Eigentümers, angelehnt an die kundendefinierten
@@ -312,9 +316,8 @@ Wichtige Entwurfsentscheidungen:
   Ganzzahl, Ja/Nein; leere optionale Werte werden wie in LaMa nicht übergeben (Wunsch des
   Eigentümers: Aufrücken der Positionsargumente ist Sache des Skripts), fehlende bekommen
   den Standardwert. Text ohne eigenes Muster nur `[A-Za-z0-9._-]*`. `SERVICE_SUBTYPE` wird
-  aus dem Instanztyp und den Anwendungsservern des Systems abgeleitet (Annahme). Im Menü
-  führen eigene Operationen auf ein Formular (`/run/{instances|systems|hosts}/{id}/{key}`).
-  Eingebaute Schlüssel (`start`, `stop`, `restart`, `discover`) sind für eigene gesperrt.
+  aus dem Instanztyp und den Anwendungsservern des Systems abgeleitet (Annahme). Ihre Parameter
+  fragt in der Landschaft `ParameterDialog` ab. Eingebaute Schlüssel (`start`, `stop`, `restart`, `discover`) sind für eigene gesperrt.
 - **Abbrechen** (`OperationRunner.cancel`, Wunsch des Eigentümers): Start, Stopp und Neustart
   hören nur auf zu warten; eigene Operationen werden per `CancelOperation` (O-HARD) auf dem
   Host abgebrochen, ebenso beim Zeitlimit; Massenoperationen brechen laufende Kinder ab und
@@ -340,23 +343,46 @@ Wichtige Entwurfsentscheidungen:
   Alembics Batch-Modus `activities` neu aufbauen würde und das Löschen der alten Tabelle bei
   aktiven Fremdschlüsseln das Protokoll per `ON DELETE CASCADE` mitlöschen würde. Der
   Vergleichstest ignoriert deshalb das nicht zurückgelesene `ON DELETE` dieser Spalten.
-- **Aufbau der Oberfläche:** Übersicht (Kennzahlen), Landscape (beobachten und bedienen:
+- **Aufbau der Oberfläche:** Übersicht (Statusmatrix, „Braucht Aufmerksamkeit“), Landscape (beobachten und bedienen:
   Systeme, Hosts), Activities (Aktivitäten, Protokolle), Configuration (einrichten: Hosts,
   Systeme, Pools), Operations (nur Admins: eigene Operationen unter `/operations/custom`,
-  Operationsvorlagen unter `/operations/templates`), Administration (Benutzer;
-  Plattform-Einstellungen folgen), „Mein Konto“ (Passwort, API-Tokens). Menüpunkte deutsch:
+  Operationsvorlagen unter `/operations/templates`), Administration (Allgemein, Benutzer,
+  Regeln für „Braucht Aufmerksamkeit“), „Mein Konto“ (Passwort, API-Tokens). Menüpunkte deutsch:
   Übersicht, Landschaft, Aktivitäten, Konfiguration, Operationen, Administration; englisch
   unverändert (Wunsch des Eigentümers, 2026-11-20).
-- **Bereiche mit Unterbereichen** (Wunsch des Eigentümers nach LaMa-Vorbild): Configuration
-  und Operations haben links eine Seitennavigation (`SECTIONS` in `web/routes.py`, gerendert
-  in `base.html`, sobald der Pfad mit `/configuration` oder `/operations` beginnt; auf
-  schmalen Bildschirmen über dem Inhalt). Jeder Unterbereich hat oben Überschrift und
-  Anlegen-Knopf rechts, darunter Reiter mit „Übersicht“ zuerst (Makro `page_head`; die
-  React-Seite der Vorlagen baut denselben Kopf mit `.page-head` und `.tabs`). Anlegen läuft
+- **Bereiche mit Unterbereichen** (Wunsch des Eigentümers nach LaMa-Vorbild): Configuration,
+  Operations und Administration haben links eine Seitennavigation (`SECTIONS` in
+  `web/routes.py`, gerendert in `base.html`; markiert ist der längste passende Unterbereich;
+  auf schmalen Bildschirmen über dem Inhalt). Jeder Unterbereich hat oben Überschrift und
+  Anlegen-Knopf rechts, darunter Reiter mit „Übersicht“ zuerst (`PageHead` in
+  `frontend/src/lib/forms.tsx`). Anlegen läuft
   über eigene Seiten (`…/new`), keine Formulare unter Listen. Nicht zugeordnete Instanzen sind
   ein eigener Reiter (`/configuration/systems/unassigned`). Alte Links
-  (`/configuration?tab=…`, `/operations`) leiten weiter. Rechte: `/operations/…` nur Admin;
+  (`/configuration?tab=…`, `/operations`, `/administration?tab=users`) leiten weiter. Rechte: `/operations/…` nur Admin;
   `/operations` allein ist in der API der Katalog (viewer).
+- **Übersicht als Statusmatrix** (Phase 4, Entwurf 4, Wunsch des Eigentümers): Zeilen sind
+  die Pools („Produkt“, dazu „ohne Pool“), Spalten die Stufen (`systems.stage`, Migration 0009:
+  `sandbox`, `development`, `quality`, `preprod`, `production`; Entwicklung, Qualität,
+  Produktion immer, Sandbox und PreProd nur, wenn ein System sie hat, „ohne Stufe“ bei Bedarf).
+  Jede Instanz ein Statuskästchen; Klick öffnet die Landschaft. Daten aus `/api/overview`
+  (`landscape.overview_snapshot`).
+- **„Braucht Aufmerksamkeit“** (`attention.py`): Regeln mit Einstellungen (`DEFAULT_RULES`):
+  fehlgeschlagene Aktivitäten (Zeitraum, Einplanungen mit kurzem Intervall ausblenden, z. B.
+  stündliche; bestimmte Operationen ausblenden; ausblenden nach späterem Erfolg auf demselben
+  Ziel; Stufen), Systeme mit Fehlern (Status, Stufen; nicht während einer Aktivität), gestoppte
+  Systeme (Stufen, Standard Produktion), lange Läufe (Minuten), nicht erreichbare Hosts,
+  Einplanungsfehler, alte Discovery (Tage, Standard aus). Global gespeichert in
+  `platform_settings` (`attention.rules`), nur Admins ändern sie (`/api/attention-rules`,
+  Seite Administration → Braucht Aufmerksamkeit). Ausnahmen je Benutzer in `user_settings`
+  (`attention.user`: Regeln aus, Systeme und Pools ausgeblendet; `/api/me/attention`). Jeder
+  Eintrag liefert einen Textschlüssel `att.*` mit Werten, übersetzt im Browser.
+- **Formularseiten in React** (Phase 5): Je Bereich eine App (`configuration`, `operations`,
+  `administration`, `account`, `activities`); der Server rendert `app_page.html` mit
+  `boot.page` (und `boot.id`) und prüft vorher Rolle und Existenz (404). Seitenwechsel sind
+  normale Links; Hinweise nach dem Speichern über `?notice=…`, die `base.html` anzeigt.
+  Servergerendert bleiben Anmeldung, Einrichtung, Sprachwechsel und der Passwortwechsel
+  (`/account/password`, auch für Startpasswörter). Die alten Jinja-Seiten, ihre POST-Routen und
+  Tests sind entfernt; Tests prüfen die API und in `test_web.py` die Hüllen der Seiten.
 - **Pools** gruppieren zusammengehörige Systeme (z. B. Entwicklung, Test, Produktion eines
   Produkts). Ein System gehört zu höchstens einem Pool (Tabelle `pool_systems`).
 - In `api/app.py` steht bewusst kein `from __future__ import annotations`: FastAPI löst die
@@ -383,8 +409,9 @@ Wichtige Entwurfsentscheidungen:
   Operationen ausführen, übergeben `sleep` und `clock` an `create_app`.
 - Die neuen API-Teile für die Oberfläche (Cookie, Landscape-Daten, Prozesse, Ereignisse,
   Texte, Header, Filter der Aktivitäten, strukturierte Protokolleinträge) testet
-  `tests/test_interface_api.py`; was die Landscape zeigt, prüfen die
-  Web-Tests über `/api/landscape`. Das Frontend hat eigene Tests (Vitest, `*.test.ts(x)` in
+  `tests/test_interface_api.py`, die Übersicht und die Regeln `tests/test_overview.py`;
+  `tests/test_web.py` prüft Anmeldung, Sprachen und dass jede Adresse ihre App mit den
+  richtigen Startdaten liefert. Das Frontend hat eigene Tests (Vitest, `*.test.ts(x)` in
   `frontend/src`): Filter mit denselben Fällen wie früher auf dem Server, Auswahllogik,
   Aktionsleiste, Zeitplan (`timeline.test.ts`). Ende-zu-Ende-Tests im Browser gibt es noch
   nicht.
@@ -501,7 +528,7 @@ und freigeben lassen:
 - Änderungen an der Konfiguration werden nicht protokolliert, nur Aktivitäten
 - Migrationen nur vorwärts; zurück geht es über die Sicherungskopie
 - Abbrechen von Start und Stopp beendet nur das Warten
-- kein Probelauf für Operationsvorlagen; Vorlagen nicht in den Menüs der Jinja-Seiten
+- kein Probelauf für Operationsvorlagen
 - Einplanen in der Oberfläche nur für Vorlagen (per API für jede Operation)
 - keine eingebaute Operation „Instanz-Agent neu starten und registrieren“
 - keine Kernel-Repositories (Ablage der Kernel-Versionen für Kernel-Tausch-Skripte)
@@ -513,6 +540,6 @@ und freigeben lassen:
   erneutes Zuordnen
 - Protokollmeldungen der Aktivitäten sind nur englisch
 - kein Verschieben von Instanzen (Adaptive Computing)
-- Übersicht nur mit einfachen Kennzahlen; Diagramme und Diagnosenachrichten fehlen noch
+- keine Diagramme und Diagnosenachrichten in der Übersicht
 - keine Ende-zu-Ende-Tests der Oberfläche im Browser (geprüft wurde die Landscape von Hand
   mit Playwright gegen `lo-server --mock`)

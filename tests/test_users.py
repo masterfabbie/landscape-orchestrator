@@ -277,54 +277,54 @@ async def test_lockout_after_failed_attempts(app):
         assert (await sign_in(browser, "admin")).status_code == 303
 
 
-async def test_roles_in_the_web_interface(app):
+HEADERS = {"X-LO-Request": "1"}
+
+
+async def test_roles_in_the_interface(app):
+    """The pages call the API with the session cookie; the roles apply as with tokens."""
     await make_user(app, "admin", "admin")
     await make_user(app, "viewer", "viewer")
     await make_user(app, "operator", "operator")
     async with client_for(app) as admin:
         await sign_in(admin, "admin")
-        await admin.post("/configuration/hosts", data=APP_HOST)
-        await admin.post("/configuration/hosts/1/discover")
-        await admin.post("/configuration/systems", data={"name": "DEV", "instance_id": ["1", "2"]})
+        await admin.post("/api/hosts", json=APP_HOST, headers=HEADERS)
+        await admin.post("/api/hosts/1/discover", headers=HEADERS)
+        body = {"name": "DEV", "instance_ids": [1, 2]}
+        assert (await admin.post("/api/systems", json=body, headers=HEADERS)).status_code == 201
 
     async with client_for(app) as viewer:
         await sign_in(viewer, "viewer")
-        page = (await viewer.get("/systems/1")).text
+        page = (await viewer.get("/landscape")).text
         assert ">Configuration</a>" not in page and ">Administration</a>" not in page
-        assert 'action="/systems/1/start"' not in page
-        assert 'action="/systems/1/refresh"' in page
         assert (await viewer.get("/configuration")).status_code == 403
-        assert (await viewer.post("/systems/1/start")).status_code == 403
-        assert (await viewer.post("/systems/1/refresh")).status_code == 303
+        assert (await viewer.post("/api/systems/1/start", headers=HEADERS)).status_code == 403
+        assert (await viewer.post("/api/systems/1/refresh", headers=HEADERS)).status_code == 200
         assert (await viewer.get("/account")).status_code == 200
 
     async with client_for(app) as operator:
         await sign_in(operator, "operator")
-        page = (await operator.get("/systems/1")).text
-        assert 'action="/systems/1/start"' in page and ">Configuration</a>" not in page
-        started = await operator.post("/systems/1/start")
-        assert started.headers["location"].startswith("/activities/")
-        activity_id = started.headers["location"].rsplit("/", 1)[1]
-        activity = (await operator.get(f"/api/activities/{activity_id}")).json()
+        started = await operator.post("/api/systems/1/start", headers=HEADERS)
+        assert started.status_code == 202
+        activity = (await operator.get(f"/api/activities/{started.json()['id']}")).json()
         assert activity["requested_by"] == "operator"
-        await app.state.runner.wait(1)
+        await app.state.runner.wait(activity["id"])
 
 
 async def test_start_password_must_be_changed(app):
     await make_user(app, "admin", "admin")
     async with client_for(app) as admin:
         await sign_in(admin, "admin")
-        form = {"username": "newbie", "role": "operator", "password": "start password 1"}
-        created = await admin.post("/administration/users", data=form)
-        assert created.headers["location"].endswith("notice=user_created&n_name=newbie")
-        page = (await admin.get("/administration?tab=users")).text
-        assert "newbie" in page and "must change password" in page
+        body = {"username": "newbie", "role": "operator", "password": "start password 1"}
+        created = await admin.post("/api/users", json=body, headers=HEADERS)
+        assert created.status_code == 201 and created.json()["must_change_password"]
 
     async with client_for(app) as newbie:
         response = await sign_in(newbie, "newbie", "start password 1")
         assert response.headers["location"] == "/account/password"
         blocked = await newbie.get("/landscape")
         assert blocked.headers["location"].startswith("/account/password")
+        # The API is locked as well until the password is changed.
+        assert (await newbie.get("/api/landscape")).status_code == 403
 
         def change(**values):
             data = {
@@ -350,43 +350,35 @@ async def test_role_change_ends_sessions_and_last_admin_stays(app):
         assert (await other.get("/")).status_code == 200
         await sign_in(admin, "admin")
 
-        saved = await admin.post("/administration/users/2", data={"role": "viewer", "active": "on"})
-        assert saved.headers["location"] == "/administration/users/2?notice=user_saved"
+        saved = await admin.patch("/api/users/2", json={"role": "viewer"}, headers=HEADERS)
+        assert saved.status_code == 200
         assert (await other.get("/")).headers["location"].startswith("/login")
 
-        demote = await admin.post("/administration/users/1", data={"role": "operator"})
-        assert demote.headers["location"].endswith("error=last_admin")
-        reset = await admin.post(
-            "/administration/users/2/password", data={"password": "fresh start pw"}
+        demote = await admin.patch("/api/users/1", json={"role": "operator"}, headers=HEADERS)
+        assert demote.status_code == 409
+        reset = await admin.put(
+            "/api/users/2/password", json={"password": "fresh start pw"}, headers=HEADERS
         )
-        assert reset.headers["location"].endswith("notice=password_reset")
-        assert "User" in (await admin.get("/administration/users/2")).text
+        assert reset.status_code == 204
+        assert (await admin.get("/administration/users/2")).status_code == 200
         assert (await admin.get("/administration/users/99")).status_code == 404
 
 
-async def test_account_tokens(app):
+async def test_own_tokens_with_the_session_cookie(app):
     await make_user(app, "admin", "admin")
     async with client_for(app) as browser:
         await sign_in(browser, "admin")
-        page = await browser.post(
-            "/account/tokens", data={"name": "monitoring", "expires_days": "30"}
-        )
-        assert page.status_code == 200
-        assert "Copy it now" in page.text
-        token = page.text.split('class="mono token-value">')[1].split("<")[0]
+        body = {"name": "monitoring"}
+        created = await browser.post("/api/me/tokens", json=body, headers=HEADERS)
+        token = created.json()["token"]
         assert token.startswith("lo_")
-        assert token not in (await browser.get("/account")).text  # shown only once
         async with client_for(app, token) as script:
             assert (await script.get("/api/me")).json()["username"] == "admin"
-        assert (
-            (await browser.post("/account/tokens/2/delete"))
-            .headers["location"]
-            .endswith("notice=token_deleted")
-        )
+        token_id = created.json()["info"]["id"]
+        deleted = await browser.delete(f"/api/me/tokens/{token_id}", headers=HEADERS)
+        assert deleted.status_code == 204
         async with client_for(app, token) as script:
             assert (await script.get("/api/me")).status_code == 401
-        bad = await browser.post("/account/tokens", data={"name": "x", "expires_days": "0"})
-        assert bad.headers["location"].endswith("error=invalid_input")
 
 
 def test_lo_user_command(tmp_path, monkeypatch, capsys):

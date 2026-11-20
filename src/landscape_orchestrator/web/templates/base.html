@@ -42,7 +42,7 @@
     <h2>{{ t(section["title"]) }}</h2>
     <nav aria-label="{{ t('section.navigation') }}">
       {% for href, key in section["items"] %}
-      <a href="{{ href }}" {% if path == href or path.startswith(href ~ "/") %}aria-current="page"{% endif %}>{{ t(key) }}</a>
+      <a href="{{ href }}" {% if href == section["current"] %}aria-current="page"{% endif %}>{{ t(key) }}</a>
       {% endfor %}
     </nav>
   </aside>

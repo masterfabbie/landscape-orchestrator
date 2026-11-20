@@ -247,17 +247,19 @@ async def test_mass_operation_in_the_browser(app, api):
 
 
 async def test_host_operations_in_the_browser(app, api):
+    headers = {"X-LO-Request": "1"}
+    body = {"operation": "discover", "target_type": "HOST", "target_ids": [1]}
     async with sign_in(app) as browser:
-        started = await browser.post("/hosts/1/discover")
-        assert started.headers["location"].startswith("/activities/")
-        await app.state.runner.wait(int(started.headers["location"].rsplit("/", 1)[1]))
-        assert (await browser.post("/hosts/1/explode")).status_code == 404
+        started = await browser.post("/api/mass-operations", json=body, headers=headers)
+        assert started.status_code == 202
+        await app.state.runner.wait(started.json()["id"])
 
     await make_user(app, "op", "operator")
     async with sign_in(app, "op") as operator:
         data = (await operator.get("/api/landscape")).json()
         assert "discover" not in {op["key"] for op in data["operations"]}
-        assert (await operator.post("/hosts/1/discover")).status_code == 403
+        refused = await operator.post("/api/mass-operations", json=body, headers=headers)
+        assert refused.status_code == 403  # discovery needs a configurator
 
     await make_user(app, "view", "viewer")
     async with sign_in(app, "view") as viewer:

@@ -31,7 +31,7 @@ from sqlalchemy.orm import (
     relationship,
 )
 
-from .roles import Role, instance_role
+from .roles import Role, instance_role, instance_type_key
 
 # Stages of systems, in the order of the overview's columns.
 STAGES = ("sandbox", "development", "quality", "preprod", "production")
@@ -331,6 +331,11 @@ class Instance(Base):
     @property
     def is_agent(self) -> bool:
         return self.role is Role.AGENT
+
+    @property
+    def type_key(self) -> str | None:
+        """Translation key of the instance type, e.g. "itype.abap"."""
+        return instance_type_key(self.features)
 
     @property
     def priority(self) -> float:

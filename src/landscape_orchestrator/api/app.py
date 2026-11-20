@@ -51,6 +51,7 @@ from ..hosts import Connection, HostChangeError, update_connection
 from ..landscape import landscape_snapshot, operation_row, overview_snapshot, read_processes
 from ..models import (
     Activity,
+    ActivityLogEntry,
     ApiToken,
     CustomOperation,
     Host,
@@ -85,6 +86,7 @@ from ..systems import (
     assign_instances,
     create_system,
     delete_system,
+    suggest_name,
     suggestions,
     unassign_instance,
     update_system,
@@ -94,6 +96,7 @@ from ..templates import TemplateError, save_template, steps_using, template_valu
 from ..users import (
     API_REQUEST_HEADER,
     SESSION_COOKIE,
+    SESSION_LIFETIME_SECONDS,
     UserError,
     create_token,
     create_user,
@@ -525,6 +528,22 @@ def create_app(
         await change(session, create())
         return await load_system(session, created[0].id)
 
+    @api.get("/systems/suggestion")
+    async def system_suggestion(
+        session: Session,
+        instance_ids: Annotated[list[int], Query(max_length=200)] = [],  # noqa: B006
+    ) -> dict[str, str]:
+        """Name proposal for a new system from these instances (the SID of the
+        application instances)."""
+        rows = list(
+            await session.scalars(
+                select(Instance)
+                .where(Instance.id.in_(instance_ids))
+                .options(selectinload(Instance.sid))
+            )
+        )
+        return {"name": suggest_name(rows) if rows else ""}
+
     @api.get("/systems/{system_id}", response_model=SystemOut)
     async def get_system(system_id: int, session: Session) -> System:
         return await load_system(session, system_id)
@@ -683,6 +702,40 @@ def create_app(
         if host_id is not None:
             query = query.where(Activity.host_id == host_id)
         return list(await session.scalars(query))
+
+    @api.get("/activity-log")
+    async def activity_log(
+        session: Session, limit: Annotated[int, Query(ge=1, le=1000)] = 200
+    ) -> list[dict[str, object]]:
+        """The newest log entries of all activities, newest first."""
+        rows = await session.execute(
+            select(ActivityLogEntry, Activity.target_label, Activity.kind)
+            .join(Activity, Activity.id == ActivityLogEntry.activity_id)
+            .order_by(ActivityLogEntry.id.desc())
+            .limit(limit)
+        )
+        return [
+            {
+                "id": entry.id,
+                "activity_id": entry.activity_id,
+                "target_label": label,
+                "kind": kind,
+                "timestamp": entry.timestamp,
+                "level": entry.level,
+                "message": entry.message,
+            }
+            for entry, label, kind in rows
+        ]
+
+    @api.get("/platform")
+    async def platform() -> dict[str, object]:
+        """Version and settings of the platform (admin)."""
+        return {
+            "version": __version__,
+            "database": settings.database_url.split(":", 1)[0],
+            "session_hours": SESSION_LIFETIME_SECONDS // 3600,
+            "timezone": settings.timezone,
+        }
 
     @api.get("/activities/{activity_id}", response_model=ActivityDetail)
     async def get_activity(activity_id: int, session: Session) -> Activity:
@@ -1054,7 +1107,7 @@ def create_app(
         return [
             {
                 "key": operation.key,
-                "name": operation.custom.name if operation.custom else None,
+                "name": operation.name,
                 "targets": sorted(operation.targets),
                 "role": operation.role.value,
                 "mass": operation.mass,

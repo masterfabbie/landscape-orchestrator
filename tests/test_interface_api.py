@@ -148,3 +148,32 @@ async def test_log_entries_carry_the_timeline(app, api):
     assert any(d.get("DEV/01") == "GREEN" for d in statuses)
     plain = [e for e in entries if e["event"] is None]
     assert plain and all(e["data"] is None for e in plain)
+
+
+async def test_parts_for_the_form_pages(app, api):
+    # Name proposal for a new system: the SID of the application instance, not of HANA.
+    await api.delete("/api/systems/2")
+    await api.delete("/api/systems/3")
+    suggestion = await api.get("/api/systems/suggestion?instance_ids=2&instance_ids=3")
+    assert suggestion.json() == {"name": "DEV"}
+    assert (await api.get("/api/systems/suggestion")).json() == {"name": ""}
+    # The type of an instance comes with it.
+    instances = {i["label"]: i for i in (await api.get("/api/instances")).json()}
+    assert instances["HDV/02"]["type_key"] == "itype.hana"
+    assert instances["DEV/00"]["type_key"] == "itype.abap"
+    # Platform information for admins.
+    platform = (await api.get("/api/platform")).json()
+    assert platform["database"] == "sqlite+aiosqlite" and platform["session_hours"] == 8
+    await make_user(app, "op", "operator")
+    async with sign_in(app, "op") as operator:
+        assert (await operator.get("/api/platform")).status_code == 403
+
+
+async def test_latest_log_entries(app, api):
+    started = (await api.post("/api/systems/3/start")).json()
+    await app.state.runner.wait(started["id"])
+    entries = (await api.get("/api/activity-log?limit=5")).json()
+    assert len(entries) == 5
+    assert entries[0]["message"] == "Finished successfully"
+    assert entries[0]["activity_id"] == started["id"] and entries[0]["target_label"] == "C"
+    assert [e["id"] for e in entries] == sorted((e["id"] for e in entries), reverse=True)

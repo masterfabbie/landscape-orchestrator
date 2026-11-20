@@ -977,6 +977,72 @@ TEXTS: dict[str, tuple[str, str]] = {
         "The template runs on its fixed targets with the values below.",
         "Die Vorlage läuft auf ihren festen Zielen mit den Werten unten.",
     ),
+    # form pages (frontend/src/configuration, operations, administration, account, activities)
+    "ui.saved": ("Saved.", "Gespeichert."),
+    "ui.expand": ("Show instances", "Instanzen zeigen"),
+    "ui.log_level": ("Level", "Stufe"),
+    "field.stage": ("Stage", "Stufe"),
+    "field.databases": ("Databases", "Datenbanken"),
+    "credentials.per_sid": ("Credentials per SID", "Zugangsdaten je SID"),
+    "custom.flags": ("Flags", "Merkmale"),
+    "custom.flag_locks": ("locks", "sperrt"),
+    "custom.flag_no_lock": ("locks nothing", "sperrt nichts"),
+    "custom.flag_mass": ("mass operation", "Massenoperation"),
+    "userstate.GREEN": ("active", "aktiv"),
+    "userstate.GRAY": ("inactive", "inaktiv"),
+    "admin.timezone": ("Time zone of schedules", "Zeitzone der Einplanungen"),
+    "token.none": ("No tokens yet.", "Noch keine Tokens."),
+    "activities.with_children": ("With parts", "Mit Teilaktivitäten"),
+    "att.rules_intro": (
+        "The rules decide what the overview shows under \"needs attention\", for everyone. "
+        "Each user can switch rules off and hide systems or pools for themselves.",
+        "Die Regeln bestimmen, was die Übersicht unter „Braucht Aufmerksamkeit“ zeigt, für "
+        "alle. Jeder Benutzer kann Regeln für sich abschalten und Systeme oder Pools "
+        "ausblenden.",
+    ),
+    "att.enabled": ("Rule active", "Regel aktiv"),
+    "att.hint.failed_activities": (
+        "Failed or partly failed activities.",
+        "Fehlgeschlagene oder teilweise fehlgeschlagene Aktivitäten.",
+    ),
+    "att.hint.system_status": (
+        "Systems with one of the chosen statuses, unless an activity runs on them.",
+        "Systeme mit einem der gewählten Status, außer während einer Aktivität darauf.",
+    ),
+    "att.hint.stopped_systems": (
+        "Stopped systems of the chosen stages, e.g. production.",
+        "Gestoppte Systeme der gewählten Stufen, z. B. Produktion.",
+    ),
+    "att.hint.long_running": (
+        "Activities that run longer than this.",
+        "Aktivitäten, die länger als angegeben laufen.",
+    ),
+    "att.hint.host_unreachable": (
+        "Hosts whose host agent could not be reached at the last discovery.",
+        "Hosts, deren Host Agent bei der letzten Discovery nicht erreichbar war.",
+    ),
+    "att.hint.schedule_errors": (
+        "Schedules whose last run could not start.",
+        "Einplanungen, deren letzter Lauf nicht starten konnte.",
+    ),
+    "att.hint.stale_discovery": (
+        "Hosts without a discovery for this many days.",
+        "Hosts ohne Discovery seit so vielen Tagen.",
+    ),
+    "att.setting.hours": ("Of the last hours", "Der letzten Stunden"),
+    "att.setting.hide_scheduled_every_minutes": (
+        "Hide schedules repeating at least every … minutes (0: none)",
+        "Einplanungen ausblenden, die mindestens alle … Minuten laufen (0: keine)",
+    ),
+    "att.setting.hide_when_succeeded_later": (
+        "Hide once a later run on the same target succeeded",
+        "Ausblenden, sobald ein späterer Lauf auf demselben Ziel erfolgreich war",
+    ),
+    "att.setting.hide_operations": ("Hide these operations", "Diese Operationen ausblenden"),
+    "att.setting.stages": ("Only these stages (none: all)", "Nur diese Stufen (keine: alle)"),
+    "att.setting.statuses": ("Statuses", "Status"),
+    "att.setting.minutes": ("Minutes", "Minuten"),
+    "att.setting.days": ("Days", "Tage"),
     # overview (frontend/src/overview) and the rules of "needs attention" (attention.py)
     "ov.kpis": ("Key figures", "Kennzahlen"),
     "ov.matrix": ("Status by product and stage", "Status nach Produkt und Stufe"),

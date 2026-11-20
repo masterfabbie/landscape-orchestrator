@@ -53,6 +53,8 @@ class InstanceOut(BaseModel):
     hostname: str
     sap_version_info: str | None
     features: str | None
+    # Translation key of the instance type, e.g. "itype.abap".
+    type_key: str | None = None
     start_priority: str | None
     last_status: str
     status_checked_at: datetime | None

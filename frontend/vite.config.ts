@@ -19,6 +19,11 @@ export default defineConfig({
         activity: "src/activity/main.tsx",
         templates: "src/templates/main.tsx",
         overview: "src/overview/main.tsx",
+        activities: "src/activities/main.tsx",
+        configuration: "src/configuration/main.tsx",
+        operations: "src/operations/main.tsx",
+        administration: "src/administration/main.tsx",
+        account: "src/account/main.tsx",
       },
       output: {
         entryFileNames: "[name].js",
