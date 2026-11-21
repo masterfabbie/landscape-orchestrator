@@ -521,6 +521,8 @@ und freigeben lassen:
 5. Zertifikatsbasierte Anmeldung am Host Agent (mTLS, Client-Zertifikat statt Passwort).
 6. Docker-Container für LO.
 7. Ansteuerung von außen, z. B. AWS SSM: ein externer Auftrag lässt LO ein SAP-System starten.
+8. „Erneut ausführen“-Knopf an einer abgebrochenen Aktivität (gleiche Operation, Ziele und Werte;
+   gewünscht 2026-11-21).
 
 ## Bekannte Lücken
 
