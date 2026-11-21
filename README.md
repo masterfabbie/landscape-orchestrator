@@ -67,6 +67,9 @@ Bestätigt mit einem echten Host, auf dem ein ABAP-System und eine HANA-Datenban
   der Instanz aus der Discovery mit. Damit funktionieren Start, Stopp und Neustart eines
   Systems, dessen Instanzen unter virtuellen Hostnamen auf zwei Hosts laufen.
 - **Diagnostics Agents** melden das Feature `SMDAGENT`.
+- **Operationsvorlagen und Einplanen** (2026-11-21): Eine Vorlage mit festen Zielen (System
+  stoppen → eigene Operation auf zwei Hosts als Massenoperation → System starten) lief
+  erfolgreich, auch als eingeplante Operation; Zeitplan und Protokoll zeigen die Schritte richtig.
 - Zentrale Dienste und Anwendungsserver eines Systems können auf verschiedenen Hosts dieselbe
   Instanznummer haben.
 - **Eigene Operationen asynchron** (geprüft mit einem Testskript, das seine Argumente ausgibt,

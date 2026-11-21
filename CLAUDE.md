@@ -484,6 +484,9 @@ Aktuelle WSDLs lassen sich von einem Host abrufen:
   aus dem Tool heraus erfolgreich durch; die Ausgabe des Skripts steht vollständig und in
   der richtigen Reihenfolge im Protokoll. Noch offen aus dem Tool: Fehler mit Exit-Code,
   Abbruch, Operationen auf Instanzen und Systemen.
+- **Operationsvorlagen und Einplanen** (2026-11-21): Eine Vorlage mit festen Zielen (System
+  stoppen → eigene Operation auf zwei Hosts als Massenoperation → System starten) lief
+  erfolgreich, auch als eingeplante Operation; Zeitplan und Protokoll zeigen die Schritte richtig.
 - Noch nicht gegen echte Systeme getestet: HTTPS.
 
 ## Offene Annahmen, die ein Test mit einer echten Instanz klären muss
@@ -523,6 +526,7 @@ und freigeben lassen:
 7. Ansteuerung von außen, z. B. AWS SSM: ein externer Auftrag lässt LO ein SAP-System starten.
 8. „Erneut ausführen“-Knopf an einer abgebrochenen Aktivität (gleiche Operation, Ziele und Werte;
    gewünscht 2026-11-21).
+9. Bereich „Schedules“ für alle geplanten Operationen (gewünscht 2026-11-21).
 
 ## Bekannte Lücken
 
